@@ -9,6 +9,9 @@ node_modules/
 dist/
 .vite/
 
+# React build output copied into the .NET wwwroot at build time
+server/wwwroot/
+
 # OS
 .DS_Store
 Thumbs.db
