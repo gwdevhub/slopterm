@@ -5,7 +5,17 @@ spirit of Termius, targeting Linux, macOS and Windows.
 
 ## Architecture
 
-- **Front-end:** React + TypeScript + xterm.js, built with Vite, served as a static bundle.
+- **Front-end:** React + TypeScript + Tailwind CSS + xterm.js, built with Vite, served as
+  a static bundle. Decided over a native (Avalonia) UI specifically so the terminal is
+  reachable from any device's browser, not just a desktop window.
+- **Mobile layout is a first-class concern, not an afterthought.** The backend serves a
+  plain HTTP(S) URL, so a phone/tablet on the same network (or over a tunnel) is a
+  realistic client, not an edge case. Build every screen mobile-first with Tailwind's
+  responsive utilities from the start (host list, vault, SFTP browser, tab bar) — don't
+  bolt on responsiveness after the desktop layout is done. The terminal view itself
+  (xterm.js) is the one exception where small-screen usability is inherently limited, but
+  its surrounding chrome (tabs, keyboard toolbar, connect/disconnect controls) must still
+  work at phone width.
 - **Backend:** .NET 8 + SSH.NET (`Renci.SshNet`) — owns all SSH/SFTP/port-forwarding I/O,
   serves the built React bundle plus a WebSocket PTY stream over a local ASP.NET Core
   (Kestrel) HTTP server.
@@ -34,6 +44,69 @@ spirit of Termius, targeting Linux, macOS and Windows.
 - Keep backend NuGet dependencies minimal — every package is footprint riding along with
   the CLR in a self-contained binary. Justify additions against
   SSH.NET + ASP.NET Core Kestrel + a JSON serializer before adding more.
+
+## Mobile packaging (Android APK) — future consideration
+
+- **Do not pursue a pure browser-sandboxed WASM build for Android.** Compiling the C#
+  backend to WebAssembly and running it inside a WebView/browser JS engine sounds
+  appealing ("wasm runs everywhere"), but browser-sandboxed WASM has no raw TCP socket
+  access — it can only speak HTTP/WebSocket. SSH.NET fundamentally needs a real TCP
+  socket to the target host, so this route would require a separate always-on relay/proxy
+  doing the actual SSH connection, which breaks the local-only, zero-knowledge design and
+  reintroduces a hosted-service dependency we've deliberately avoided everywhere else.
+- Two real (non-WASM) options exist once raw sockets are required; the choice is a
+  genuine engineering trade-off, not a default, and should be made deliberately when
+  Android work actually starts:
+
+  **Option A — .NET for Android (MAUI) hosting the same Kestrel+SSH.NET backend
+  natively**, with an in-app `WebView` pointed at it instead of the desktop model of
+  opening the user's own external browser.
+  - *Pro:* reuses the existing backend and the React/Tailwind/xterm.js front-end
+    completely unchanged — one business-logic codebase (SSH, SFTP, vault, sync) shared
+    across desktop and Android.
+  - *Con:* bundles the Mono/.NET Android runtime into the APK (noticeably bigger app),
+    and Android-native concerns (foreground-service lifecycle, Doze/battery-optimization
+    exemptions, hardware-backed Keystore, biometric unlock) go through MAUI's bindings
+    rather than the platform APIs directly.
+
+  **Option B — a native Android app (Kotlin) that re-implements just the backend**:
+  an SSH/SFTP client (e.g. `sshj`, since JSch is unmaintained) plus a small embedded
+  HTTP/WebSocket server (Ktor or NanoHTTPD) driving a `WebView` — still reusing the
+  React/Tailwind/xterm.js front-end unchanged, since that talks a plain HTTP/WS
+  protocol either backend can implement.
+  - *Pro:* smaller APK, idiomatic Android platform integration (foreground services,
+    Doze exemptions, hardware-backed Keystore, `BiometricPrompt`) without a
+    cross-platform framework in the way.
+  - *Con, and this is the deciding risk:* the SSH/vault/sync **business logic gets
+    forked into a second, independently-maintained implementation**. Every bugfix and
+    protocol nuance has to land twice. Worse, the encrypted vault format (AES-GCM +
+    Argon2id) must produce byte-compatible ciphertext between the C# and Kotlin
+    implementations, or a phone and a laptop literally cannot sync the same vault —
+    that cross-implementation compatibility would need explicit shared test vectors
+    from day one, not an afterthought.
+
+  Default to **Option A** unless Android-native polish (battery life, app size,
+  Keystore-backed key storage) proves to matter enough to justify maintaining two
+  backend implementations in lockstep.
+
+- **Decision (2026-07-21): go with Option A, conditional on APK size.** Estimate (not yet
+  measured — no Android build exists) for a trimmed, R8-enabled release build shipped as
+  a per-ABI **Android App Bundle** (never a fat universal APK bundling all four ABIs):
+  roughly **15–35 MB installed for the `arm64-v8a` slice**. A fat untrimmed universal APK
+  would instead run **60–90 MB+** — do not ship that shape.
+  - **Size budget / go-no-go checkpoint:** once the first Android prototype exists, measure
+    the actual installed size of the `arm64-v8a` AAB slice. If it stays under roughly
+    **40 MB**, Option A stands. If it lands meaningfully above that (say 60MB+) even after
+    trimming/R8/single-ABI splitting, treat that as the trigger to revisit Option B
+    (native Kotlin backend) rather than accepting the bloat — don't just wave it through
+    because the code is already written.
+  - Concretely: publish Android as an AAB (not a universal APK), enable R8/resource
+    shrinking and .NET trimming (re-testing reflection-dependent paths per the Native AOT
+    note above), and target `arm64-v8a` as the primary/first-supported ABI.
+- Treat Android as a later milestone (after desktop M0–M5), not something to design the
+  desktop backend around now — but keep this constraint in mind either way: don't take a
+  dependency on anything (reflection-heavy patterns are fine, WASI/browser-API-only
+  assumptions are not) that would foreclose either Android route later.
 
 ## Security
 
