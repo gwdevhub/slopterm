@@ -1,11 +1,14 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.WebSockets;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.FileProviders;
 using Slopterm.Server;
+using Slopterm.Server.Native;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -132,10 +135,30 @@ app.Start();
 
 var addressesFeature = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
 var boundPort = new Uri(addressesFeature?.Addresses.First() ?? "http://127.0.0.1:0").Port;
+var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
 
-Console.WriteLine();
-Console.WriteLine("slopterm is running. Open this URL in your browser:");
-Console.WriteLine($"  http://127.0.0.1:{boundPort}/?token={launchToken}");
-Console.WriteLine();
+void OpenInBrowser() => Process.Start(new ProcessStartInfo(launchUrl) { UseShellExecute = true });
+
+WindowsTrayIcon? trayIcon = null;
+if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+{
+    // No console window on the published build (see the .csproj) - the tray icon is the
+    // only way to reach the app. Left-click/"Open" opens the browser; "Quit" stops it.
+    trayIcon = new WindowsTrayIcon("slopterm", OpenInBrowser, () => app.Lifetime.StopApplication());
+    trayIcon.Start();
+}
+else
+{
+    // No tray icon on Linux/macOS yet (see AGENTS.md's system tray section) - printing
+    // the URL to the console is still the only way to reach the app there.
+    Console.WriteLine();
+    Console.WriteLine("slopterm is running. Open this URL in your browser:");
+    Console.WriteLine($"  {launchUrl}");
+    Console.WriteLine();
+}
 
 await app.WaitForShutdownAsync();
+if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+{
+    trayIcon?.Dispose();
+}

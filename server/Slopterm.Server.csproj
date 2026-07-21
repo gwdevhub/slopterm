@@ -5,6 +5,11 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- No console window on the published Windows build - the system tray icon is the
+         only UI (see Native/WindowsTrayIcon.cs and Program.cs). Only applies when actually
+         publishing for win-x64; plain `dotnet run`/`dotnet build` (no -r) stays a normal
+         console app on every OS for local development. -->
+    <OutputType Condition="'$(RuntimeIdentifier)' == 'win-x64'">WinExe</OutputType>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>

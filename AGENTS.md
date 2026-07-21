@@ -53,6 +53,41 @@ spirit of Termius, targeting Linux, macOS and Windows.
   the CLR in a self-contained binary. Justify additions against
   SSH.NET + ASP.NET Core Kestrel + a JSON serializer before adding more.
 
+## System tray (Windows)
+
+- The published Windows build has no console window (`OutputType=WinExe`, gated to
+  `RuntimeIdentifier == win-x64` only - plain `dotnet run`/`dotnet build` without `-r`
+  stays a normal console app on every OS for local dev). The only UI is a tray icon
+  (`Native/WindowsTrayIcon.cs`); left-click/"Open" opens the printed URL in the default
+  browser, right-click shows an Open/Quit menu, "Quit" stops the app cleanly.
+- Implemented via raw Win32 P/Invoke (`RegisterClassEx`/`CreateWindowEx` for a hidden
+  `HWND_MESSAGE`-parented window + `Shell_NotifyIcon`), not WinForms/WPF/Avalonia or a
+  third-party tray package - see issue #17's reasoning (zero added dependencies/weight,
+  matches every other packaging decision in this repo).
+- **`NOTIFYICONDATA.szTip` must stay `SizeConst = 64`, not the newer 128.** The modern
+  Windows header extends `szTip` to 128 chars but also adds several more fields
+  (`szInfo`, `guidItem`, etc.) alongside it; using the bigger `szTip` without those fields
+  produces a struct size matching no officially recognized `NOTIFYICONDATA` revision.
+  Caught via Wine testing (see below): `Shell_NotifyIcon` fell back to a degraded
+  compatibility path (`Invalid cbSize ... using only Win95 fields`) instead of failing
+  loudly, which is exactly the kind of silent-degradation risk to watch for with any
+  future NOTIFYICONDATA changes - always let `Marshal.SizeOf` land on a real revision
+  size, don't grow a struct incrementally without checking.
+- **Verifying this under Wine needs a real display**, unlike the rest of the app - a
+  tray icon is a GUI feature, so `wine Slopterm.Server.exe` needs `DISPLAY` pointing at
+  a running X server (`Xvfb :99 -screen 0 1024x768x24 &`, then `DISPLAY=:99 wine ...`).
+  Add `WINEDEBUG=+systray` to confirm the icon actually registered and painted
+  (`add_icon`, `systray_add_icon added N icons`, `painting rect ...` in the trace) -
+  don't rely on "it didn't crash" alone, since the hidden owner window itself is never
+  visible even on real Windows (that's the point of `HWND_MESSAGE`).
+- Not yet done: no tray/menu-bar equivalent on Linux/macOS (console output there is
+  unchanged - see issue #17 for why Linux tray support is real, fragmented, best-effort
+  work, not a quick follow-up), and simulating an actual mouse click on the icon wasn't
+  verified in CI/this sandbox (no desktop panel/taskbar available to click) - the
+  message-handling code follows the standard, well-documented Win32 tray pattern
+  (`WM_LBUTTONUP`/`WM_RBUTTONUP` forwarded through the callback message), but hasn't been
+  click-tested end-to-end on real hardware.
+
 ## Mobile packaging (Android APK) — future consideration
 
 - **Do not pursue a pure browser-sandboxed WASM build for Android.** Compiling the C#

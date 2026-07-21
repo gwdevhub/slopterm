@@ -35,6 +35,11 @@ This produces one self-contained file (`bin/Release/net8.0/<rid>/publish/Slopter
 with the .NET runtime, all dependencies, and the entire React UI embedded inside it — no
 `wwwroot` folder, no .NET install, nothing else needed alongside it.
 
+**On Windows, the published exe has no console window** — look for a tray icon instead;
+click it (or its right-click menu's "Open") to open the app in your browser, and "Quit" to
+stop it. Linux/macOS builds still print the URL to the console for now (see `AGENTS.md`'s
+System tray section).
+
 **Or just grab a prebuilt one:** every push to `main` automatically builds and publishes
 Windows/Linux/macOS executables to the repo's
 [Releases page](https://github.com/gwdevhub/terminal/releases/tag/latest) (tag `latest`,
