@@ -48,6 +48,7 @@ export interface CredentialRecord {
   kind: 'password' | 'privateKey' | 'envVar'
   username?: string
   secret?: string
+  passphrase?: string
 }
 
 export interface HostRecord {
@@ -148,6 +149,38 @@ export async function createSnippet(snippet: SnippetRecord): Promise<{ id: strin
 
 export async function deleteSnippet(id: string): Promise<void> {
   await fetch(`/api/vault/snippets/${id}`, { method: 'DELETE' })
+}
+
+export interface KeychainEntryRecord {
+  name: string
+  privateKey: string
+  passphrase?: string
+}
+
+export interface SavedKeychainEntry {
+  id: string
+  updatedAt: string
+  entry: KeychainEntryRecord
+}
+
+export async function listKeychainEntries(): Promise<SavedKeychainEntry[]> {
+  const res = await fetch('/api/vault/keychain')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function createKeychainEntry(entry: KeychainEntryRecord): Promise<{ id: string }> {
+  const res = await fetch('/api/vault/keychain', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(entry),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function deleteKeychainEntry(id: string): Promise<void> {
+  await fetch(`/api/vault/keychain/${id}`, { method: 'DELETE' })
 }
 
 export interface LogEntry {

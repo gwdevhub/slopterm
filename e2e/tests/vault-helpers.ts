@@ -20,7 +20,10 @@ export async function ensureVaultUnlocked(page: Page) {
   // rendered yet, not "already unlocked"), which would skip setup/unlock entirely.
   await expect(page.getByText('Loading vault')).not.toBeVisible({ timeout: 10_000 })
 
-  const passwordInput = page.locator('input[type=password]').first()
+  // Scoped to the placeholder, not just input[type=password] - some vault-backed
+  // sections (e.g. Keychain) have their own password-type fields once unlocked, and a
+  // generic selector would re-resolve to one of those instead of "gone" below.
+  const passwordInput = page.getByPlaceholder('Master password')
   if (await passwordInput.isVisible().catch(() => false)) {
     await passwordInput.fill(E2E_VAULT_PASSWORD)
     await page.click('button:has-text("Create vault"), button:has-text("Unlock")')

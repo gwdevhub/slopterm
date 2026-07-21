@@ -3,7 +3,8 @@ import { NavRail, type NavSection } from './NavRail'
 import { HostsSection } from './HostsSection'
 import { SnippetsSection } from './SnippetsSection'
 import { LogsSection } from './LogsSection'
-import { ConnectForm } from './ConnectForm'
+import { KeychainSection } from './KeychainSection'
+import { ConnectionForm } from './ConnectionForm'
 import type { ConnectRequest } from '../lib/api'
 
 interface AppShellProps {
@@ -12,8 +13,7 @@ interface AppShellProps {
   isConnecting: boolean
 }
 
-const COMING_SOON: Record<Exclude<NavSection, 'quickConnect' | 'hosts' | 'snippets' | 'logs'>, string> = {
-  keychain: 'Keychain',
+const COMING_SOON: Record<Exclude<NavSection, 'quickConnect' | 'hosts' | 'keychain' | 'snippets' | 'logs'>, string> = {
   portForwarding: 'Port Forwarding',
   knownHosts: 'Known Hosts',
 }
@@ -28,9 +28,27 @@ export function AppShell({ onConnect, errorMessage, isConnecting }: AppShellProp
       <NavRail active={section} onSelect={setSection} />
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {section === 'quickConnect' && (
-          <ConnectForm onConnect={onConnect} errorMessage={errorMessage} isConnecting={isConnecting} />
+          <ConnectionForm
+            submitLabel="Connect"
+            isSubmitting={isConnecting}
+            errorMessage={errorMessage}
+            onSubmit={(values) =>
+              onConnect({
+                host: values.host,
+                port: values.port,
+                username: values.username,
+                authMethod: values.authMethod,
+                password: values.password,
+                privateKey: values.privateKey,
+                passphrase: values.passphrase,
+                columns: 80,
+                rows: 24,
+              })
+            }
+          />
         )}
         {section === 'hosts' && <HostsSection onConnect={onConnect} />}
+        {section === 'keychain' && <KeychainSection />}
         {section === 'snippets' && <SnippetsSection />}
         {section === 'logs' && <LogsSection />}
         {section in COMING_SOON && (

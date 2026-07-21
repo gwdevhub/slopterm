@@ -21,11 +21,11 @@ test('creates a vault, saves a host, connects to it, and deletes it', async ({ p
   await expect(page.getByText('No saved hosts yet.')).toBeVisible({ timeout: 10_000 })
 
   await page.click('button:has-text("+ New host")')
-  await page.fill('input[placeholder=Name]', 'e2e test host')
-  await page.fill('input[placeholder=Address]', ctx.sshHost)
-  await page.fill('input[type=number]', String(ctx.sshPort))
-  await page.fill('input[placeholder=Username]', ctx.sshUsername)
-  await page.fill('input[placeholder=Password]', ctx.sshPassword)
+  await page.fill('#name', 'e2e test host')
+  await page.fill('#host', ctx.sshHost)
+  await page.fill('#port', String(ctx.sshPort))
+  await page.fill('#username', ctx.sshUsername)
+  await page.fill('#password', ctx.sshPassword)
   await page.click('button:has-text("Save host")')
 
   await expect(page.getByText('e2e test host')).toBeVisible({ timeout: 10_000 })

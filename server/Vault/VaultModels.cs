@@ -47,6 +47,7 @@ public sealed class CredentialRecord
     public required string Kind { get; set; } // "password" | "privateKey" | "envVar"
     public string? Username { get; set; }
     public string? Secret { get; set; } // password, private key contents, or "NAME=value"
+    public string? Passphrase { get; set; } // only meaningful when Kind is "privateKey"
 }
 
 /// <summary>A saved, reusable command - copyable into a terminal (see AGENTS.md's Snippets note).</summary>
@@ -54,6 +55,17 @@ public sealed class SnippetRecord
 {
     public required string Name { get; set; }
     public required string Command { get; set; }
+}
+
+/// <summary>
+/// A saved SSH private key, reusable across hosts/Quick Connect without re-entering or
+/// re-pasting it each time (the Keychain nav section).
+/// </summary>
+public sealed class KeychainEntryRecord
+{
+    public required string Name { get; set; }
+    public required string PrivateKey { get; set; }
+    public string? Passphrase { get; set; }
 }
 
 /// <summary>

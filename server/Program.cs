@@ -282,6 +282,57 @@ app.MapDelete("/api/vault/snippets/{id}", (string id) =>
     }
 });
 
+app.MapGet("/api/vault/keychain", () =>
+{
+    try
+    {
+        var entries = vault.ListKeychainEntries().Select(e => new { id = e.Id, updatedAt = e.UpdatedAt, entry = e.Record });
+        return Results.Ok(entries);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPost("/api/vault/keychain", (KeychainEntryRecord request) =>
+{
+    try
+    {
+        var id = vault.SaveKeychainEntry(null, request);
+        return Results.Ok(new { id });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPut("/api/vault/keychain/{id}", (string id, KeychainEntryRecord request) =>
+{
+    try
+    {
+        vault.SaveKeychainEntry(id, request);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapDelete("/api/vault/keychain/{id}", (string id) =>
+{
+    try
+    {
+        return vault.DeleteKeychainEntry(id) ? Results.NoContent() : Results.NotFound();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
 app.MapGet("/api/vault/logs", () =>
 {
     try

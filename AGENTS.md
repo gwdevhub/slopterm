@@ -19,8 +19,8 @@ spirit of Termius, targeting Linux, macOS and Windows.
 - **App shell (implemented, `web/src/components/AppShell.tsx` + `NavRail`/`HostGrid`/
   `HostDetailsPanel`/`HostsSection`):** the Termius-reference 3-pane layout (issues #8/#10)
   - left nav rail (Quick Connect/Hosts/Keychain/Port Forwarding/Snippets/Known
-  Hosts/Logs - only Quick Connect and Hosts are functional, the rest are "coming soon"
-  placeholders), a searchable host card grid, and a right-hand Host Details panel (always
+  Hosts/Logs - Quick Connect, Hosts, Keychain, Snippets and Logs are functional, the rest
+  are "coming soon" placeholders), a searchable host card grid, and a right-hand Host Details panel (always
   present on desktop, even empty, so its container never has to be added later). Mobile
   collapse (issue #11's baseline, not a full separate spec pass): the nav rail becomes a
   horizontally-scrollable bar, the grid drops to one column, and the details panel stacks
@@ -93,6 +93,27 @@ spirit of Termius, targeting Linux, macOS and Windows.
     explicit disconnect call logs exactly once, not twice). **Best-effort by design**:
     `VaultService.AppendLog` silently no-ops if the vault is locked, since Quick Connect
     must keep working with no vault at all.
+- **Shared connect/host form (`web/src/components/ConnectionForm.tsx`):** Quick Connect
+  and the "new host" form used to be two separately maintained forms and drifted - the
+  host form had no private-key option at all. Both now render the same `ConnectionForm`,
+  parameterized by `includeName`/`submitLabel`/`onSubmit` rather than by a `mode` enum, so
+  the field markup (and its ids: `#host`/`#port`/`#username`/`#password`/`#privateKey`/
+  `#passphrase`) is identical in both places. `CredentialRecord` gained an optional
+  `Passphrase` field (previously only `Secret`) so a saved host's private-key credential
+  can carry a passphrase too - a nullable additive field, not a breaking schema change.
+- **Keychain (implemented, `KeychainSection.tsx`, `keychain/{id}.json`):** saved,
+  reusable SSH private keys (`KeychainEntryRecord { Name, PrivateKey, Passphrase? }`),
+  following the same generic `VaultService` CRUD pattern as Snippets/Logs. `ConnectionForm`
+  offers a private key three ways: paste, browse a local file (via the File API - `<input
+  type=file>`, read with `File.text()`), or pick a saved Keychain entry from a dropdown
+  (only shown when the vault is unlocked and has entries). Saving a *new* key to the
+  Keychain from either form is an explicit opt-in checkbox + name field, never automatic -
+  avoids silently proliferating copies of key material without consent. The Keychain
+  lookup itself is best-effort (`.catch(() => [])`): Quick Connect must keep working with
+  no vault at all, so a locked/nonexistent vault just means the "use a saved key" dropdown
+  doesn't render, it never blocks connecting with a pasted/browsed key. No new trust
+  boundary is crossed by reusing a key this way - `GET /api/vault/hosts` already returns
+  fully decrypted secrets to the authenticated frontend today.
 - **Sync is a hard requirement**, not a stretch goal. Design is zero-knowledge: only the
   AES-GCM ciphertext ever leaves the device, the master key/password never does. Start
   with a git-backed sync backend (push/pull the encrypted blob to a private repo or gist)
