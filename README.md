@@ -33,9 +33,14 @@ dotnet publish -c Release -r win-x64     # or linux-x64 / osx-x64 / osx-arm64
 
 This produces one self-contained file (`bin/Release/net8.0/<rid>/publish/Slopterm.Server[.exe]`)
 with the .NET runtime, all dependencies, and the entire React UI embedded inside it — no
-`wwwroot` folder, no .NET install, nothing else needed alongside it. Or run the
-`Publish` workflow in GitHub Actions (Actions tab → Publish → Run workflow) to get a
-downloadable build for Windows/Linux/macOS without needing a local toolchain at all.
+`wwwroot` folder, no .NET install, nothing else needed alongside it.
+
+**Or just grab a prebuilt one:** every push to `main` automatically builds and publishes
+Windows/Linux/macOS executables to the repo's
+[Releases page](https://github.com/gwdevhub/terminal/releases/tag/latest) (tag `latest`,
+marked as a pre-release since it tracks `main` directly rather than a cut version) — no
+local toolchain needed at all. `.github/workflows/release.yml` also has a manual
+`workflow_dispatch` trigger if you need to rebuild it on demand.
 
 ## Testing
 

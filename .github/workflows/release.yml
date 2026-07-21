@@ -1,0 +1,92 @@
+name: Release
+
+# Every push to main (i.e. every merged PR) builds a fully self-contained, single-file
+# executable per OS - React UI embedded inside, no .NET runtime install needed - and
+# publishes them as assets on a rolling "latest" pre-release, so there's always one
+# permanent, discoverable place to grab the newest build. Doc-only changes are skipped
+# so a README/AGENTS.md tweak doesn't trigger a full multi-OS build+release cycle.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+            binary: Slopterm.Server.exe
+            asset: slopterm-win-x64.exe
+          - rid: linux-x64
+            os: ubuntu-latest
+            binary: Slopterm.Server
+            asset: slopterm-linux-x64
+          - rid: osx-x64
+            os: macos-latest
+            binary: Slopterm.Server
+            asset: slopterm-osx-x64
+          - rid: osx-arm64
+            os: macos-latest
+            binary: Slopterm.Server
+            asset: slopterm-osx-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build front-end
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish self-contained single-file backend
+        working-directory: server
+        run: dotnet publish -c Release -r ${{ matrix.rid }}
+
+      - name: Rename to a friendly asset name
+        shell: bash
+        run: cp "server/bin/Release/net8.0/${{ matrix.rid }}/publish/${{ matrix.binary }}" "${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create/update the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          gh release delete latest --repo "${{ github.repository }}" --yes --cleanup-tag || true
+          gh release create latest dist/* \
+            --repo "${{ github.repository }}" \
+            --title "Latest build ($SHORT_SHA)" \
+            --notes "Automated build of the latest commit on main ($SHORT_SHA). Not a stable numbered release - download the file for your OS and run it directly, everything is packaged inside." \
+            --prerelease
