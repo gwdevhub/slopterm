@@ -8,6 +8,13 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Compresses the bundled assemblies inside the single-file exe (~51% smaller,
+         self-extracts to a temp dir at first run). Do NOT also add PublishTrimmed here:
+         it breaks every endpoint outright (System.Text.Json can't resolve ConnectRequest's
+         type metadata once reflection-based JSON is trimmed), and SSH.NET isn't
+         trim-annotated so the trimmer can silently strip its internals with no warning -
+         see AGENTS.md's Distribution constraints section. -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
     <!-- We self-host via Kestrel only; suppress the IIS-hosting web.config this SDK
          otherwise generates, since it implies a deployment model we don't support. -->
