@@ -43,12 +43,22 @@ spirit of Termius, targeting Linux, macOS and Windows.
   publishes them as assets on a rolling `latest` GitHub Release (also runnable on demand
   via `workflow_dispatch`) - that release is the place to grab a build, not a manual
   local publish.
-- Do not reach for Native AOT / aggressive trimming by default. SSH.NET and typical
-  JSON/DI usage rely on reflection that trimming can silently break, and chasing AOT
-  compatibility adds compile-time complexity for a marginal size win. Use a plain
-  self-contained (untrimmed) publish until there's a concrete reason to shrink further;
-  if trimming is attempted later, explicitly re-test every reflection-touching path (SSH
-  auth, SFTP, (de)serialization).
+- `EnableCompressionInSingleFile` is on - a free, safe ~51% size cut (verified: ~98MB to
+  ~48MB on win-x64) with no functional risk, just a self-extraction step into a temp dir
+  on first run each launch.
+- **Do not enable `PublishTrimmed`.** This was actually tried (2026-07-21) and it broke
+  every single endpoint, not just an edge case: `System.Text.Json` couldn't resolve
+  `ConnectRequest`'s type metadata once reflection-based JSON was trimmed
+  (`System.NotSupportedException: JsonTypeInfo metadata ... was not provided`), which
+  threw while building the route table and took down static file serving too. Beyond our
+  own JSON layer, SSH.NET isn't trim-annotated, so the trimmer can silently strip its
+  internals with **no warning at all** - the trim publish produced zero trimmer warnings
+  despite being thoroughly broken, which is the exact danger, not proof of safety. Do not
+  reach for Native AOT either, same underlying reflection risk. If trimming is
+  reconsidered later (e.g. after adding a `JsonSerializerContext` source generator for our
+  own models), it would still need SSH.NET's entire surface re-verified end-to-end
+  (auth, SFTP, algorithm negotiation) since the library gives no compile-time signal of
+  what it's unsafe to strip.
 - Keep backend NuGet dependencies minimal — every package is footprint riding along with
   the CLR in a self-contained binary. Justify additions against
   SSH.NET + ASP.NET Core Kestrel + a JSON serializer before adding more.
