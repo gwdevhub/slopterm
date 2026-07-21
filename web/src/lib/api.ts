@@ -206,3 +206,27 @@ export async function listLogs(): Promise<SavedLogEntry[]> {
 export async function clearLogs(): Promise<void> {
   await fetch('/api/vault/logs', { method: 'DELETE' })
 }
+
+export interface AppSettingsInfo {
+  requireMasterPassword: boolean
+}
+
+export async function getSettings(): Promise<AppSettingsInfo> {
+  const res = await fetch('/api/settings')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function setRequireMasterPassword(
+  required: boolean,
+  currentPassword?: string,
+  newPassword?: string,
+): Promise<AppSettingsInfo> {
+  const res = await fetch('/api/settings/require-master-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ required, currentPassword, newPassword }),
+  })
+  await throwOnError(res)
+  return res.json()
+}

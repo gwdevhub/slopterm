@@ -20,3 +20,10 @@ public sealed class VaultPasswordRequest
 {
     public required string MasterPassword { get; set; }
 }
+
+public sealed class SetRequireMasterPasswordRequest
+{
+    public required bool Required { get; set; }
+    public string? CurrentPassword { get; set; } // needed when turning protection off
+    public string? NewPassword { get; set; } // needed when turning protection on
+}

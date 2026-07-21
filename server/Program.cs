@@ -49,6 +49,9 @@ var app = builder.Build();
 var launchToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
 var sessions = new SessionStore();
 var vault = new VaultService();
+// If settings (persisted from a previous run) say a master password isn't required, this
+// transparently unlocks the vault right now - the frontend never sees an unlock prompt.
+vault.EnsureUnlockedIfPasswordNotRequired();
 
 // Everything below is loopback/token/origin gated - this app has no other auth layer.
 app.Use(async (context, next) =>
@@ -178,6 +181,25 @@ app.MapPost("/api/vault/lock", () =>
 {
     vault.Lock();
     return Results.NoContent();
+});
+
+app.MapGet("/api/settings", () => Results.Ok(vault.GetSettings()));
+
+app.MapPost("/api/settings/require-master-password", (SetRequireMasterPasswordRequest request) =>
+{
+    try
+    {
+        vault.SetRequireMasterPassword(request.Required, request.CurrentPassword, request.NewPassword);
+        return Results.Ok(vault.GetSettings());
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 app.MapGet("/api/vault/hosts", () =>

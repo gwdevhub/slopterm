@@ -9,6 +9,7 @@ public sealed class VaultService
 
     private readonly string _vaultDir;
     private readonly string _metadataPath;
+    private readonly string _settingsPath;
 
     // In-memory only for the life of the process - never written to disk, never logged.
     private byte[]? _key;
@@ -17,6 +18,7 @@ public sealed class VaultService
     {
         _vaultDir = AppPaths.GetVaultDirectory();
         _metadataPath = Path.Combine(_vaultDir, "vault.json");
+        _settingsPath = Path.Combine(_vaultDir, "settings.json");
     }
 
     public bool Exists => File.Exists(_metadataPath);
@@ -34,19 +36,7 @@ public sealed class VaultService
         var salt = RandomNumberGenerator.GetBytes(VaultCrypto.SaltSizeBytes);
         var key = VaultCrypto.DeriveKey(
             masterPassword, salt, VaultCrypto.Argon2Iterations, VaultCrypto.Argon2MemoryKb, VaultCrypto.Argon2Parallelism);
-        var (canaryNonce, canaryCiphertext) = VaultCrypto.Encrypt(key, CanaryPlaintext);
-
-        var metadata = new VaultMetadata
-        {
-            Salt = Convert.ToBase64String(salt),
-            Iterations = VaultCrypto.Argon2Iterations,
-            MemoryKb = VaultCrypto.Argon2MemoryKb,
-            Parallelism = VaultCrypto.Argon2Parallelism,
-            CanaryNonce = Convert.ToBase64String(canaryNonce),
-            CanaryCiphertext = Convert.ToBase64String(canaryCiphertext),
-        };
-        File.WriteAllText(_metadataPath, JsonSerializer.Serialize(metadata));
-
+        WriteMetadata(salt, key);
         _key = key;
     }
 
@@ -58,23 +48,8 @@ public sealed class VaultService
             throw new InvalidOperationException("Vault does not exist - use setup instead.");
         }
 
-        var metadata = JsonSerializer.Deserialize<VaultMetadata>(File.ReadAllText(_metadataPath))
-            ?? throw new InvalidOperationException("Vault metadata is corrupt.");
-        var salt = Convert.FromBase64String(metadata.Salt);
-        var key = VaultCrypto.DeriveKey(masterPassword, salt, metadata.Iterations, metadata.MemoryKb, metadata.Parallelism);
-
-        try
+        if (!TryDeriveAndVerify(masterPassword, out var key))
         {
-            var canaryPlaintext = VaultCrypto.Decrypt(
-                key, Convert.FromBase64String(metadata.CanaryNonce), Convert.FromBase64String(metadata.CanaryCiphertext));
-            if (canaryPlaintext != CanaryPlaintext)
-            {
-                return false;
-            }
-        }
-        catch (CryptographicException)
-        {
-            // Wrong password - AES-GCM's authentication tag won't verify.
             return false;
         }
 
@@ -83,6 +58,153 @@ public sealed class VaultService
     }
 
     public void Lock() => _key = null;
+
+    /// <summary>
+    /// Called once at app startup. If settings say a master password isn't required, this
+    /// transparently creates/unlocks the vault with a fixed, non-secret key (see
+    /// VaultCrypto.NoPasswordSeed) so the frontend never shows an unlock prompt at all -
+    /// nothing else needs to know this mode exists, since /api/vault/status will just
+    /// already report "unlocked".
+    /// </summary>
+    public void EnsureUnlockedIfPasswordNotRequired()
+    {
+        if (GetSettings().RequireMasterPassword || IsUnlocked)
+        {
+            return;
+        }
+
+        if (Exists)
+        {
+            Unlock(VaultCrypto.NoPasswordSeed);
+        }
+        else
+        {
+            Setup(VaultCrypto.NoPasswordSeed);
+        }
+    }
+
+    public AppSettings GetSettings()
+    {
+        if (!File.Exists(_settingsPath))
+        {
+            return new AppSettings();
+        }
+
+        return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath)) ?? new AppSettings();
+    }
+
+    /// <summary>
+    /// Toggles whether a master password is required, re-keying the entire vault to match
+    /// (the actual encryption key changes between "derived from a real password" and
+    /// "derived from the fixed, non-secret NoPasswordSeed" - see AGENTS.md's Settings note).
+    /// </summary>
+    public void SetRequireMasterPassword(bool required, string? currentPassword, string? newPassword)
+    {
+        var settings = GetSettings();
+        if (required == settings.RequireMasterPassword)
+        {
+            return;
+        }
+
+        if (required)
+        {
+            if (string.IsNullOrEmpty(newPassword))
+            {
+                throw new ArgumentException("A new master password is required to enable password protection.");
+            }
+
+            EnsureUnlockedIfPasswordNotRequired();
+            ChangeMasterKey(newPassword);
+        }
+        else
+        {
+            if (string.IsNullOrEmpty(currentPassword) || !TryDeriveAndVerify(currentPassword, out _))
+            {
+                throw new UnauthorizedAccessException("Incorrect master password.");
+            }
+
+            ChangeMasterKey(VaultCrypto.NoPasswordSeed);
+        }
+
+        settings.RequireMasterPassword = required;
+        Directory.CreateDirectory(_vaultDir);
+        File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
+    }
+
+    /// <summary>
+    /// Re-encrypts every existing record (hosts/snippets/logs/...) and vault.json's canary
+    /// with a newly derived key. Records are re-keyed before vault.json is overwritten, so
+    /// a crash partway through never leaves records unreadable by either the old or new key.
+    /// </summary>
+    private void ChangeMasterKey(string newDerivationInput)
+    {
+        RequireUnlocked();
+        var oldKey = _key!;
+
+        var newSalt = RandomNumberGenerator.GetBytes(VaultCrypto.SaltSizeBytes);
+        var newKey = VaultCrypto.DeriveKey(
+            newDerivationInput, newSalt, VaultCrypto.Argon2Iterations, VaultCrypto.Argon2MemoryKb, VaultCrypto.Argon2Parallelism);
+
+        if (Directory.Exists(_vaultDir))
+        {
+            foreach (var dir in Directory.EnumerateDirectories(_vaultDir))
+            {
+                foreach (var path in Directory.EnumerateFiles(dir, "*.json"))
+                {
+                    var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
+                    if (envelope is null)
+                    {
+                        continue;
+                    }
+
+                    var plaintext = VaultCrypto.Decrypt(
+                        oldKey, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
+                    var (newNonce, newCiphertext) = VaultCrypto.Encrypt(newKey, plaintext);
+                    envelope.Nonce = Convert.ToBase64String(newNonce);
+                    envelope.Ciphertext = Convert.ToBase64String(newCiphertext);
+                    File.WriteAllText(path, JsonSerializer.Serialize(envelope));
+                }
+            }
+        }
+
+        WriteMetadata(newSalt, newKey);
+        _key = newKey;
+    }
+
+    private void WriteMetadata(byte[] salt, byte[] key)
+    {
+        var (canaryNonce, canaryCiphertext) = VaultCrypto.Encrypt(key, CanaryPlaintext);
+        var metadata = new VaultMetadata
+        {
+            Salt = Convert.ToBase64String(salt),
+            Iterations = VaultCrypto.Argon2Iterations,
+            MemoryKb = VaultCrypto.Argon2MemoryKb,
+            Parallelism = VaultCrypto.Argon2Parallelism,
+            CanaryNonce = Convert.ToBase64String(canaryNonce),
+            CanaryCiphertext = Convert.ToBase64String(canaryCiphertext),
+        };
+        File.WriteAllText(_metadataPath, JsonSerializer.Serialize(metadata));
+    }
+
+    private bool TryDeriveAndVerify(string password, out byte[] key)
+    {
+        var metadata = JsonSerializer.Deserialize<VaultMetadata>(File.ReadAllText(_metadataPath))
+            ?? throw new InvalidOperationException("Vault metadata is corrupt.");
+        var salt = Convert.FromBase64String(metadata.Salt);
+        key = VaultCrypto.DeriveKey(password, salt, metadata.Iterations, metadata.MemoryKb, metadata.Parallelism);
+
+        try
+        {
+            var canaryPlaintext = VaultCrypto.Decrypt(
+                key, Convert.FromBase64String(metadata.CanaryNonce), Convert.FromBase64String(metadata.CanaryCiphertext));
+            return canaryPlaintext == CanaryPlaintext;
+        }
+        catch (CryptographicException)
+        {
+            // Wrong password - AES-GCM's authentication tag won't verify.
+            return false;
+        }
+    }
 
     public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, HostRecord Record)> ListHosts() => ListRecords<HostRecord>("hosts");
     public string SaveHost(string? id, HostRecord record) => SaveRecord("hosts", id, record);

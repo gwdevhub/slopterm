@@ -81,3 +81,14 @@ public sealed class LogEntryRecord
     public required string Username { get; set; }
     public string? Detail { get; set; } // error message, for connect_failed
 }
+
+/// <summary>
+/// settings.json - plaintext, never encrypted, lives alongside vault.json. Must be
+/// readable/writable regardless of whether a vault exists yet or is unlocked, since it's
+/// what decides whether to prompt for a master password at all (see AGENTS.md's Settings
+/// note on what "optional master password" actually means cryptographically).
+/// </summary>
+public sealed class AppSettings
+{
+    public bool RequireMasterPassword { get; set; } = true;
+}

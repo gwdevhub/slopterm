@@ -17,6 +17,13 @@ public static class VaultCrypto
     public const int Argon2Iterations = 3;
     public const int Argon2Parallelism = 4;
 
+    // Used to derive the vault key when the user has turned OFF "require master
+    // password" (see AGENTS.md's Settings note). This is NOT a secret - it's a public
+    // constant in open-source code - so "no master password" mode still encrypts the
+    // vault at rest (protects against casually opening the files) but provides no real
+    // confidentiality against anyone who has both the vault files and this app's source.
+    public const string NoPasswordSeed = "slopterm-no-master-password-mode-v1";
+
     public static byte[] DeriveKey(
         string masterPassword, byte[] salt, int iterations, int memoryKb, int parallelism)
     {

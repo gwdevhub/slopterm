@@ -1,6 +1,14 @@
-export type NavSection = 'quickConnect' | 'hosts' | 'keychain' | 'portForwarding' | 'snippets' | 'knownHosts' | 'logs'
+export type NavSection =
+  | 'quickConnect'
+  | 'hosts'
+  | 'keychain'
+  | 'portForwarding'
+  | 'snippets'
+  | 'knownHosts'
+  | 'logs'
+  | 'settings'
 
-const SECTIONS: { id: NavSection; label: string; icon: string }[] = [
+const SECTIONS: { id: Exclude<NavSection, 'settings'>; label: string; icon: string }[] = [
   { id: 'quickConnect', label: 'Quick Connect', icon: '⚡' },
   { id: 'hosts', label: 'Hosts', icon: '🖥' },
   { id: 'keychain', label: 'Keychain', icon: '🔑' },
@@ -19,24 +27,32 @@ interface NavRailProps {
 // horizontal bottom bar on narrow screens per AGENTS.md's mobile-first requirement - the
 // full mobile-responsive spec is issue #11, this is the baseline stacking.
 export function NavRail({ active, onSelect }: NavRailProps) {
+  const buttonClasses = (isActive: boolean) =>
+    `flex shrink-0 items-center gap-2 rounded px-3 py-2 text-left text-sm whitespace-nowrap ${
+      isActive ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'
+    }`
+
   return (
     <nav
       className="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-800 bg-slate-900 p-2
                  sm:w-40 sm:flex-col sm:overflow-visible sm:border-b-0 sm:border-r"
     >
       {SECTIONS.map((section) => (
-        <button
-          key={section.id}
-          type="button"
-          onClick={() => onSelect(section.id)}
-          className={`flex shrink-0 items-center gap-2 rounded px-3 py-2 text-left text-sm whitespace-nowrap ${
-            active === section.id ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'
-          }`}
-        >
+        <button key={section.id} type="button" onClick={() => onSelect(section.id)} className={buttonClasses(active === section.id)}>
           <span aria-hidden="true">{section.icon}</span>
           {section.label}
         </button>
       ))}
+      {/* Pinned to the bottom of the sidebar on desktop (sm:mt-auto), not part of the
+          scrollable section list. */}
+      <button
+        type="button"
+        onClick={() => onSelect('settings')}
+        className={`${buttonClasses(active === 'settings')} sm:mt-auto`}
+      >
+        <span aria-hidden="true">⚙</span>
+        Settings
+      </button>
     </nav>
   )
 }

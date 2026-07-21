@@ -104,6 +104,35 @@ spirit of Termius, targeting Linux, macOS and Windows.
     recent is picked, rather than the form syncing to prop changes via an effect. Same
     best-effort posture as the Keychain lookup: a failed/locked-vault fetch just means the
     section renders nothing, it never blocks Quick Connect.
+  - **Settings (`SettingsPage.tsx`, gear icon pinned to the bottom of `NavRail`) - master
+    password is optional.** What "optional" actually means cryptographically: when
+    disabled, the vault auto-unlocks at startup (`VaultService.EnsureUnlockedIfPasswordNotRequired`,
+    called once in `Program.cs` right after constructing `VaultService`) using a **fixed,
+    non-secret** key-derivation input (`VaultCrypto.NoPasswordSeed`, a public constant in
+    this open-source code) instead of a real password. The vault is still AES-GCM
+    encrypted at rest, so this still protects against casually opening the files in a
+    text editor - **it does not protect against anyone who has both the vault files and
+    this app**, since they could derive the identical key. The Settings UI states this
+    trade-off directly, not just in this doc.
+  - Toggling the setting **re-keys the entire vault** (`VaultService.ChangeMasterKey`):
+    decrypts every existing record (hosts/snippets/logs/...) with the old key and
+    re-encrypts with the new one, records rewritten *before* `vault.json` is updated so a
+    crash partway through never leaves records unreadable by either key. Turning
+    protection ON requires a new password; turning it OFF requires re-entering the
+    *current* password first (checked via a `TryDeriveAndVerify` helper shared with
+    `Unlock`), so someone can't disable protection without already knowing the secret
+    they're removing.
+  - Auto-unlock only runs **once, at process startup** - there's currently no UI path
+    that ever calls the existing `/api/vault/lock` endpoint mid-session (verified by
+    grepping the frontend before relying on this), so this is sufficient for every real
+    flow today. If a manual "Lock" action is ever added, it would need to also re-trigger
+    auto-unlock when appropriate, not just once at boot.
+  - Verified the full re-key lifecycle (toggle off, restart, toggle back on with a new
+    password, confirm the old one is rejected and data survives throughout) on both Linux
+    and win-x64 under Wine per the Testing section's rule - this exercises the same
+    already-cross-platform-verified Argon2id/AES-GCM primitives in a new sequence, not a
+    new crypto boundary, but re-verified anyway since it's a real change to a core
+    security flow.
 - **Shared connect/host form (`web/src/components/ConnectionForm.tsx`):** Quick Connect
   and the "new host" form used to be two separately maintained forms and drifted - the
   host form had no private-key option at all. Both now render the same `ConnectionForm`,

@@ -6,6 +6,7 @@ import { LogsSection } from './LogsSection'
 import { KeychainSection } from './KeychainSection'
 import { ConnectionForm, type ConnectionFormInitialValues } from './ConnectionForm'
 import { RecentConnections } from './RecentConnections'
+import { SettingsPage } from './SettingsPage'
 import type { ConnectRequest } from '../lib/api'
 
 interface AppShellProps {
@@ -14,7 +15,7 @@ interface AppShellProps {
   isConnecting: boolean
 }
 
-const COMING_SOON: Record<Exclude<NavSection, 'quickConnect' | 'hosts' | 'keychain' | 'snippets' | 'logs'>, string> = {
+const COMING_SOON: Record<Exclude<NavSection, 'quickConnect' | 'hosts' | 'keychain' | 'snippets' | 'logs' | 'settings'>, string> = {
   portForwarding: 'Port Forwarding',
   knownHosts: 'Known Hosts',
 }
@@ -58,6 +59,7 @@ export function AppShell({ onConnect, errorMessage, isConnecting }: AppShellProp
         {section === 'keychain' && <KeychainSection />}
         {section === 'snippets' && <SnippetsSection />}
         {section === 'logs' && <LogsSection />}
+        {section === 'settings' && <SettingsPage />}
         {section in COMING_SOON && (
           <p className="p-4 text-slate-500">{COMING_SOON[section as keyof typeof COMING_SOON]} is coming soon.</p>
         )}
