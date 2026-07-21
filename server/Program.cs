@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.FileProviders;
 using Slopterm.Server;
 using Slopterm.Server.Native;
+using Slopterm.Server.Vault;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,6 +20,7 @@ var app = builder.Build();
 
 var launchToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
 var sessions = new SessionStore();
+var vault = new VaultService();
 
 // Everything below is loopback/token/origin gated - this app has no other auth layer.
 app.Use(async (context, next) =>
@@ -91,6 +93,92 @@ app.MapPost("/api/ssh/connect", (ConnectRequest request) =>
     catch (Exception ex)
     {
         return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapGet("/api/vault/status", () => Results.Ok(new { exists = vault.Exists, unlocked = vault.IsUnlocked }));
+
+app.MapPost("/api/vault/setup", (VaultPasswordRequest request) =>
+{
+    try
+    {
+        vault.Setup(request.MasterPassword);
+        return Results.Ok();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/vault/unlock", (VaultPasswordRequest request) =>
+{
+    try
+    {
+        return vault.Unlock(request.MasterPassword)
+            ? Results.Ok()
+            : Results.Json(new { error = "Incorrect master password." }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/vault/lock", () =>
+{
+    vault.Lock();
+    return Results.NoContent();
+});
+
+app.MapGet("/api/vault/hosts", () =>
+{
+    try
+    {
+        var hosts = vault.ListHosts().Select(h => new { id = h.Id, updatedAt = h.UpdatedAt, host = h.Record });
+        return Results.Ok(hosts);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPost("/api/vault/hosts", (HostRecord request) =>
+{
+    try
+    {
+        var id = vault.SaveHost(null, request);
+        return Results.Ok(new { id });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPut("/api/vault/hosts/{id}", (string id, HostRecord request) =>
+{
+    try
+    {
+        vault.SaveHost(id, request);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapDelete("/api/vault/hosts/{id}", (string id) =>
+{
+    try
+    {
+        return vault.DeleteHost(id) ? Results.NoContent() : Results.NotFound();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
     }
 });
 

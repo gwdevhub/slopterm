@@ -15,3 +15,8 @@ public sealed class ConnectRequest
     public int Columns { get; set; } = 80;
     public int Rows { get; set; } = 24;
 }
+
+public sealed class VaultPasswordRequest
+{
+    public required string MasterPassword { get; set; }
+}

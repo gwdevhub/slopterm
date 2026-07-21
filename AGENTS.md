@@ -23,9 +23,31 @@ spirit of Termius, targeting Linux, macOS and Windows.
   port and prints the URL; the user opens it in whatever browser they already have
   installed — the code-server/Jupyter model. Never bind `0.0.0.0` without an explicit,
   user-supplied opt-in flag for remote access.
-- **Vault:** local, per-item records (stable id + `updatedAt`) — not one monolithic blob —
-  encrypted with AES-GCM behind a master password (Argon2id KDF). This shape exists so
-  records can be merged across devices instead of clobbered.
+- **Vault (implemented, `server/Vault/`):** local, per-item records (stable id +
+  `updatedAt`) — not one monolithic blob — encrypted with AES-GCM behind a master
+  password (Argon2id KDF via `Konscious.Security.Cryptography.Argon2`, a justified
+  addition to the "keep dependencies minimal" rule since .NET has no built-in Argon2).
+  This shape exists so records can be merged across devices instead of clobbered:
+  `hosts/{id}.json` keeps `id`/`updatedAt` **outside** the ciphertext (needed for a future
+  sync/merge process to compare records without decrypting them first) and encrypts
+  everything else (name, address, credentials). `vault.json` holds the KDF salt/params
+  plus a canary value so a wrong master password fails clearly instead of a confusing
+  per-record decrypt error. The derived key lives in memory only for the process's
+  lifetime (`VaultService`) - never written to disk, never logged. Storage location is
+  per-OS convention (`AppPaths.cs`: Windows `%APPDATA%`, Linux `~/.local/share`, macOS
+  `~/Library/Application Support` - handled explicitly since .NET's `SpecialFolder` API
+  gets macOS wrong by default), overridable via `SLOPTERM_VAULT_DIR` for tests/advanced
+  use. `HostRecord.Credentials` is a *list* from day one (password/privateKey/envVar),
+  matching issue #12's multi-credential design even though its UI doesn't exist yet, to
+  avoid a breaking schema change later.
+  - **Verified Argon2id/AES-GCM produce byte-identical output on Windows (via Wine) and
+    Linux** using a fixed password/salt/nonce in an isolated test harness - unlike
+    Curve25519, AES-GCM is a far more standardized primitive across CNG and OpenSSL, so
+    this was a real risk worth checking (not an assumption), but it turned out fine.
+  - The current front-end vault UI (`VaultPanel.tsx`) is deliberately minimal/unstyled -
+    it exists to prove the encrypted backend works end-to-end through the real UI, not
+    just curl. The actual Termius-style layout (nav rail, host card grid, host details
+    panel) is issues #8/#10, built on top of this.
 - **Sync is a hard requirement**, not a stretch goal. Design is zero-knowledge: only the
   AES-GCM ciphertext ever leaves the device, the master key/password never does. Start
   with a git-backed sync backend (push/pull the encrypted blob to a private repo or gist)

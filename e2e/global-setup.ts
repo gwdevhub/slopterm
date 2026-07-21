@@ -95,9 +95,12 @@ export default async function globalSetup() {
   }
   await waitForPort('127.0.0.1', sshPort, 30_000)
 
+  // Fresh vault dir per run - never touches a real developer's actual vault, and
+  // guarantees a clean "vault doesn't exist yet" state for the setup-flow test.
+  const vaultDir = resolve(CONTEXT_DIR, 'vault')
   const serverProcess = spawn('dotnet', ['run', '--no-launch-profile'], {
     cwd: SERVER_DIR,
-    env: { ...process.env },
+    env: { ...process.env, SLOPTERM_VAULT_DIR: vaultDir },
   }) as ChildProcessWithoutNullStreams
   const baseUrl = await waitForServerUrl(serverProcess, 60_000)
 
