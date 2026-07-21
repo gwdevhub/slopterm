@@ -7,17 +7,16 @@ public sealed class VaultService
 {
     private const string CanaryPlaintext = "slopterm-vault-ok";
 
+    private readonly string _vaultDir;
     private readonly string _metadataPath;
-    private readonly string _hostsDir;
 
     // In-memory only for the life of the process - never written to disk, never logged.
     private byte[]? _key;
 
     public VaultService()
     {
-        var vaultDir = AppPaths.GetVaultDirectory();
-        _metadataPath = Path.Combine(vaultDir, "vault.json");
-        _hostsDir = Path.Combine(vaultDir, "hosts");
+        _vaultDir = AppPaths.GetVaultDirectory();
+        _metadataPath = Path.Combine(_vaultDir, "vault.json");
     }
 
     public bool Exists => File.Exists(_metadataPath);
@@ -30,7 +29,7 @@ public sealed class VaultService
             throw new InvalidOperationException("Vault already exists - use unlock instead.");
         }
 
-        Directory.CreateDirectory(_hostsDir);
+        Directory.CreateDirectory(_vaultDir);
 
         var salt = RandomNumberGenerator.GetBytes(VaultCrypto.SaltSizeBytes);
         var key = VaultCrypto.DeriveKey(
@@ -85,56 +84,90 @@ public sealed class VaultService
 
     public void Lock() => _key = null;
 
-    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, HostRecord Record)> ListHosts()
+    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, HostRecord Record)> ListHosts() => ListRecords<HostRecord>("hosts");
+    public string SaveHost(string? id, HostRecord record) => SaveRecord("hosts", id, record);
+    public bool DeleteHost(string id) => DeleteRecord("hosts", id);
+
+    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, SnippetRecord Record)> ListSnippets() => ListRecords<SnippetRecord>("snippets");
+    public string SaveSnippet(string? id, SnippetRecord record) => SaveRecord("snippets", id, record);
+    public bool DeleteSnippet(string id) => DeleteRecord("snippets", id);
+
+    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, LogEntryRecord Record)> ListLogs() =>
+        ListRecords<LogEntryRecord>("logs").OrderByDescending(l => l.UpdatedAt).ToList();
+
+    /// <summary>Best-effort: silently does nothing if the vault is locked (see LogEntryRecord's doc comment).</summary>
+    public void AppendLog(LogEntryRecord entry)
+    {
+        if (!IsUnlocked)
+        {
+            return;
+        }
+
+        SaveRecord("logs", null, entry);
+    }
+
+    public void ClearLogs()
+    {
+        RequireUnlocked();
+        var dir = Path.Combine(_vaultDir, "logs");
+        if (Directory.Exists(dir))
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    private IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, T Record)> ListRecords<T>(string subfolder)
     {
         RequireUnlocked();
 
-        if (!Directory.Exists(_hostsDir))
+        var dir = Path.Combine(_vaultDir, subfolder);
+        if (!Directory.Exists(dir))
         {
             return [];
         }
 
-        var results = new List<(string, DateTimeOffset, HostRecord)>();
-        foreach (var path in Directory.EnumerateFiles(_hostsDir, "*.json"))
+        var results = new List<(string, DateTimeOffset, T)>();
+        foreach (var path in Directory.EnumerateFiles(dir, "*.json"))
         {
-            var envelope = JsonSerializer.Deserialize<HostEnvelope>(File.ReadAllText(path));
+            var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
             if (envelope is null)
             {
                 continue;
             }
 
             var json = VaultCrypto.Decrypt(_key!, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
-            var record = JsonSerializer.Deserialize<HostRecord>(json)!;
+            var record = JsonSerializer.Deserialize<T>(json)!;
             results.Add((envelope.Id, envelope.UpdatedAt, record));
         }
 
         return results;
     }
 
-    public string SaveHost(string? id, HostRecord record)
+    private string SaveRecord<T>(string subfolder, string? id, T record)
     {
         RequireUnlocked();
-        Directory.CreateDirectory(_hostsDir);
+        var dir = Path.Combine(_vaultDir, subfolder);
+        Directory.CreateDirectory(dir);
 
         id ??= Guid.NewGuid().ToString("N");
         var json = JsonSerializer.Serialize(record);
         var (nonce, ciphertext) = VaultCrypto.Encrypt(_key!, json);
 
-        var envelope = new HostEnvelope
+        var envelope = new RecordEnvelope
         {
             Id = id,
             UpdatedAt = DateTimeOffset.UtcNow,
             Nonce = Convert.ToBase64String(nonce),
             Ciphertext = Convert.ToBase64String(ciphertext),
         };
-        File.WriteAllText(Path.Combine(_hostsDir, $"{id}.json"), JsonSerializer.Serialize(envelope));
+        File.WriteAllText(Path.Combine(dir, $"{id}.json"), JsonSerializer.Serialize(envelope));
         return id;
     }
 
-    public bool DeleteHost(string id)
+    private bool DeleteRecord(string subfolder, string id)
     {
         RequireUnlocked();
-        var path = Path.Combine(_hostsDir, $"{id}.json");
+        var path = Path.Combine(_vaultDir, subfolder, $"{id}.json");
         if (!File.Exists(path))
         {
             return false;

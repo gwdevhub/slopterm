@@ -118,3 +118,58 @@ export async function createHost(host: HostRecord): Promise<{ id: string }> {
 export async function deleteHost(id: string): Promise<void> {
   await fetch(`/api/vault/hosts/${id}`, { method: 'DELETE' })
 }
+
+export interface SnippetRecord {
+  name: string
+  command: string
+}
+
+export interface SavedSnippet {
+  id: string
+  updatedAt: string
+  snippet: SnippetRecord
+}
+
+export async function listSnippets(): Promise<SavedSnippet[]> {
+  const res = await fetch('/api/vault/snippets')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function createSnippet(snippet: SnippetRecord): Promise<{ id: string }> {
+  const res = await fetch('/api/vault/snippets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(snippet),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function deleteSnippet(id: string): Promise<void> {
+  await fetch(`/api/vault/snippets/${id}`, { method: 'DELETE' })
+}
+
+export interface LogEntry {
+  event: 'connected' | 'connect_failed' | 'disconnected'
+  host: string
+  port: number
+  username: string
+  detail?: string | null
+}
+
+export interface SavedLogEntry {
+  id: string
+  timestamp: string
+  entry: LogEntry
+}
+
+export async function listLogs(): Promise<SavedLogEntry[]> {
+  const res = await fetch('/api/vault/logs')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function clearLogs(): Promise<void> {
+  await fetch('/api/vault/logs', { method: 'DELETE' })
+}

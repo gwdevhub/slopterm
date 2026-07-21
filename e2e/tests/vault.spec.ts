@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -12,21 +13,10 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
   sshPassword: string
 }
 
-function gotoHostsSection(page: import('@playwright/test').Page) {
-  // Exact match matters: "Known Hosts" also contains the substring "Hosts", which a
-  // has-text()/text= selector would ambiguously match - same class of bug as "Connect"
-  // vs. "Quick Connect" below.
-  return page.getByRole('button', { name: 'Hosts', exact: true }).click()
-}
-
 test('creates a vault, saves a host, connects to it, and deletes it', async ({ page }) => {
   await page.goto(ctx.baseUrl)
-  await gotoHostsSection(page)
-
-  // Fresh vault dir per e2e run (see global-setup.ts), so this is always the setup flow.
-  await expect(page.getByText('Create a vault master password')).toBeVisible()
-  await page.fill('input[type=password]', 'e2e-test-master-password')
-  await page.click('button:has-text("Create vault")')
+  await gotoSection(page, 'Hosts')
+  await ensureVaultUnlocked(page)
 
   await expect(page.getByText('No saved hosts yet.')).toBeVisible({ timeout: 10_000 })
 
@@ -49,7 +39,7 @@ test('creates a vault, saves a host, connects to it, and deletes it', async ({ p
   }).toPass({ timeout: 15_000 })
 
   await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
-  await gotoHostsSection(page)
+  await gotoSection(page, 'Hosts')
   await page.click('text=e2e test host')
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await expect(page.getByText('No saved hosts yet.')).toBeVisible({ timeout: 10_000 })

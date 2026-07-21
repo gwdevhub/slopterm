@@ -11,12 +11,18 @@ public sealed class TerminalSession : IDisposable
     private readonly ShellStream _shell;
 
     public string Id { get; }
+    public string Host { get; }
+    public int Port { get; }
+    public string Username { get; }
 
-    private TerminalSession(string id, SshClient client, ShellStream shell)
+    private TerminalSession(string id, SshClient client, ShellStream shell, string host, int port, string username)
     {
         Id = id;
         _client = client;
         _shell = shell;
+        Host = host;
+        Port = port;
+        Username = username;
     }
 
     public static TerminalSession Connect(ConnectRequest request)
@@ -83,7 +89,7 @@ public sealed class TerminalSession : IDisposable
             height: 0,
             bufferSize: 4096);
 
-        return new TerminalSession(Guid.NewGuid().ToString("N"), client, shell);
+        return new TerminalSession(Guid.NewGuid().ToString("N"), client, shell, request.Host, request.Port, request.Username);
     }
 
     public Task PumpToWebSocketAsync(WebSocket socket, CancellationToken cancellationToken)

@@ -76,10 +76,23 @@ spirit of Termius, targeting Linux, macOS and Windows.
     Linux** using a fixed password/salt/nonce in an isolated test harness - unlike
     Curve25519, AES-GCM is a far more standardized primitive across CNG and OpenSSL, so
     this was a real risk worth checking (not an assumption), but it turned out fine.
-  - The current front-end vault UI (`VaultPanel.tsx`) is deliberately minimal/unstyled -
-    it exists to prove the encrypted backend works end-to-end through the real UI, not
-    just curl. The actual Termius-style layout (nav rail, host card grid, host details
-    panel) is issues #8/#10, built on top of this.
+  - `VaultService`'s host CRUD was generalized into a generic `ListRecords<T>`/
+    `SaveRecord<T>`/`DeleteRecord<T>`(subfolder) pair once Snippets and Logs needed the
+    identical per-record-file pattern - not before, per the "three similar lines beats a
+    premature abstraction" rule; three *full* CRUD implementations was worth collapsing.
+  - **Snippets** (`SnippetsSection.tsx`, `snippets/{id}.json`): saved reusable commands,
+    copy-to-clipboard rather than sent directly into a terminal - the nav rail and an
+    active session tab are mutually exclusive in the current layout (`App.tsx` only
+    renders `AppShell` when no tab is active), so there's no terminal visible to inject
+    into while this section is showing. Direct injection is a natural follow-up if the
+    shell and an open session ever coexist.
+  - **Logs** (`LogsSection.tsx`, `logs/{id}.json`): an append-only record of connection
+    attempts (`connected`/`connect_failed`/`disconnected`), written by `Program.cs`
+    whenever `/api/ssh/connect` succeeds/fails and whenever a session is actually removed
+    (guarded by `SessionStore.Remove`'s return value so a natural WS-close racing an
+    explicit disconnect call logs exactly once, not twice). **Best-effort by design**:
+    `VaultService.AppendLog` silently no-ops if the vault is locked, since Quick Connect
+    must keep working with no vault at all.
 - **Sync is a hard requirement**, not a stretch goal. Design is zero-knowledge: only the
   AES-GCM ciphertext ever leaves the device, the master key/password never does. Start
   with a git-backed sync backend (push/pull the encrypted blob to a private repo or gist)

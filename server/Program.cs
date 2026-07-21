@@ -122,10 +122,25 @@ app.MapPost("/api/ssh/connect", (ConnectRequest request) =>
     {
         var session = TerminalSession.Connect(request);
         sessions.Add(session);
+        vault.AppendLog(new LogEntryRecord
+        {
+            Event = "connected",
+            Host = request.Host,
+            Port = request.Port,
+            Username = request.Username,
+        });
         return Results.Ok(new { sessionId = session.Id });
     }
     catch (Exception ex)
     {
+        vault.AppendLog(new LogEntryRecord
+        {
+            Event = "connect_failed",
+            Host = request.Host,
+            Port = request.Port,
+            Username = request.Username,
+            Detail = ex.Message,
+        });
         return Results.BadRequest(new { error = ex.Message });
     }
 });
@@ -216,9 +231,91 @@ app.MapDelete("/api/vault/hosts/{id}", (string id) =>
     }
 });
 
+app.MapGet("/api/vault/snippets", () =>
+{
+    try
+    {
+        var snippets = vault.ListSnippets().Select(s => new { id = s.Id, updatedAt = s.UpdatedAt, snippet = s.Record });
+        return Results.Ok(snippets);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPost("/api/vault/snippets", (SnippetRecord request) =>
+{
+    try
+    {
+        var id = vault.SaveSnippet(null, request);
+        return Results.Ok(new { id });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPut("/api/vault/snippets/{id}", (string id, SnippetRecord request) =>
+{
+    try
+    {
+        vault.SaveSnippet(id, request);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapDelete("/api/vault/snippets/{id}", (string id) =>
+{
+    try
+    {
+        return vault.DeleteSnippet(id) ? Results.NoContent() : Results.NotFound();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapGet("/api/vault/logs", () =>
+{
+    try
+    {
+        var logs = vault.ListLogs().Select(l => new { id = l.Id, timestamp = l.UpdatedAt, entry = l.Record });
+        return Results.Ok(logs);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapDelete("/api/vault/logs", () =>
+{
+    try
+    {
+        vault.ClearLogs();
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
 app.MapDelete("/api/ssh/session/{sessionId}", (string sessionId) =>
 {
-    sessions.Remove(sessionId);
+    var removed = sessions.Remove(sessionId);
+    if (removed is not null)
+    {
+        vault.AppendLog(new LogEntryRecord { Event = "disconnected", Host = removed.Host, Port = removed.Port, Username = removed.Username });
+    }
+
     return Results.NoContent();
 });
 
@@ -250,7 +347,11 @@ app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId
         await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "session ended", CancellationToken.None);
     }
 
-    sessions.Remove(sessionId);
+    var removed = sessions.Remove(sessionId);
+    if (removed is not null)
+    {
+        vault.AppendLog(new LogEntryRecord { Event = "disconnected", Host = removed.Host, Port = removed.Port, Username = removed.Username });
+    }
 });
 
 app.Start();

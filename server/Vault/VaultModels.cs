@@ -15,11 +15,11 @@ public sealed class VaultMetadata
 }
 
 /// <summary>
-/// hosts/{id}.json on disk. Id and UpdatedAt stay outside the ciphertext on purpose - a
-/// future sync/merge process needs to compare records without decrypting them first (see
-/// AGENTS.md's Vault section).
+/// {subfolder}/{id}.json on disk (hosts/snippets/logs all use this same shape). Id and
+/// UpdatedAt stay outside the ciphertext on purpose - a future sync/merge process needs
+/// to compare records without decrypting them first (see AGENTS.md's Vault section).
 /// </summary>
-public sealed class HostEnvelope
+public sealed class RecordEnvelope
 {
     public required string Id { get; set; }
     public required DateTimeOffset UpdatedAt { get; set; }
@@ -47,4 +47,25 @@ public sealed class CredentialRecord
     public required string Kind { get; set; } // "password" | "privateKey" | "envVar"
     public string? Username { get; set; }
     public string? Secret { get; set; } // password, private key contents, or "NAME=value"
+}
+
+/// <summary>A saved, reusable command - copyable into a terminal (see AGENTS.md's Snippets note).</summary>
+public sealed class SnippetRecord
+{
+    public required string Name { get; set; }
+    public required string Command { get; set; }
+}
+
+/// <summary>
+/// An append-only record of a connection attempt/outcome. Best-effort: only written when
+/// the vault happens to be unlocked at the time (Quick Connect must keep working with no
+/// vault at all - see AGENTS.md's Logs note), never required for a connection to proceed.
+/// </summary>
+public sealed class LogEntryRecord
+{
+    public required string Event { get; set; } // "connected" | "connect_failed" | "disconnected"
+    public required string Host { get; set; }
+    public required int Port { get; set; }
+    public required string Username { get; set; }
+    public string? Detail { get; set; } // error message, for connect_failed
 }

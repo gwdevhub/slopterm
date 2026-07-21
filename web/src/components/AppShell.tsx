@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { NavRail, type NavSection } from './NavRail'
 import { HostsSection } from './HostsSection'
+import { SnippetsSection } from './SnippetsSection'
+import { LogsSection } from './LogsSection'
 import { ConnectForm } from './ConnectForm'
 import type { ConnectRequest } from '../lib/api'
 
@@ -10,12 +12,10 @@ interface AppShellProps {
   isConnecting: boolean
 }
 
-const COMING_SOON: Record<Exclude<NavSection, 'quickConnect' | 'hosts'>, string> = {
+const COMING_SOON: Record<Exclude<NavSection, 'quickConnect' | 'hosts' | 'snippets' | 'logs'>, string> = {
   keychain: 'Keychain',
   portForwarding: 'Port Forwarding',
-  snippets: 'Snippets',
   knownHosts: 'Known Hosts',
-  logs: 'Logs',
 }
 
 // The persistent 3-pane app shell from the Termius reference (issue #8): a left nav
@@ -31,8 +31,10 @@ export function AppShell({ onConnect, errorMessage, isConnecting }: AppShellProp
           <ConnectForm onConnect={onConnect} errorMessage={errorMessage} isConnecting={isConnecting} />
         )}
         {section === 'hosts' && <HostsSection onConnect={onConnect} />}
-        {section !== 'quickConnect' && section !== 'hosts' && (
-          <p className="p-4 text-slate-500">{COMING_SOON[section]} is coming soon.</p>
+        {section === 'snippets' && <SnippetsSection />}
+        {section === 'logs' && <LogsSection />}
+        {section in COMING_SOON && (
+          <p className="p-4 text-slate-500">{COMING_SOON[section as keyof typeof COMING_SOON]} is coming soon.</p>
         )}
       </div>
     </div>
