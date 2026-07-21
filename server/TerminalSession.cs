@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using Renci.SshNet;
 
@@ -50,6 +51,24 @@ public sealed class TerminalSession : IDisposable
             // mistyped host/IP. Fail fast instead.
             Timeout = TimeSpan.FromSeconds(10),
         };
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            // .NET's ECDiffieHellman/Windows CNG support for Curve25519 (X25519) is
+            // inconsistent across Windows versions and patch levels (dotnet/runtime#42312),
+            // and SSH.NET throws instead of falling back to another algorithm. Almost every
+            // modern OpenSSH server prefers an X25519-based key exchange, so without this
+            // every connection from Windows would fail. Drop every X25519-based method (the
+            // plain curve25519 ones and the newer post-quantum hybrids, which use X25519 as
+            // part of the hybrid construction) and let it negotiate ecdh-nistp*/classical
+            // Diffie-Hellman instead, which Windows always supports consistently.
+            connectionInfo.KeyExchangeAlgorithms.Remove("curve25519-sha256");
+            connectionInfo.KeyExchangeAlgorithms.Remove("curve25519-sha256@libssh.org");
+            connectionInfo.KeyExchangeAlgorithms.Remove("mlkem768x25519-sha256");
+            connectionInfo.KeyExchangeAlgorithms.Remove("sntrup761x25519-sha512");
+            connectionInfo.KeyExchangeAlgorithms.Remove("sntrup761x25519-sha512@openssh.com");
+        }
+
         var client = new SshClient(connectionInfo);
         client.Connect();
 

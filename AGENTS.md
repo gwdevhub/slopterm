@@ -124,6 +124,33 @@ spirit of Termius, targeting Linux, macOS and Windows.
 - Never log or persist decrypted vault contents (PATs, private keys, passwords) anywhere
   outside the encrypted vault file.
 
+## Testing
+
+- **Whenever backend (`server/`) code changes, build the win-x64 self-contained exe and
+  run it under Wine** (`apt-get install wine`, then `dotnet publish -c Release -r win-x64`
+  and `wine Slopterm.Server.exe`) — don't assume a Linux-only build/run is sufficient.
+  This isn't a formality: it's how we caught a real bug (SSH.NET's default key exchange
+  algorithms include Curve25519/X25519-based methods that virtually every modern OpenSSH
+  server prefers, but .NET's Windows CNG support for that curve is inconsistent across
+  Windows versions and throws instead of falling back — see `TerminalSession.cs`). That
+  failure mode is invisible on Linux, where .NET's OpenSSL-backed crypto handles it fine,
+  so a Linux-only test pass would have shipped a build that fails to connect to almost
+  any real-world SSH server from Windows. Connect it to a real target (the disposable
+  `openssh-server` Docker container used in `e2e/` works well for this) rather than just
+  checking that the process boots.
+- **Known Wine-only gap - don't over-fix based on it:** Wine's own `bcrypt`/CNG emulation
+  fails to generate ECDH keys at all (`CngKey.Create` throws `0x80090029`), for the
+  standard NIST curves (`ecdh-sha2-nistp256/384/521`) just as much as Curve25519 - unlike
+  real Windows, which has always had solid native ECDH nistp256/384/521 support (it's used
+  everywhere: TLS, RDP, etc.). If a connection fails under Wine specifically on ECDH,
+  that's Wine's test environment, not a reason to also strip the NIST curves from
+  `TerminalSession.cs` - doing so would degrade real Windows users to work around a
+  limitation only the test harness has. To fully exercise the connect+shell+WebSocket
+  pipeline under Wine despite this gap, point it at a target offering only classical
+  Diffie-Hellman (`KexAlgorithms diffie-hellman-group14-sha256` in a throwaway `sshd`
+  config) - if a modern target server doesn't offer that, verifying the ECDH path itself
+  currently requires real Windows.
+
 ## Workflow
 
 - Base branch: `main`.
