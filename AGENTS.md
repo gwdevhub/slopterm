@@ -36,9 +36,13 @@ spirit of Termius, targeting Linux, macOS and Windows.
 - **Backend:** .NET 8 + SSH.NET (`Renci.SshNet`) — owns all SSH/SFTP/port-forwarding I/O,
   serves the built React bundle plus a WebSocket PTY stream over a local ASP.NET Core
   (Kestrel) HTTP server.
-- **No bundled browser/webview.** The backend binds `127.0.0.1`; the user opens it in
-  whatever browser they already have installed — the code-server/Jupyter model. Never
-  bind `0.0.0.0` without an explicit, user-supplied opt-in flag for remote access.
+- **No bundled *browser*.** The backend binds `127.0.0.1` and is always reachable from
+  any browser on the same machine (or network, for mobile access) - the code-server/
+  Jupyter model. Never bind `0.0.0.0` without an explicit, user-supplied opt-in flag for
+  remote access. The desktop tray icon now owns a real native window via Photino (see
+  "Native app window" below) instead of launching an external browser process, but that
+  window is a thin wrapper around the *OS's own* webview (WebView2/WebKitGTK/WKWebView),
+  not a bundled browser engine - no Chromium/Blink/Gecko ships inside the exe.
 - **Fixed port with random fallback (`Program.cs`, `PreferredPort = 51823`).** Used to be
   an OS-assigned random port every launch, but that broke installed-PWA shortcuts: a PWA
   is installed against a specific origin (port included), so a random port made any
@@ -257,44 +261,21 @@ spirit of Termius, targeting Linux, macOS and Windows.
 - The published Windows build has no console window (`OutputType=WinExe`, gated to
   `RuntimeIdentifier == win-x64` only - plain `dotnet run`/`dotnet build` without `-r`
   stays a normal console app on every OS for local dev). The only UI is a tray icon
-  (`Native/WindowsTrayIcon.cs`); left-click/"Open" opens the launch URL (see
-  `BrowserLauncher.cs` below), right-click shows an Open/Quit menu, "Quit" stops the app
-  cleanly.
-- **Standalone-looking window without bundling a browser (`server/BrowserLauncher.cs`):**
-  the tray's "Open" action tries Chrome/Edge/Brave's `--app=<url>` flag first - a
-  chromeless window (no tabs/address bar) that looks like a separate native app, using
-  whichever browser the user already has installed rather than bundling one (see "No
-  bundled browser/webview" above). Detects an installed browser via the `App Paths`
-  registry key (`HKLM`/`HKCU\...\CurrentVersion\App Paths\{chrome,msedge,brave}.exe`) -
-  more reliable than guessing Program Files locations, which vary by architecture and
-  per-user vs. per-machine installs. Falls back to the previous behavior (open the OS
-  default browser normally, a plain tab) if no such browser is found or the launch fails
-  for any reason - this can never block startup or crash the app, since the fallback path
-  is the same one used before this existed. Windows-only for now, since the tray's "Open"
-  action is the only place the app currently launches a browser itself; Linux/macOS still
-  just print the URL (no auto-open trigger exists there to extend yet - see the "Not yet
-  done" note below on tray parity). Verified under Wine: with no Chrome/Edge/Brave
-  installed there, the registry lookup correctly finds nothing and falls through to the
-  existing fallback without crashing the server (Wine's own "no suitable app to open
-  this URL" message is expected there, not a regression - same as before this change).
-- **Remembers window position/size (`WindowPositionStore.cs`, `window.json`):** the
-  frontend (`App.tsx`'s `useRememberWindowPosition`) polls
-  `screenX`/`screenY`/`outerWidth`/`outerHeight` every few seconds (also on
-  `beforeunload`) and reports changes via `navigator.sendBeacon` - there's no "window
-  moved" event on the web platform, and JS can't reposition the *current* top-level
-  window after the fact anyway, so this only ever affects the *next* launch.
-  `BrowserLauncher` reads the saved position back and passes Chrome/Edge/Brave's
-  `--window-position=x,y --window-size=w,h` flags when launching the app-mode window.
-  Plain JSON, not encrypted (screen coordinates aren't sensitive) - lives alongside
-  `vault.json`/`settings.json` but isn't itself vault content, so it's naturally excluded
-  from `VaultService.ExportBackup` (a backup shouldn't force one machine's window layout
-  onto another's), though `ResetToDefault` does still wipe it along with everything else.
-  This is a stopgap within the current browser-launching architecture, not the full ask -
-  true single-instance ("clicking the tray icon focuses the existing window instead of
-  opening a new one") still isn't solved here, since that requires owning the actual
-  window handle. A Photino-based rewrite (in progress) replaces this entirely with a
-  native window whose Move/Resize/Closing events make both single-instance and geometry
-  persistence straightforward.
+  (`Native/WindowsTrayIcon.cs`); left-click/"Open" calls `AppWindowManager.EnsureWindowOpen`
+  (see "Native app window" below), right-click shows an Open/Quit menu, "Quit" stops the
+  app cleanly.
+- **`server/BrowserLauncher.cs` is now the fallback path, not the primary one** (superseded
+  by `AppWindowManager` below): if the platform's native webview runtime isn't installed,
+  the tray's "Open" action falls back to this - tries Chrome/Edge/Brave's `--app=<url>`
+  flag first (a chromeless window using whichever browser is already installed, still no
+  bundled browser engine), then the OS default browser (a plain tab) if no such browser is
+  found. Detects an installed browser via the `App Paths` registry key
+  (`HKLM`/`HKCU\...\CurrentVersion\App Paths\{chrome,msedge,brave}.exe`) - more reliable
+  than guessing Program Files locations, which vary by architecture and per-user vs.
+  per-machine installs. Verified under Wine (from when this was still the primary path):
+  with no Chrome/Edge/Brave installed there, the registry lookup correctly finds nothing
+  and falls through to the OS default-browser attempt without crashing the server (Wine's
+  own "no suitable app to open this URL" message there is expected, not a regression).
 - Implemented via raw Win32 P/Invoke (`RegisterClassEx`/`CreateWindowEx` for a hidden
   `HWND_MESSAGE`-parented window + `Shell_NotifyIcon`), not WinForms/WPF/Avalonia or a
   third-party tray package - see issue #17's reasoning (zero added dependencies/weight,
@@ -322,6 +303,80 @@ spirit of Termius, targeting Linux, macOS and Windows.
   message-handling code follows the standard, well-documented Win32 tray pattern
   (`WM_LBUTTONUP`/`WM_RBUTTONUP` forwarded through the callback message), but hasn't been
   click-tested end-to-end on real hardware.
+
+## Native app window (Photino)
+
+- **`server/Native/AppWindowManager.cs`** enforces "only ever one slopterm window":
+  `EnsureWindowOpen(url)` focuses the window that's already open if one exists, or
+  creates a fresh one otherwise - never a second one. Backed by
+  [Photino.NET](https://www.tryphotino.io/) (`PhotinoWindow`), a thin wrapper around the
+  OS's own webview (WebView2 on Windows, WebKitGTK on Linux, WKWebView on macOS) pointed
+  at the same local Kestrel server everything else already talks to - not a bundled
+  browser engine. This replaced launching an external browser process
+  (`BrowserLauncher.cs`, now the fallback - see the System tray section above) as the
+  primary path specifically because that approach never gave the app a real window
+  handle: it couldn't reliably tell whether a window was still open (to single-instance
+  it) or read back its position (to remember it) - Photino gives both directly.
+  - **Pin `Photino.NET` to `4.0.16` or later, not `3.2.3`.** `3.2.3`'s Linux native build
+    links `libwebkit2gtk-4.0`/`libjavascriptcoregtk-4.0` specifically, which modern
+    distros (this repo's own dev sandbox included) no longer ship at all, only the `4.1`
+    generation - confirmed directly: `3.2.3` failed to load at all here
+    (`DllNotFoundException`), `4.0.16` worked immediately once `libwebkit2gtk-4.1-0` and
+    `libnotify4` were installed.
+  - **`app.ico` vs `app.png` (`EmbeddedIcon.cs`):** Photino's `SetIconFile` goes through
+    GTK's own icon loader on Linux, which rejects `app.ico`'s PNG-compressed frames
+    outright (`Compressed icons are not supported`) even though Win32's `LoadImage`
+    handles that exact file fine on Windows. `EmbeddedIcon.ExtractToTempFile()` picks the
+    right one per OS - `app.ico` on Windows (shared with `WindowsTrayIcon`'s `LoadImage`
+    call), a plain `app.png` (same artwork, rendered fresh from `favicon.svg`) everywhere
+    else.
+  - **Runs on its own dedicated background thread** (STA on Windows, required for the
+    native message loop; a documented no-op elsewhere), the same pattern
+    `WindowsTrayIcon` already uses - `PhotinoWindow.WaitForClose()` blocks that thread
+    only, so Kestrel and the tray icon keep running regardless of whether a window is
+    currently open. A `ManualResetEventSlim` makes `EnsureWindowOpen` wait for the new
+    window to actually finish being created (or fail) before returning, so a second call
+    racing the first one reliably sees the real state either way.
+  - **Remembers window position/size**: `RegisterLocationChangedHandler`/
+    `RegisterSizeChangedHandler` persist to `window.json`
+    (`WindowPositionStore.cs`) on every real move/resize, and a saved position is applied
+    via `SetLocation`/`SetSize` the next time a window is created (after being closed and
+    reopened, or across app restarts). `window.json` isn't encrypted (screen coordinates
+    aren't sensitive) and lives alongside `vault.json`/`settings.json` without being vault
+    content - naturally excluded from `VaultService.ExportBackup` (a backup shouldn't
+    force one machine's window layout onto another's), though `ResetToDefault` does still
+    wipe it along with everything else. The frontend's own `App.tsx` position-polling
+    (`navigator.sendBeacon` to the same `window.json`, added before Photino existed) is
+    left in place as a fallback for the `BrowserLauncher` external-browser case, where the
+    app still doesn't own a window handle to hook native events on.
+  - **Focusing an already-open window** toggles `SetTopMost(true)`/`SetTopMost(false)` (a
+    cross-platform trick that reliably raises a window regardless of window manager), plus
+    `SetForegroundWindow` via Photino's exposed `WindowHandle` on Windows specifically for
+    a more direct/reliable focus there (allowed without the usual foreground-stealing
+    restriction, since this process already owns the window it's asking to be focused).
+  - **Runtime triage:** if window creation throws (missing WebView2/WebKitGTK), the
+    exception is caught, a friendly message naming the exact missing dependency and an
+    install link is printed to console and (on Windows) shown in a native `MessageBox`,
+    and it falls back to `BrowserLauncher.Launch` so the user isn't stranded with no way
+    to reach the app at all.
+  - **Verified end-to-end in this repo's dev sandbox** (Linux, with the runtime installed
+    for real): opening a second window while one is already open correctly focuses the
+    existing one instead of creating another (`SetTopMost` toggle observed, no second
+    `Load` call); moving the window persists to `window.json`; closing and reopening
+    creates a genuinely new window at the previously-saved position/size
+    (`SetLocation`/`SetSize` observed applying the saved values). Also run under Wine
+    (win-x64 build) per the mandatory testing rule: window creation completed
+    (`SetTitle`/`SetIconFile`/`Load` all succeeded) with no exception and the server
+    stayed fully responsive throughout - Wine's WebView2 support turned out to be more
+    complete than expected here, so the missing-runtime fallback path itself couldn't be
+    directly exercised this way; it was verified by code review and the exception-handling
+    structure instead.
+  - Not yet done: no auto-launch on startup (matches the previous browser-launching
+    behavior - the app stays silent until the tray icon is clicked, same as before this
+    existed) and no equivalent trigger on Linux/macOS yet (no tray/menu-bar icon there -
+    see the System tray section's "Not yet done" note); `AppWindowManager` itself is
+    written to work on any OS Photino supports, it's just not wired to a UI trigger
+    outside Windows yet.
 
 ## Mobile packaging (Android APK) — future consideration
 

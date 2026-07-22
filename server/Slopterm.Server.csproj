@@ -28,6 +28,9 @@
 
   <ItemGroup>
     <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
+    <!-- 3.2.3's Linux native build links webkit2gtk 4.0 specifically, which modern
+         distros (this one included) no longer ship at all - only 4.0.16+ links 4.1. -->
+    <PackageReference Include="Photino.NET" Version="4.0.16" />
     <PackageReference Include="SSH.NET" Version="2025.1.0" />
     <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="8.0.11" />
   </ItemGroup>
@@ -37,9 +40,15 @@
          copied to disk next to the exe, so a single published file is truly everything. -->
     <Content Remove="wwwroot/**" />
     <EmbeddedResource Include="wwwroot/**" />
-    <!-- Matches favicon.svg/the PWA icons - see WindowsTrayIcon.cs's LoadAppIcon. -->
+    <!-- Matches favicon.svg/the PWA icons - see WindowsTrayIcon.cs's LoadAppIcon and
+         AppWindowManager's use of EmbeddedIcon. app.png exists because GTK's icon loader
+         (used by Photino's window icon on Linux) rejects app.ico's PNG-compressed
+         entries ("Compressed icons are not supported") - Win32's LoadImage handles that
+         format fine, so app.ico stays Windows-only and app.png covers everywhere else. -->
     <Content Remove="Native/app.ico" />
     <EmbeddedResource Include="Native/app.ico" />
+    <Content Remove="Native/app.png" />
+    <EmbeddedResource Include="Native/app.png" />
   </ItemGroup>
 
 </Project>

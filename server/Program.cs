@@ -473,14 +473,16 @@ var addressesFeature = app.Services.GetRequiredService<IServer>().Features.Get<I
 var boundPort = new Uri(addressesFeature?.Addresses.First() ?? "http://127.0.0.1:0").Port;
 var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
 
-void OpenInBrowser() => BrowserLauncher.Launch(launchUrl);
+void OpenWindow() => AppWindowManager.EnsureWindowOpen(launchUrl);
 
 WindowsTrayIcon? trayIcon = null;
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
     // No console window on the published build (see the .csproj) - the tray icon is the
-    // only way to reach the app. Left-click/"Open" opens the browser; "Quit" stops it.
-    trayIcon = new WindowsTrayIcon("slopterm", OpenInBrowser, () => app.Lifetime.StopApplication());
+    // only way to reach the app. Left-click/"Open" focuses the one slopterm window if
+    // it's already open, or creates it fresh otherwise (see AppWindowManager);
+    // "Quit" stops it.
+    trayIcon = new WindowsTrayIcon("slopterm", OpenWindow, () => app.Lifetime.StopApplication());
     trayIcon.Start();
 }
 else

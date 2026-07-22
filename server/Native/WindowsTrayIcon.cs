@@ -158,26 +158,16 @@ public sealed class WindowsTrayIcon : IDisposable
     }
 
     /// <summary>
-    /// Loads the embedded app.ico (same design as favicon.svg/the PWA icons, see
-    /// AGENTS.md's System tray note) via LoadImage(LR_LOADFROMFILE) - which needs a real
-    /// file path, so the embedded bytes are copied to a temp file once. Falls back to the
-    /// stock IDI_APPLICATION icon if the resource is somehow missing, rather than failing
-    /// to show a tray icon at all.
+    /// Loads the embedded app.ico (see EmbeddedIcon.cs; same design as favicon.svg/the PWA
+    /// icons) via LoadImage(LR_LOADFROMFILE). Falls back to the stock IDI_APPLICATION icon
+    /// if the resource is somehow missing, rather than failing to show a tray icon at all.
     /// </summary>
     private static nint LoadAppIcon()
     {
-        var assembly = typeof(WindowsTrayIcon).Assembly;
-        var resourceName = Array.Find(assembly.GetManifestResourceNames(), n => n.EndsWith("app.ico", StringComparison.Ordinal));
-        if (resourceName is null)
+        var tempPath = EmbeddedIcon.ExtractToTempFile();
+        if (tempPath is null)
         {
             return LoadIcon(nint.Zero, new nint(32512)); // IDI_APPLICATION
-        }
-
-        using var stream = assembly.GetManifestResourceStream(resourceName)!;
-        var tempPath = Path.Combine(Path.GetTempPath(), "slopterm-tray.ico");
-        using (var fileStream = File.Create(tempPath))
-        {
-            stream.CopyTo(fileStream);
         }
 
         var hIcon = LoadImage(nint.Zero, tempPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
