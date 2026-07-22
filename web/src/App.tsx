@@ -4,7 +4,30 @@ import { TabBar, type SessionTab } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { SftpView } from './components/SftpView'
 import { SectionContent } from './components/SectionContent'
-import { connect, disconnect, saveWindowPosition, sftpConnect, sftpDisconnect, type ConnectRequest } from './lib/api'
+import {
+  checkForUpdate,
+  connect,
+  disconnect,
+  saveWindowPosition,
+  sftpConnect,
+  sftpDisconnect,
+  type ConnectRequest,
+} from './lib/api'
+
+// Checked once at startup (not polled) so the Sidebar's Settings icon can show a small
+// "something's new" dot without the user having to open Settings first - the actual
+// check/apply UI lives there (UpdateSection.tsx). A failed check (no GitHub token
+// configured yet, network hiccup, dev build) just means no dot, never an error the user
+// has to deal with on every other screen.
+function useUpdateAvailable() {
+  const [updateAvailable, setUpdateAvailable] = useState(false)
+  useEffect(() => {
+    checkForUpdate()
+      .then((result) => setUpdateAvailable(result.supported && !result.error && result.updateAvailable))
+      .catch(() => setUpdateAvailable(false))
+  }, [])
+  return updateAvailable
+}
 
 // Browsers don't expose a "window moved" event, and JS can't reposition the current
 // top-level window after the fact anyway (only the launcher can, via Chrome/Edge's
@@ -35,6 +58,7 @@ function useRememberWindowPosition() {
 
 function App() {
   useRememberWindowPosition()
+  const updateAvailable = useUpdateAvailable()
   const [section, setSection] = useState<NavSection>('hosts')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [tabs, setTabs] = useState<SessionTab[]>([])
@@ -108,6 +132,7 @@ function App() {
         onSelect={handleSelectSection}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+        updateAvailable={updateAvailable}
       />
       <div className="flex min-h-0 flex-1 flex-col">
         <TabBar tabs={tabs} activeId={activeTabId} onSelect={setActiveTabId} onClose={handleCloseTab} />

@@ -29,6 +29,10 @@ interface SidebarProps {
   onSelect: (section: NavSection) => void
   collapsed: boolean
   onToggleCollapsed: () => void
+  // Shown as a small dot over the Settings icon (both desktop and mobile) - deliberately
+  // just a dot, not a number/toast, per the "not too invasive" requirement. See App.tsx's
+  // one-time startup check and UpdateSection.tsx for the actual update UI.
+  updateAvailable?: boolean
 }
 
 // The persistent left sidebar (issue #8's nav rail, now always visible - there's no more
@@ -36,7 +40,7 @@ interface SidebarProps {
 // gets a real collapsible column; phones get a slim top bar with just a menu button that
 // opens a full-screen overlay instead, since a permanently-visible icon column has no
 // room at phone width.
-export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed }: SidebarProps) {
+export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed, updateAvailable }: SidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
 
   function selectAndClose(section: NavSection) {
@@ -48,6 +52,18 @@ export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed }: Side
     `flex items-center gap-3 rounded px-3 py-2 text-left text-sm ${
       isActive ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'
     }`
+
+  const settingsIcon = (
+    <span className="relative inline-flex shrink-0">
+      <SettingsIcon aria-hidden="true" className="h-5 w-5" />
+      {updateAvailable && (
+        <span
+          aria-hidden="true"
+          className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-indigo-400 ring-2 ring-slate-900"
+        />
+      )}
+    </span>
+  )
 
   return (
     <>
@@ -90,7 +106,7 @@ export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed }: Side
             title="Settings"
             className={`${itemClasses(active === 'settings')} mt-auto`}
           >
-            <SettingsIcon aria-hidden="true" className="h-5 w-5 shrink-0" />
+            {settingsIcon}
             {!collapsed && <span className="truncate">Settings</span>}
           </button>
         </div>
@@ -141,7 +157,7 @@ export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed }: Side
                 onClick={() => selectAndClose('settings')}
                 className={`${itemClasses(active === 'settings')} mt-auto`}
               >
-                <SettingsIcon aria-hidden="true" className="h-5 w-5 shrink-0" />
+                {settingsIcon}
                 <span className="truncate">Settings</span>
               </button>
             </div>

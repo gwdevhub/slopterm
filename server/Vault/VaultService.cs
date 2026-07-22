@@ -335,6 +335,44 @@ public sealed class VaultService
         }
     }
 
+    private const string GithubTokenRecordId = "github-token";
+
+    /// <summary>Null if locked, unset, or the vault doesn't exist yet - never throws.</summary>
+    public string? GetGithubToken()
+    {
+        if (!IsUnlocked)
+        {
+            return null;
+        }
+
+        var path = Path.Combine(_vaultDir, "secrets", $"{GithubTokenRecordId}.json");
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
+        if (envelope is null)
+        {
+            return null;
+        }
+
+        var json = VaultCrypto.Decrypt(_key!, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
+        return JsonSerializer.Deserialize<GithubTokenRecord>(json)?.Token;
+    }
+
+    public void SetGithubToken(string? token)
+    {
+        RequireUnlocked();
+        if (string.IsNullOrEmpty(token))
+        {
+            DeleteRecord("secrets", GithubTokenRecordId);
+            return;
+        }
+
+        SaveRecord("secrets", GithubTokenRecordId, new GithubTokenRecord { Token = token });
+    }
+
     public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, HostRecord Record)> ListHosts() => ListRecords<HostRecord>("hosts");
     public string SaveHost(string? id, HostRecord record) => SaveRecord("hosts", id, record);
     public bool DeleteHost(string id) => DeleteRecord("hosts", id);

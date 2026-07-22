@@ -311,6 +311,89 @@ spirit of Termius, targeting Linux, macOS and Windows.
 - Keep backend NuGet dependencies minimal — every package is footprint riding along with
   the CLR in a self-contained binary. Justify additions against
   SSH.NET + ASP.NET Core Kestrel + a JSON serializer before adding more.
+- **`IncludeAllContentForSelfExtract` is on, and is load-bearing, not cosmetic.** Without
+  it, `Process.Start` (used by `UpdateService.ApplyAsync`'s self-update relaunch, see
+  below) throws `FileNotFoundException: Could not load file or assembly 'System.IO.Pipes'`
+  the very first time it's called from a real published single-file exe - `Process.Start`
+  needs that assembly internally on Unix (an internal pipe-based child-exit watcher) even
+  when redirecting no streams, but single-file bundling normally only embeds what static
+  reachability analysis decides is needed, and nothing in our own code or dependencies
+  otherwise references `System.IO.Pipes` - so it's silently dropped even with
+  `PublishTrimmed` off. This only shows up at that one call site in a real publish, never
+  in `dotnet run`/`dotnet build`, and two more targeted fixes were tried and both failed
+  before this one worked: an explicit `_ = typeof(System.IO.Pipes.AnonymousPipeServerStream)`
+  reference in code, and `<TrimmerRootAssembly Include="System.IO.Pipes" />` (a
+  trimming-specific directive that apparently doesn't influence single-file bundle content
+  selection when trimming itself is off). Verified directly against a real published
+  build and the real GitHub API/release (see below) before landing on this fix.
+
+## Self-update (`UpdateService.cs`, `LaunchTokenStore.cs`, Settings' "Updates" section)
+
+- Compares the SHA256 of the currently-running single-file executable against the
+  matching-OS asset in this repo's rolling `latest` GitHub Release (see `release.yml`
+  above), and can download+verify+swap+relaunch in place. The GitHub token is entirely
+  optional in the request (only sent as a `Bearer` header when one is configured) so this
+  keeps working unauthenticated (subject to GitHub's normal rate limit) whenever the repo
+  is public, and Settings still has a field to save one for whenever it isn't (or to raise
+  the rate limit) - `gwdevhub/terminal`'s visibility isn't something this code should
+  assume is fixed either way. Confirmed directly against the real repo *while it was
+  private*: unauthenticated calls to `/releases/tags/latest` 404 (indistinguishable from
+  "doesn't exist", which is deliberate GitHub behavior for private repos) - an
+  authenticated call works regardless of visibility. The token itself is stored via
+  `VaultService.GetGithubToken`/`SetGithubToken`, encrypted like any other secret, under
+  `secrets/github-token.json` - unlike `AppSettings`, it doesn't need to be readable
+  pre-unlock, so it doesn't need the plaintext `settings.json` treatment.
+- GitHub computes and exposes each release asset's `digest` (`sha256:<hex>`) automatically
+  on upload, regardless of how it was uploaded (`gh release create`, the web UI, the API
+  directly) - confirmed directly against the real repo's actual release assets - so
+  checking for an update never needs to download anything just to hash it.
+- Downloading a release asset programmatically - and a *private* repo's asset
+  specifically - must go through
+  `GET /repos/{owner}/{repo}/releases/assets/{id}` with `Accept: application/octet-stream`
+  (plus a `Bearer` token when one's configured) - **not** the asset's own
+  `browser_download_url`, which redirects to a signed, host-specific URL meant for a
+  browser's cookie-authenticated session and
+  doesn't accept a bearer token. Confirmed directly (downloaded a real private asset this
+  way, verified its SHA256 matched the API's reported digest exactly) before relying on it.
+- **Verified the entire real flow end-to-end against the actual repo/API** (not mocked):
+  published a real single-file build, ran it standalone, saved a real GitHub token,
+  called check (got a real `updateAvailable: true` against the real `latest` release,
+  since the running build was newer than what's released), called apply, and confirmed
+  the exe was correctly swapped (SHA256 matched the release's digest exactly) and the
+  process came back up and served requests again. This surfaced two real bugs beyond the
+  single-file/`System.IO.Pipes` one above, both fixed before shipping:
+  - **A race between spawning the replacement process and this process's own exit.**
+    `Process.Start`ing the new process, then relying on `app.StopAsync()` unblocking
+    Program.cs's own `await app.WaitForShutdownAsync()` and letting `Main` fall through
+    naturally to exit - loses the race almost every time: the whole process (and the
+    background task calling `Process.Start`) can be torn down *before* `Process.Start`
+    ever actually runs, silently dropping the respawn with no error anywhere. Fixed by
+    calling `Environment.Exit(0)` immediately and explicitly right after `Process.Start`
+    returns (which is synchronous - the replacement OS process already exists
+    independently by the time it returns), instead of leaving shutdown ordering to chance.
+  - **A poller can never observe the "restarting" progress phase.** The install+shutdown
+    sequence (swap the exe, stop Kestrel, spawn the replacement, exit) is fast enough that
+    a client polling `/api/update/progress` every 500ms can go straight from `"verifying"`
+    to the connection being refused, never seeing `"installing"`/`"restarting"` at all -
+    confirmed directly, not theoretical. `UpdateProgressDialog` (`UpdateSection.tsx`)
+    treats reaching `"verifying"` (not `"restarting"` specifically) as the threshold past
+    which a dropped connection means "the app is restarting," not a failure; the backend
+    also adds a short `Task.Delay(500)` before actually stopping, as cheap defense in depth
+    on top of that, not a substitute for it.
+- **The per-launch auth token is now persisted** (`LaunchTokenStore.cs`, `launch-token.txt`
+  next to `window.json` - same plaintext, per-install, not-part-of-a-vault-backup
+  treatment), reused across restarts instead of regenerated every launch. Needed
+  specifically so a browser tab left open across a self-update-triggered restart keeps
+  working with its existing cookie instead of getting a 401 from the new process (which
+  would otherwise mint a brand new random token) - verified directly (two independent
+  launches of the same build, same vault dir, confirmed identical token both times).
+- The Sidebar's Settings icon shows a small dot (not a number/toast - deliberately minimal
+  per the original ask) when a startup check finds an update available
+  (`App.tsx`'s `useUpdateAvailable`, checked once, not polled) - the actual check/apply UI
+  only lives in Settings itself.
+- Browsing/navigating aside, there's deliberately no in-app UI for the numbered/`VERSION`
+  release channel - self-update always targets the rolling `latest` release, matching
+  what "the latest version of the exe" means throughout this feature.
 
 ## System tray (Windows)
 

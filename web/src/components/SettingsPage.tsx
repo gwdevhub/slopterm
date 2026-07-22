@@ -6,6 +6,7 @@ import {
   resetVaultToDefault,
   setRequireMasterPassword,
 } from '../lib/api'
+import { UpdateSection } from './UpdateSection'
 
 const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
@@ -181,6 +182,8 @@ export function SettingsPage() {
           </div>
         </form>
       )}
+
+      <UpdateSection />
 
       <div className="flex flex-col gap-3 border-t border-slate-800 pt-4">
         <h3 className="font-medium text-slate-100">Backup</h3>

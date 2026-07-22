@@ -13,6 +13,14 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Single-file bundling normally excludes managed assemblies it decides nothing
+         reachable references - System.IO.Pipes is one of those, but Process.Start
+         (UpdateService's self-update relaunch) needs it internally on Unix regardless
+         (an internal pipe-based child-exit watcher), and neither an explicit code
+         reference nor <TrimmerRootAssembly> changed the bundler's decision. This forces
+         the bundler to include everything from the runtime pack rather than trying to
+         guess what's reachable. -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <!-- Compresses the bundled assemblies inside the single-file exe (~51% smaller,
          self-extracts to a temp dir at first run). Do NOT also add PublishTrimmed here:
          it breaks every endpoint outright (System.Text.Json can't resolve ConnectRequest's

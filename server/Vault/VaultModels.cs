@@ -83,6 +83,18 @@ public sealed class LogEntryRecord
 }
 
 /// <summary>
+/// A GitHub personal access token, used only to call the GitHub API when checking for/
+/// downloading app updates (see UpdateService) - gwdevhub/terminal is a private repo, so
+/// unauthenticated requests 404. Stored encrypted like any other secret (unlike
+/// AppSettings, which must stay plaintext/readable pre-unlock) since it's a real
+/// credential, just a narrow-purpose one.
+/// </summary>
+public sealed class GithubTokenRecord
+{
+    public required string Token { get; set; }
+}
+
+/// <summary>
 /// settings.json - plaintext, never encrypted, lives alongside vault.json. Must be
 /// readable/writable regardless of whether a vault exists yet or is unlocked, since it's
 /// what decides whether to prompt for a master password at all (see AGENTS.md's Settings

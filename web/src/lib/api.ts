@@ -231,6 +231,63 @@ export async function setRequireMasterPassword(
   return res.json()
 }
 
+export interface GithubTokenStatus {
+  hasToken: boolean
+}
+
+export async function getGithubTokenStatus(): Promise<GithubTokenStatus> {
+  const res = await fetch('/api/settings/github-token')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function setGithubToken(token: string | null): Promise<GithubTokenStatus> {
+  const res = await fetch('/api/settings/github-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+export interface UpdateCheckResult {
+  supported: boolean
+  updateAvailable: boolean
+  currentSha256: string | null
+  latestSha256: string | null
+  latestTagName: string | null
+  assetId: number | null
+  error: string | null
+}
+
+export async function checkForUpdate(): Promise<UpdateCheckResult> {
+  const res = await fetch('/api/update/check')
+  await throwOnError(res)
+  return res.json()
+}
+
+export interface UpdateProgress {
+  phase: 'idle' | 'downloading' | 'verifying' | 'installing' | 'restarting' | 'error'
+  percent: number
+  error: string | null
+}
+
+export async function getUpdateProgress(): Promise<UpdateProgress> {
+  const res = await fetch('/api/update/progress')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function applyUpdate(assetId: number, expectedSha256: string): Promise<void> {
+  const res = await fetch('/api/update/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ assetId, expectedSha256 }),
+  })
+  await throwOnError(res)
+}
+
 export async function exportVaultBackup(): Promise<Blob> {
   const res = await fetch('/api/vault/export')
   await throwOnError(res)

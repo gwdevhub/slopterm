@@ -46,13 +46,33 @@ builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, p
 
 var app = builder.Build();
 
-var launchToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+// Persisted rather than freshly random every launch (see LaunchTokenStore's doc comment)
+// so a browser tab that's still open across a self-update-triggered restart keeps working
+// with the same cookie instead of getting a 401 from the new process.
+var launchToken = LaunchTokenStore.LoadOrCreate(() => Convert.ToHexString(RandomNumberGenerator.GetBytes(24)));
 var sessions = new SessionStore<TerminalSession>();
 var sftpSessions = new SessionStore<SftpSession>();
 var vault = new VaultService();
 // If settings (persisted from a previous run) say a master password isn't required, this
 // transparently unlocks the vault right now - the frontend never sees an unlock prompt.
 vault.EnsureUnlockedIfPasswordNotRequired();
+
+// Best-effort cleanup of a previous update's backup - see UpdateService.ApplyAsync. Not
+// fatal if this fails (e.g. the old process briefly still holds it on Windows); it'll just
+// be retried on the next startup.
+try
+{
+    var previousExeBackup = Environment.ProcessPath + ".old";
+    if (File.Exists(previousExeBackup))
+    {
+        File.Delete(previousExeBackup);
+    }
+}
+catch (IOException) { }
+
+var updateService = new UpdateService();
+UpdateProgress updateProgress = new("idle", 0);
+var updateProgressLock = new object();
 
 // Everything below is loopback/token/origin gated - this app has no other auth layer.
 app.Use(async (context, next) =>
@@ -257,6 +277,105 @@ app.MapPost("/api/settings/require-master-password", (SetRequireMasterPasswordRe
     {
         return Results.BadRequest(new { error = ex.Message });
     }
+});
+
+app.MapGet("/api/settings/github-token", () => Results.Ok(new { hasToken = !string.IsNullOrEmpty(vault.GetGithubToken()) }));
+
+app.MapPost("/api/settings/github-token", (SetGithubTokenRequest request) =>
+{
+    try
+    {
+        vault.SetGithubToken(request.Token);
+        return Results.Ok(new { hasToken = !string.IsNullOrEmpty(vault.GetGithubToken()) });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapGet("/api/update/check", async () =>
+{
+    var result = await updateService.CheckAsync(vault.GetGithubToken());
+    return Results.Ok(result);
+});
+
+app.MapGet("/api/update/progress", () =>
+{
+    lock (updateProgressLock)
+    {
+        return Results.Ok(updateProgress);
+    }
+});
+
+app.MapPost("/api/update/apply", (UpdateApplyRequest request) =>
+{
+    lock (updateProgressLock)
+    {
+        if (updateProgress.Phase is "downloading" or "verifying" or "installing")
+        {
+            return Results.Conflict(new { error = "An update is already in progress." });
+        }
+
+        updateProgress = new UpdateProgress("downloading", 0);
+    }
+
+    var githubToken = vault.GetGithubToken();
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            var reporter = new Progress<UpdateProgress>(p =>
+            {
+                lock (updateProgressLock)
+                {
+                    updateProgress = p;
+                }
+            });
+
+            await updateService.ApplyAsync(request.AssetId, request.ExpectedSha256, githubToken, reporter, CancellationToken.None);
+
+            lock (updateProgressLock)
+            {
+                updateProgress = new UpdateProgress("restarting", 100);
+            }
+
+            // Gives a client polling /api/update/progress a real chance to observe the
+            // "restarting" phase at least once before the connection drops - verified
+            // against the real repo/API that without this, the install+shutdown sequence
+            // is fast enough that a poller can go straight from "verifying" to the
+            // connection being refused, never seeing "installing"/"restarting" at all.
+            await Task.Delay(500);
+
+            // Stops Kestrel (releasing the fixed port) before spawning the replacement
+            // process, so the new instance never races the old one for the same port.
+            await app.StopAsync();
+
+            Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false });
+
+            // Deliberately NOT relying on this background task's completion unblocking
+            // Program.cs's own `await app.WaitForShutdownAsync()` and falling through
+            // naturally from there - verified directly (published single-file exe, real
+            // repo/API) that the two race: `app.StopAsync()` unblocks that awaited call on
+            // its own continuation, Main() can then fall off the end and the whole process
+            // (including this background task's thread pool) can be torn down *before*
+            // Process.Start above ever got to run, silently dropping the respawn entirely -
+            // the new process just never appeared. Process.Start is synchronous - by the
+            // time it returns here the replacement OS process already exists independently
+            // of this one - so exiting immediately and explicitly right after it, rather
+            // than leaving shutdown ordering to chance, is what actually closes that race.
+            Environment.Exit(0);
+        }
+        catch (Exception ex)
+        {
+            lock (updateProgressLock)
+            {
+                updateProgress = new UpdateProgress("error", 0, ex.Message);
+            }
+        }
+    });
+
+    return Results.Accepted();
 });
 
 app.MapGet("/api/vault/export", () =>

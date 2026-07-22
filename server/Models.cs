@@ -27,3 +27,15 @@ public sealed class SetRequireMasterPasswordRequest
     public string? CurrentPassword { get; set; } // needed when turning protection off
     public string? NewPassword { get; set; } // needed when turning protection on
 }
+
+public sealed class SetGithubTokenRequest
+{
+    // Null/empty clears it.
+    public string? Token { get; set; }
+}
+
+public sealed class UpdateApplyRequest
+{
+    public required long AssetId { get; set; }
+    public required string ExpectedSha256 { get; set; }
+}
