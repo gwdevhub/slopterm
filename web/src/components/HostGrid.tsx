@@ -50,8 +50,10 @@ export function HostGrid({ hosts, selectedId, onSelect, onNewHost, onSsh, onSftp
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {filtered.map((saved) => {
-          const usernames = [...new Set(saved.host.credentials.map((c) => c.username).filter(Boolean))]
-          const canConnect = resolveConnectRequest(saved) !== undefined
+          const request = resolveConnectRequest(saved)
+          const canConnect = request !== undefined
+          const summary = request ? `${request.username}@${request.host}` : saved.host.address
+          const authLabel = request ? (request.authMethod === 'privateKey' ? 'Private key' : 'Password') : null
           return (
             <div
               key={saved.id}
@@ -61,12 +63,17 @@ export function HostGrid({ hosts, selectedId, onSelect, onNewHost, onSsh, onSftp
                   : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
               }`}
             >
-              <button type="button" onClick={() => onSelect(saved.id)} className="flex min-w-0 flex-1 flex-col items-start gap-1">
+              <button
+                type="button"
+                onClick={() => onSelect(saved.id)}
+                onDoubleClick={() => canConnect && onSsh(saved)}
+                title={canConnect ? 'Double-click to connect via SSH' : undefined}
+                className="flex min-w-0 flex-1 flex-col items-start gap-1"
+              >
                 <HostsIcon aria-hidden="true" className="h-5 w-5 text-slate-400" />
                 <span className="truncate font-medium text-slate-100">{saved.host.name}</span>
-                <span className="truncate text-xs text-slate-400">
-                  {usernames.length > 0 ? usernames.join(', ') : saved.host.address}
-                </span>
+                <span className="truncate text-xs text-slate-400">{summary}</span>
+                {authLabel && <span className="truncate text-xs text-slate-500">{authLabel}</span>}
               </button>
               <div className="flex shrink-0 flex-col justify-center gap-1">
                 <button

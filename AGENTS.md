@@ -48,7 +48,14 @@ spirit of Termius, targeting Linux, macOS and Windows.
   terminal tab) and "SFTP" (`onSftp`, opens a dual-pane file browser tab, see below) -
   both resolve the host's first usable credential via `lib/hosts.ts`'s
   `resolveConnectRequest`, shared with `HostDetailsPanel`'s own "Connect" button so there
-  is exactly one place that logic lives. Mobile collapse for the grid/details panel itself
+  is exactly one place that logic lives. The same resolved credential also drives the
+  card's own at-a-glance summary (`user@host` plus "Password"/"Private key") so what's
+  shown always matches what the SSH/SFTP buttons would actually use, rather than being
+  derived separately from the raw credential list and risking drifting out of sync.
+  Double-clicking the card itself (not the SSH/SFTP buttons) is a shortcut for the SSH
+  button - single-click still just selects the host into the details panel, so a
+  double-click's first click doesn't do anything surprising on its way to the connect.
+  Mobile collapse for the grid/details panel itself
   (issue #11's baseline, not a full separate spec pass): the grid drops to one column, and
   the details panel stacks below the grid with its own close button instead of living in
   a persistent side column.
