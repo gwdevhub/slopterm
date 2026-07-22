@@ -1,0 +1,7 @@
+**/node_modules
+**/bin
+**/obj
+server/wwwroot
+e2e/test-results
+e2e/.tmp
+.git

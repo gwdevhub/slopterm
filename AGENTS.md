@@ -350,6 +350,11 @@ spirit of Termius, targeting Linux, macOS and Windows.
   Diffie-Hellman (`KexAlgorithms diffie-hellman-group14-sha256` in a throwaway `sshd`
   config) - if a modern target server doesn't offer that, verifying the ECDH path itself
   currently requires real Windows.
+- **`Dockerfile.test`** builds the linux-x64 backend (React UI embedded) for anyone to try
+  without installing the .NET SDK/Node locally - dev/testing only, not a deployment
+  method (see README.md's "Testing in Docker" section for the full explanation and the
+  `--network host` requirement, since the app deliberately binds `127.0.0.1` only and a
+  normal `-p` published port can't reach a container's own loopback).
 
 ## Workflow
 
