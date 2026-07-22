@@ -411,7 +411,7 @@ var addressesFeature = app.Services.GetRequiredService<IServer>().Features.Get<I
 var boundPort = new Uri(addressesFeature?.Addresses.First() ?? "http://127.0.0.1:0").Port;
 var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
 
-void OpenInBrowser() => Process.Start(new ProcessStartInfo(launchUrl) { UseShellExecute = true });
+void OpenInBrowser() => BrowserLauncher.Launch(launchUrl);
 
 WindowsTrayIcon? trayIcon = null;
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
