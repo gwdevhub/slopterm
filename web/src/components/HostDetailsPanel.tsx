@@ -1,15 +1,12 @@
 import { useState } from 'react'
 import { createHost, deleteHost, type ConnectRequest, type CredentialRecord, type SavedHost } from '../lib/api'
 import { resolveConnectRequest } from '../lib/hosts'
-import { ConnectionForm, type ConnectionFormInitialValues, type ConnectionFormValues } from './ConnectionForm'
+import { ConnectionForm, type ConnectionFormValues } from './ConnectionForm'
 import { CloseIcon } from './icons'
 
 interface HostDetailsPanelProps {
-  mode: 'view' | 'new' | 'connect' | 'empty'
+  mode: 'view' | 'new' | 'empty'
   host?: SavedHost
-  // Only used in 'connect' mode - prefills a Recent connection's host/port/username so
-  // reconnecting doesn't mean retyping them (see RecentConnections/HostsSection).
-  connectPrefill?: ConnectionFormInitialValues
   onConnect: (request: ConnectRequest) => void
   onDeleted: () => void
   onSaved: () => void
@@ -21,11 +18,13 @@ interface HostDetailsPanelProps {
 // The right-hand "Host Details" panel from the Termius reference (issue #8). Full
 // multi-credential editing (password/key/certificate/env var side by side) is issue #12 -
 // this shows the credential list read-only for existing hosts and a single credential
-// (password or private key, via the shared ConnectionForm) when creating a new one.
+// (password or private key, via the shared ConnectionForm) when creating a new one. Ad hoc
+// ("Quick Connect") connections are a modal (see QuickConnectModal) rather than a mode of
+// this panel - they used to be reachable only by picking a Recent connection first, which
+// meant there was no way to start one from scratch.
 export function HostDetailsPanel({
   mode,
   host,
-  connectPrefill,
   onConnect,
   onDeleted,
   onSaved,
@@ -81,37 +80,6 @@ export function HostDetailsPanel({
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-200"><CloseIcon aria-hidden="true" className="h-4 w-4" /></button>
         </div>
         <ConnectionForm includeName submitLabel="Save host" onSubmit={handleSave} errorMessage={error} />
-      </div>
-    )
-  }
-
-  if (mode === 'connect') {
-    return (
-      <div className="flex w-full flex-col gap-3 border-t border-slate-800 sm:w-80 sm:border-t-0 sm:border-l">
-        <div className="flex items-center justify-between p-4 pb-0">
-          <h3 className="font-semibold text-slate-100">Connect</h3>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-200"><CloseIcon aria-hidden="true" className="h-4 w-4" /></button>
-        </div>
-        <ConnectionForm
-          key={JSON.stringify(connectPrefill)}
-          submitLabel="Connect"
-          isSubmitting={isConnecting}
-          errorMessage={errorMessage}
-          initialValues={connectPrefill}
-          onSubmit={(values) =>
-            onConnect({
-              host: values.host,
-              port: values.port,
-              username: values.username,
-              authMethod: values.authMethod,
-              password: values.password,
-              privateKey: values.privateKey,
-              passphrase: values.passphrase,
-              columns: 80,
-              rows: 24,
-            })
-          }
-        />
       </div>
     )
   }

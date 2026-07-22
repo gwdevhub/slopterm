@@ -13,8 +13,9 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
   sshPassword: string
 }
 
-// Every connection now starts from a saved Host's "SSH" button - there's no more ad hoc
-// "type and connect without saving" form (that was the old Quick Connect page).
+// Uses a saved Host's "SSH" button rather than Quick Connect - these tests care about the
+// terminal itself, not the connect flow, so a saved host keeps each test's setup identical
+// regardless of which entry point was used to get there.
 async function connect(page: Page, hostName: string) {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')

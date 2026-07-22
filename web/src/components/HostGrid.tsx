@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react'
 import type { SavedHost } from '../lib/api'
 import { resolveConnectRequest } from '../lib/hosts'
-import { HostsIcon, PlusIcon } from './icons'
+import { HostCard } from './HostCard'
+import { PlusIcon } from './icons'
 
 interface HostGridProps {
   hosts: SavedHost[]
   selectedId: string | null
   onSelect: (id: string) => void
   onNewHost: () => void
+  onQuickConnect: () => void
   onSsh: (host: SavedHost) => void
   onSftp: (host: SavedHost) => void
   isConnecting?: boolean
@@ -15,7 +17,7 @@ interface HostGridProps {
 
 // The searchable card grid from the Termius reference (issue #10). Single column on
 // narrow screens, more columns as space allows - full mobile spec is issue #11.
-export function HostGrid({ hosts, selectedId, onSelect, onNewHost, onSsh, onSftp, isConnecting }: HostGridProps) {
+export function HostGrid({ hosts, selectedId, onSelect, onNewHost, onQuickConnect, onSsh, onSftp, isConnecting }: HostGridProps) {
   const [query, setQuery] = useState('')
 
   const filtered = useMemo(() => {
@@ -40,6 +42,13 @@ export function HostGrid({ hosts, selectedId, onSelect, onNewHost, onSsh, onSftp
         />
         <button
           type="button"
+          onClick={onQuickConnect}
+          className="flex items-center gap-1.5 rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700"
+        >
+          Quick connect
+        </button>
+        <button
+          type="button"
           onClick={onNewHost}
           className="flex items-center gap-1.5 rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
         >
@@ -55,47 +64,18 @@ export function HostGrid({ hosts, selectedId, onSelect, onNewHost, onSsh, onSftp
           const summary = request ? `${request.username}@${request.host}` : saved.host.address
           const authLabel = request ? (request.authMethod === 'privateKey' ? 'Private key' : 'Password') : null
           return (
-            <div
+            <HostCard
               key={saved.id}
-              className={`flex items-stretch gap-2 rounded border p-3 text-left ${
-                selectedId === saved.id
-                  ? 'border-indigo-500 bg-slate-900'
-                  : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
-              }`}
-            >
-              <button
-                type="button"
-                onClick={() => onSelect(saved.id)}
-                onDoubleClick={() => canConnect && onSsh(saved)}
-                title={canConnect ? 'Double-click to connect via SSH' : undefined}
-                className="flex min-w-0 flex-1 flex-col items-start gap-1"
-              >
-                <HostsIcon aria-hidden="true" className="h-5 w-5 text-slate-400" />
-                <span className="truncate font-medium text-slate-100">{saved.host.name}</span>
-                <span className="truncate text-xs text-slate-400">{summary}</span>
-                {authLabel && <span className="truncate text-xs text-slate-500">{authLabel}</span>}
-              </button>
-              <div className="flex shrink-0 flex-col justify-center gap-1">
-                <button
-                  type="button"
-                  aria-label={`SSH to ${saved.host.name}`}
-                  disabled={!canConnect || isConnecting}
-                  onClick={() => onSsh(saved)}
-                  className="rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
-                >
-                  SSH
-                </button>
-                <button
-                  type="button"
-                  aria-label={`SFTP to ${saved.host.name}`}
-                  disabled={!canConnect || isConnecting}
-                  onClick={() => onSftp(saved)}
-                  className="rounded bg-slate-800 px-2 py-1 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-50"
-                >
-                  SFTP
-                </button>
-              </div>
-            </div>
+              name={saved.host.name}
+              summary={summary}
+              authLabel={authLabel}
+              selected={selectedId === saved.id}
+              canConnect={canConnect}
+              isConnecting={isConnecting}
+              onSelect={() => onSelect(saved.id)}
+              onSsh={() => onSsh(saved)}
+              onSftp={() => onSftp(saved)}
+            />
           )
         })}
       </div>

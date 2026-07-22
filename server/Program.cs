@@ -629,6 +629,27 @@ app.MapDelete("/api/vault/logs", () =>
     }
 });
 
+app.MapGet("/api/vault/recent-connections", () =>
+{
+    try
+    {
+        var recents = vault.ListRecentConnections().Select(r => new { id = r.Id, updatedAt = r.UpdatedAt, connection = r.Record });
+        return Results.Ok(recents);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+// Best-effort like /api/vault/logs writes - never blocks on the vault being locked, since
+// only ad hoc (Quick Connect/Recent) connects call this, not saved-Host ones.
+app.MapPost("/api/vault/recent-connections", (RecentConnectionRecord request) =>
+{
+    vault.UpsertRecentConnection(request);
+    return Results.NoContent();
+});
+
 app.MapDelete("/api/ssh/session/{sessionId}", (string sessionId) =>
 {
     var removed = sessions.Remove(sessionId);

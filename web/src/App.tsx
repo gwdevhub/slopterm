@@ -74,7 +74,10 @@ function App() {
     setActiveTabId(null)
   }
 
-  async function handleConnect(request: ConnectRequest) {
+  // Returns whether the connect succeeded - HostsSection uses this to only remember an ad
+  // hoc (Quick Connect/Recent) destination's credential once it's actually proven to work,
+  // not on every attempt (a mistyped password shouldn't get remembered for next time).
+  async function handleConnect(request: ConnectRequest): Promise<boolean> {
     setIsConnecting(true)
     setErrorMessage(null)
     try {
@@ -82,14 +85,16 @@ function App() {
       const tab: SessionTab = { id: response.sessionId, label: `${request.username}@${request.host}`, kind: 'ssh' }
       setTabs((prev) => [...prev, tab])
       setActiveTabId(tab.id)
+      return true
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to connect')
+      return false
     } finally {
       setIsConnecting(false)
     }
   }
 
-  async function handleConnectSftp(request: ConnectRequest, label: string) {
+  async function handleConnectSftp(request: ConnectRequest, label: string): Promise<boolean> {
     setIsConnecting(true)
     setErrorMessage(null)
     try {
@@ -102,8 +107,10 @@ function App() {
       }
       setTabs((prev) => [...prev, tab])
       setActiveTabId(tab.id)
+      return true
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to connect')
+      return false
     } finally {
       setIsConnecting(false)
     }
