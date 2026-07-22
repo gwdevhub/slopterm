@@ -330,27 +330,57 @@ spirit of Termius, targeting Linux, macOS and Windows.
     right one per OS - `app.ico` on Windows (shared with `WindowsTrayIcon`'s `LoadImage`
     call), a plain `app.png` (same artwork, rendered fresh from `favicon.svg`) everywhere
     else.
+  - **The single `PhotinoWindow` instance is created once and never destroyed for the
+    rest of the process's lifetime.** This isn't a nicety, it's a hard requirement:
+    creating a *second* `PhotinoWindow` after a first one is actually closed/destroyed
+    reliably crashes the whole process natively - a silent, unrecoverable death with no
+    catchable .NET exception, confirmed by reproducing it directly (the process was
+    consistently gone within ~1s of the second window's `Load()` completing, on both
+    Linux/WebKitGTK and under Wine). "Closing" the window (the OS close button, or the
+    tray icon reopening it later) is intercepted via `RegisterWindowClosingHandler`
+    returning `true` (cancel the close) and calling `SetMinimized(true)` instead -
+    reopening later un-minimizes and focuses that same instance rather than ever creating
+    a new one. The only time the native window is actually destroyed is as a side effect
+    of the whole process exiting (Quit), which needs no special handling.
   - **Runs on its own dedicated background thread** (STA on Windows, required for the
     native message loop; a documented no-op elsewhere), the same pattern
     `WindowsTrayIcon` already uses - `PhotinoWindow.WaitForClose()` blocks that thread
-    only, so Kestrel and the tray icon keep running regardless of whether a window is
-    currently open. A `ManualResetEventSlim` makes `EnsureWindowOpen` wait for the new
-    window to actually finish being created (or fail) before returning, so a second call
-    racing the first one reliably sees the real state either way.
-  - **Remembers window position/size**: `RegisterLocationChangedHandler`/
-    `RegisterSizeChangedHandler` persist to `window.json`
-    (`WindowPositionStore.cs`) on every real move/resize, and a saved position is applied
-    via `SetLocation`/`SetSize` the next time a window is created (after being closed and
-    reopened, or across app restarts). `window.json` isn't encrypted (screen coordinates
-    aren't sensitive) and lives alongside `vault.json`/`settings.json` without being vault
-    content - naturally excluded from `VaultService.ExportBackup` (a backup shouldn't
-    force one machine's window layout onto another's), though `ResetToDefault` does still
-    wipe it along with everything else. The frontend's own `App.tsx` position-polling
+    only (and, per the point above, never actually returns in normal operation since
+    every close is cancelled), so Kestrel and the tray icon keep running regardless of
+    whether the window is currently visible or minimized. A `ManualResetEventSlim` makes
+    `EnsureWindowOpen` wait for the new window to actually finish being created (or fail)
+    before returning.
+  - **A `_creating` flag makes "does a window already exist" and "start creating one"
+    atomic under one lock.** Without it, two `EnsureWindowOpen` calls close enough
+    together (confirmed this actually happens - the tray icon's left-click can fire
+    twice for what looks like one click) could both see no window yet and each try to
+    create one, hitting the native crash above. The flag is set before releasing the
+    lock and building the `PhotinoWindow`, and cleared once that window is tracked (or
+    creation fails), so a second call in that window either focuses the real window
+    once it exists or safely no-ops rather than racing a duplicate into existence.
+  - **Remembers window position/size, captured once at close-intent time** (inside the
+    `WindowClosingHandler`, before minimizing) rather than continuously via
+    `LocationChanged`/`SizeChanged` events - persisted to `window.json`
+    (`WindowPositionStore.cs`) and applied via `SetLocation`/`SetSize` the next time a
+    window is created (from a cold start, since the running-process case now just
+    un-minimizes the same window). Continuous tracking was tried first and reverted: many
+    windowing APIs (this one included, in practice) fire spurious move/resize events as
+    part of minimizing or tearing a window down (classic Win32 reports a minimized window
+    "moving" to something like `(-32000,-32000)`), which silently overwrote a perfectly
+    good saved position with garbage the instant the window closed - reported directly:
+    "the window flashes up with the new size, but incorrect position." `SavePosition`
+    also ignores non-positive width/height as a defensive backstop against the same class
+    of bogus values. `window.json` isn't encrypted (screen coordinates aren't sensitive)
+    and lives alongside `vault.json`/`settings.json` without being vault content -
+    naturally excluded from `VaultService.ExportBackup` (a backup shouldn't force one
+    machine's window layout onto another's), though `ResetToDefault` does still wipe it
+    along with everything else. The frontend's own `App.tsx` position-polling
     (`navigator.sendBeacon` to the same `window.json`, added before Photino existed) is
     left in place as a fallback for the `BrowserLauncher` external-browser case, where the
     app still doesn't own a window handle to hook native events on.
-  - **Focusing an already-open window** toggles `SetTopMost(true)`/`SetTopMost(false)` (a
-    cross-platform trick that reliably raises a window regardless of window manager), plus
+  - **Restoring/focusing the existing window** un-minimizes it first (`SetMinimized(false)`
+    if needed), then toggles `SetTopMost(true)`/`SetTopMost(false)` (a cross-platform trick
+    that reliably raises a window regardless of window manager), plus
     `SetForegroundWindow` via Photino's exposed `WindowHandle` on Windows specifically for
     a more direct/reliable focus there (allowed without the usual foreground-stealing
     restriction, since this process already owns the window it's asking to be focused).
@@ -360,23 +390,23 @@ spirit of Termius, targeting Linux, macOS and Windows.
     and it falls back to `BrowserLauncher.Launch` so the user isn't stranded with no way
     to reach the app at all.
   - **Verified end-to-end in this repo's dev sandbox** (Linux, with the runtime installed
-    for real): opening a second window while one is already open correctly focuses the
-    existing one instead of creating another (`SetTopMost` toggle observed, no second
-    `Load` call); moving the window persists to `window.json`; closing and reopening
-    creates a genuinely new window at the previously-saved position/size
-    (`SetLocation`/`SetSize` observed applying the saved values). Also run under Wine
-    (win-x64 build) per the mandatory testing rule: window creation completed
-    (`SetTitle`/`SetIconFile`/`Load` all succeeded) with no exception and the server
-    stayed fully responsive throughout - Wine's WebView2 support turned out to be more
-    complete than expected here, so the missing-runtime fallback path itself couldn't be
-    directly exercised this way; it was verified by code review and the exception-handling
-    structure instead.
+    for real) and again under Wine (win-x64 build) per the mandatory testing rule, with
+    process liveness explicitly monitored second-by-second through the whole sequence -
+    not just "the trace lines appeared," which is what missed the native-crash bug the
+    first time around: firing two concurrent `EnsureWindowOpen` calls creates exactly one
+    window (`_creating` race confirmed closed); moving, resizing, then closing persists
+    the exact final position/size to `window.json` and minimizes rather than destroying
+    the window; reopening un-minimizes and focuses that same instance (no second `Load`
+    call) and the process stays alive indefinitely afterward, on both platforms.
   - Not yet done: no auto-launch on startup (matches the previous browser-launching
     behavior - the app stays silent until the tray icon is clicked, same as before this
     existed) and no equivalent trigger on Linux/macOS yet (no tray/menu-bar icon there -
     see the System tray section's "Not yet done" note); `AppWindowManager` itself is
     written to work on any OS Photino supports, it's just not wired to a UI trigger
-    outside Windows yet.
+    outside Windows yet. Minimizing instead of closing may leave a taskbar entry behind
+    while "closed" on some platforms/window managers, unlike apps that fully hide from
+    the taskbar - Photino doesn't expose a hide-not-minimize API, and this is a
+    reasonable trade against the alternative (a process crash).
 
 ## Mobile packaging (Android APK) — future consideration
 
