@@ -176,8 +176,26 @@ spirit of Termius, targeting Linux, macOS and Windows.
 - The published Windows build has no console window (`OutputType=WinExe`, gated to
   `RuntimeIdentifier == win-x64` only - plain `dotnet run`/`dotnet build` without `-r`
   stays a normal console app on every OS for local dev). The only UI is a tray icon
-  (`Native/WindowsTrayIcon.cs`); left-click/"Open" opens the printed URL in the default
-  browser, right-click shows an Open/Quit menu, "Quit" stops the app cleanly.
+  (`Native/WindowsTrayIcon.cs`); left-click/"Open" opens the launch URL (see
+  `BrowserLauncher.cs` below), right-click shows an Open/Quit menu, "Quit" stops the app
+  cleanly.
+- **Standalone-looking window without bundling a browser (`server/BrowserLauncher.cs`):**
+  the tray's "Open" action tries Chrome/Edge/Brave's `--app=<url>` flag first - a
+  chromeless window (no tabs/address bar) that looks like a separate native app, using
+  whichever browser the user already has installed rather than bundling one (see "No
+  bundled browser/webview" above). Detects an installed browser via the `App Paths`
+  registry key (`HKLM`/`HKCU\...\CurrentVersion\App Paths\{chrome,msedge,brave}.exe`) -
+  more reliable than guessing Program Files locations, which vary by architecture and
+  per-user vs. per-machine installs. Falls back to the previous behavior (open the OS
+  default browser normally, a plain tab) if no such browser is found or the launch fails
+  for any reason - this can never block startup or crash the app, since the fallback path
+  is the same one used before this existed. Windows-only for now, since the tray's "Open"
+  action is the only place the app currently launches a browser itself; Linux/macOS still
+  just print the URL (no auto-open trigger exists there to extend yet - see the "Not yet
+  done" note below on tray parity). Verified under Wine: with no Chrome/Edge/Brave
+  installed there, the registry lookup correctly finds nothing and falls through to the
+  existing fallback without crashing the server (Wine's own "no suitable app to open
+  this URL" message is expected there, not a regression - same as before this change).
 - Implemented via raw Win32 P/Invoke (`RegisterClassEx`/`CreateWindowEx` for a hidden
   `HWND_MESSAGE`-parented window + `Shell_NotifyIcon`), not WinForms/WPF/Avalonia or a
   third-party tray package - see issue #17's reasoning (zero added dependencies/weight,
