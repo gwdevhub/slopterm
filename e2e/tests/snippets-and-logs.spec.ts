@@ -38,11 +38,17 @@ test('saves a snippet and copies it to the clipboard', async ({ page, context })
 
 test('records connection attempts in the logs section', async ({ page }) => {
   await page.goto(ctx.baseUrl)
+
+  // Armed before navigating: LogsList starts with logs=[] until its own fetch resolves,
+  // so "No connection history yet." can render transiently even when the server already
+  // has entries from another test file (the vault/log store is shared across every e2e
+  // test file - see vault-helpers.ts). Waiting for the real response avoids racily
+  // treating "not fetched yet" as "already empty" and skipping the clear below.
+  const initialLogsFetch = page.waitForResponse((res) => res.url().includes('/api/vault/logs') && res.request().method() === 'GET')
   await gotoSection(page, 'Logs')
   await ensureVaultUnlocked(page)
+  await initialLogsFetch
 
-  // Clear first rather than assuming this is the only test creating log entries - the
-  // vault/log store is shared across every e2e test file (see vault-helpers.ts).
   if (!(await page.getByText('No connection history yet.').isVisible().catch(() => false))) {
     await page.click('button:has-text("Clear logs")')
     await expect(page.getByText('No connection history yet.')).toBeVisible({ timeout: 10_000 })

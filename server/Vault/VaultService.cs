@@ -92,6 +92,11 @@ public sealed class VaultService
     public string SaveSnippet(string? id, SnippetRecord record) => SaveRecord("snippets", id, record);
     public bool DeleteSnippet(string id) => DeleteRecord("snippets", id);
 
+    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, KeychainEntryRecord Record)> ListKeychainEntries() =>
+        ListRecords<KeychainEntryRecord>("keychain");
+    public string SaveKeychainEntry(string? id, KeychainEntryRecord record) => SaveRecord("keychain", id, record);
+    public bool DeleteKeychainEntry(string id) => DeleteRecord("keychain", id);
+
     public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, LogEntryRecord Record)> ListLogs() =>
         ListRecords<LogEntryRecord>("logs").OrderByDescending(l => l.UpdatedAt).ToList();
 
