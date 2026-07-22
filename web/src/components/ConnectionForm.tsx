@@ -12,6 +12,12 @@ export interface ConnectionFormValues {
   passphrase?: string
 }
 
+export interface ConnectionFormInitialValues {
+  host?: string
+  port?: number
+  username?: string
+}
+
 interface ConnectionFormProps {
   // Quick Connect has no name field (it doesn't save anything); the "new host" form does.
   includeName?: boolean
@@ -19,6 +25,10 @@ interface ConnectionFormProps {
   onSubmit: (values: ConnectionFormValues) => void
   errorMessage?: string | null
   isSubmitting?: boolean
+  // Seeds host/port/username - e.g. picking a Recent connection. Only read on mount, so
+  // the caller should remount (e.g. via a `key` prop keyed on the selection) to apply a
+  // new value rather than expecting this to behave like a controlled input.
+  initialValues?: ConnectionFormInitialValues
 }
 
 const inputClasses =
@@ -30,11 +40,18 @@ const labelClasses = 'mb-1 block text-sm font-medium text-slate-300'
 // Connect renders this with no vault present, so the Keychain lookup below is best-effort:
 // a failed/locked-vault fetch just means the "use a saved key" dropdown doesn't appear,
 // it never blocks connecting with a pasted/browsed key.
-export function ConnectionForm({ includeName, submitLabel, onSubmit, errorMessage, isSubmitting }: ConnectionFormProps) {
+export function ConnectionForm({
+  includeName,
+  submitLabel,
+  onSubmit,
+  errorMessage,
+  isSubmitting,
+  initialValues,
+}: ConnectionFormProps) {
   const [name, setName] = useState('')
-  const [host, setHost] = useState('')
-  const [port, setPort] = useState(22)
-  const [username, setUsername] = useState('')
+  const [host, setHost] = useState(initialValues?.host ?? '')
+  const [port, setPort] = useState(initialValues?.port ?? 22)
+  const [username, setUsername] = useState(initialValues?.username ?? '')
   const [authMethod, setAuthMethod] = useState<'password' | 'privateKey'>('password')
   const [password, setPassword] = useState('')
   const [privateKey, setPrivateKey] = useState('')

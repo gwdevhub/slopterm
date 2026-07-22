@@ -93,6 +93,17 @@ spirit of Termius, targeting Linux, macOS and Windows.
     explicit disconnect call logs exactly once, not twice). **Best-effort by design**:
     `VaultService.AppendLog` silently no-ops if the vault is locked, since Quick Connect
     must keep working with no vault at all.
+  - **Recent connections (`RecentConnections.tsx`, bottom half of Quick Connect):**
+    derived entirely client-side from the existing Logs data - no new backend endpoint or
+    stored record type. Filters to `connected` events, dedupes by `username@host:port`
+    keeping the first (i.e. most recent, since `ListLogs` already returns newest-first),
+    caps at 5. Deliberately only ever prefills `ConnectionForm`'s host/port/username on
+    click, never a credential - `LogEntryRecord` never stores one, so there's nothing to
+    reuse safely. `ConnectionForm` treats its `initialValues` prop as seed-only state (not
+    controlled), so `AppShell` remounts it via `key={JSON.stringify(prefill)}` when a
+    recent is picked, rather than the form syncing to prop changes via an effect. Same
+    best-effort posture as the Keychain lookup: a failed/locked-vault fetch just means the
+    section renders nothing, it never blocks Quick Connect.
 - **Shared connect/host form (`web/src/components/ConnectionForm.tsx`):** Quick Connect
   and the "new host" form used to be two separately maintained forms and drifted - the
   host form had no private-key option at all. Both now render the same `ConnectionForm`,
