@@ -410,6 +410,39 @@ public sealed class VaultService
         }
     }
 
+    private const int MaxRecentConnections = 5;
+
+    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, RecentConnectionRecord Record)> ListRecentConnections() =>
+        ListRecords<RecentConnectionRecord>("recent-connections").OrderByDescending(r => r.UpdatedAt).ToList();
+
+    /// <summary>
+    /// Best-effort, same as AppendLog. Upserts by host:port:username (case-insensitive
+    /// host/username) so reconnecting to the same destination refreshes its position and
+    /// credential instead of piling up duplicate entries, then trims down to
+    /// MaxRecentConnections, oldest first.
+    /// </summary>
+    public void UpsertRecentConnection(RecentConnectionRecord entry)
+    {
+        if (!IsUnlocked)
+        {
+            return;
+        }
+
+        var existing = ListRecords<RecentConnectionRecord>("recent-connections");
+        var match = existing.FirstOrDefault(e =>
+            string.Equals(e.Record.Host, entry.Host, StringComparison.OrdinalIgnoreCase) &&
+            e.Record.Port == entry.Port &&
+            string.Equals(e.Record.Username, entry.Username, StringComparison.OrdinalIgnoreCase));
+
+        SaveRecord("recent-connections", match.Id, entry);
+
+        var afterSave = ListRecords<RecentConnectionRecord>("recent-connections").OrderByDescending(e => e.UpdatedAt).ToList();
+        foreach (var stale in afterSave.Skip(MaxRecentConnections))
+        {
+            DeleteRecord("recent-connections", stale.Id);
+        }
+    }
+
     private IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, T Record)> ListRecords<T>(string subfolder)
     {
         RequireUnlocked();

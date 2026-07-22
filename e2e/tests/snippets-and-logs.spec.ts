@@ -54,8 +54,7 @@ test('records connection attempts in the logs section', async ({ page }) => {
     await expect(page.getByText('No connection history yet.')).toBeVisible({ timeout: 10_000 })
   }
 
-  // A real successful connect via a saved host's "SSH" button (there's no more ad hoc
-  // "type and connect without saving" form - that was the old Quick Connect page).
+  // A real successful connect via a saved host's "SSH" button.
   await gotoSection(page, 'Hosts')
   await page.click('button:has-text("New host")')
   await page.fill('#name', 'log test host')
@@ -70,18 +69,20 @@ test('records connection attempts in the logs section', async ({ page }) => {
   await expect(page.locator('.xterm-rows:visible')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
 
-  // Back on Hosts, that successful connect now shows up as a Recent - reuse it (with a
-  // deliberately wrong password) for the real failed-connect case, rather than a second
-  // saved host.
-  const recentLabel = `${ctx.sshUsername}@${ctx.sshHost}:${ctx.sshPort}`
-  await expect(page.getByText(recentLabel)).toBeVisible({ timeout: 10_000 })
-  await page.getByText(recentLabel).click()
+  // The real failed-connect case, via Quick Connect (deliberately wrong password) rather
+  // than a second saved host.
+  await gotoSection(page, 'Hosts')
+  await page.click('button:has-text("Quick connect")')
+  await page.fill('#host', ctx.sshHost)
+  await page.fill('#port', String(ctx.sshPort))
+  await page.fill('#username', ctx.sshUsername)
   await page.fill('#password', 'definitely-wrong')
-  await page.click('button:has-text("Connect")')
+  await page.getByRole('button', { name: 'Connect', exact: true }).click()
   // Scoped to the error paragraph's own styling rather than a broad text regex - the
   // static "Authentication" section label on this same form also matches a naive
   // /authentication/i search, which is an ambiguous strict-mode match in Playwright.
   await expect(page.locator('p.text-red-300')).toBeVisible({ timeout: 15_000 })
+  await page.keyboard.press('Escape')
 
   await gotoSection(page, 'Logs')
   await expect(page.getByText('Connected', { exact: true })).toBeVisible({ timeout: 10_000 })

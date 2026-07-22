@@ -20,10 +20,11 @@ spirit of Termius, targeting Linux, macOS and Windows.
   `HostsSection`/`SectionContent`):** the Termius-reference layout (issues #8/#10), now
   restructured so the sidebar is always visible instead of living inside a "new
   connection" view. `Sidebar.tsx` renders Hosts/Keychain/Snippets/Logs/Settings, all
-  functional - there is no "Quick Connect" nav item anymore; every connection now starts
-  from a saved Host (see below). Port Forwarding and Known Hosts were removed outright
-  (not just hidden) rather than kept as "coming soon" placeholders indefinitely - neither
-  had a real implementation behind them, and there's no near-term plan to add one; add
+  functional - there is no "Quick Connect" nav item (ad hoc connecting is a modal
+  triggered from the Hosts screen instead, see below). Port Forwarding and Known Hosts
+  were removed outright (not just hidden) rather than kept as "coming soon" placeholders
+  indefinitely - neither had a real implementation behind them, and there's no near-term
+  plan to add one; add
   them back properly (nav entry, icon, `SectionContent` case, and an actual feature) if
   that changes, rather than resurrecting a placeholder. On desktop/tablet it's a
   persistent left column with a collapse toggle at its
@@ -42,23 +43,27 @@ spirit of Termius, targeting Linux, macOS and Windows.
   `App.tsx` owns the sidebar's active section, the collapsed flag, and the open tabs -
   clicking any sidebar item sets `activeTabId` to `null` so the section shows even while
   tabs stay open in the background (see multi-session tabs below); it does not close any
-  tab. `HostsSection` shows a searchable host card grid with a "Recent" list above it
-  (moved here from the old Quick Connect page, see `RecentConnections.tsx` - picking a
-  recent opens `HostDetailsPanel`'s `connect` mode, a `ConnectionForm` prefilled with
-  host/port/username but not saved to the vault) and a right-hand Host Details panel
-  (always present on desktop, even empty, so its container never has to be added later).
-  Each host card has two buttons on its right edge - "SSH" (`HostGrid`'s `onSsh`, opens a
-  terminal tab) and "SFTP" (`onSftp`, opens a dual-pane file browser tab, see below) -
-  both resolve the host's first usable credential via `lib/hosts.ts`'s
-  `resolveConnectRequest`, shared with `HostDetailsPanel`'s own "Connect" button so there
-  is exactly one place that logic lives. The same resolved credential also drives the
-  card's own at-a-glance summary (`user@host` plus "Password"/"Private key") so what's
-  shown always matches what the SSH/SFTP buttons would actually use, rather than being
-  derived separately from the raw credential list and risking drifting out of sync.
-  Double-clicking the card itself (not the SSH/SFTP buttons) is a shortcut for the SSH
-  button - single-click still just selects the host into the details panel, so a
-  double-click's first click doesn't do anything surprising on its way to the connect.
-  Mobile collapse for the grid/details panel itself
+  tab. `HostsSection` shows a searchable host card grid, a "Quick connect" button next to
+  "New host" that opens `QuickConnectModal` (a `ConnectionForm` for an ad hoc connection
+  that isn't saved to the vault), a "Recent" card grid snapped to the *bottom* of the
+  screen (`RecentConnections.tsx`, below the saved-host grid), and a right-hand Host
+  Details panel (always present on desktop, even empty, so its container never has to be
+  added later). Both the saved-host grid and Recent share one presentational `HostCard`
+  component so a Recent entry looks and behaves exactly like a saved host's card, not a
+  lesser/different-looking feature. Each card has two buttons on its right edge - "SSH"
+  (`onSsh`, opens a terminal tab) and "SFTP" (`onSftp`, opens a dual-pane file browser tab,
+  see below) - both resolve to a `ConnectRequest` via `lib/hosts.ts` (`resolveConnectRequest`
+  for a saved host, `resolveRecentConnectRequest` for a Recent entry), shared with
+  `HostDetailsPanel`'s own "Connect" button so there is exactly one place that logic lives
+  per source. The same resolved credential also drives the card's own at-a-glance summary
+  (`user@host` plus "Password"/"Private key") so what's shown always matches what the
+  SSH/SFTP buttons would actually use, rather than being derived separately from the raw
+  credential list and risking drifting out of sync. Double-clicking the card itself (not
+  the SSH/SFTP buttons) is a shortcut for the SSH button - single-click on a saved host
+  just selects it into the details panel (Recent cards have no details panel, so their
+  single-click is purely a local visual "selected" state); either way a double-click's
+  first click doesn't do anything surprising on its way to the connect. Mobile collapse
+  for the grid/details panel itself
   (issue #11's baseline, not a full separate spec pass): the grid drops to one column, and
   the details panel stacks below the grid with its own close button instead of living in
   a persistent side column.
@@ -209,20 +214,25 @@ spirit of Termius, targeting Linux, macOS and Windows.
     `VaultService.AppendLog` silently no-ops if the vault is locked - there's currently no
     UI path that locks it mid-session (see the re-key section below), so this mostly
     guards a future manual "Lock" action rather than anything reachable today.
-  - **Recent connections (`RecentConnections.tsx`, top of the Hosts screen - moved there
-    from the old standalone Quick Connect page):** derived entirely client-side from the
-    existing Logs data - no new backend endpoint or stored record type. Filters to
-    `connected` events, dedupes by `username@host:port` keeping the first (i.e. most
-    recent, since `ListLogs` already returns newest-first), caps at 5. Deliberately only
-    ever prefills a `ConnectionForm`'s host/port/username on click, never a credential -
-    `LogEntryRecord` never stores one, so there's nothing to reuse safely. Picking a
-    recent opens `HostDetailsPanel`'s `connect` mode (a `ConnectionForm` that calls
-    `onConnect` directly instead of saving a host); `ConnectionForm` treats its
-    `initialValues` prop as seed-only state (not controlled), so `HostDetailsPanel`
-    remounts it via `key={JSON.stringify(connectPrefill)}` when a recent is picked, rather
-    than the form syncing to prop changes via an effect. Same best-effort posture as the
-    Keychain lookup below: a failed fetch just means the Recent list renders nothing, it
-    never blocks the rest of the Hosts screen.
+  - **Recent connections (`RecentConnections.tsx`, bottom of the Hosts screen, below the
+    saved-host grid):** backed by its own vault-encrypted record type,
+    `RecentConnectionRecord` (`recent-connections/` subfolder, same envelope shape as
+    hosts/snippets/keychain/logs), not derived from the plaintext connection log the way
+    it originally was. Unlike `LogEntryRecord` (host/port/username only, deliberately never
+    a credential), this one *does* retain the credential that was used, so reconnecting
+    from Recent is one click/double-click away instead of retyping a password/key every
+    time - that gap in the original log-derived design was the whole reason this became a
+    separate store. Only ad hoc connects populate it: submitting `QuickConnectModal`, or
+    reconnecting via an existing Recent card - connecting through an already-saved Host's
+    SSH/SFTP buttons does not, since that credential already lives permanently in
+    `HostRecord` and doesn't need a second copy here. `HostsSection.rememberRecent` only
+    calls `upsertRecentConnection` once `onConnect`/`onConnectSftp` actually resolves
+    `true` (see `App.tsx`'s `handleConnect`/`handleConnectSftp` return values) - a mistyped
+    password must never get remembered as if it were good. `VaultService.UpsertRecentConnection`
+    dedupes by host:port:username (case-insensitive), refreshing the existing entry's
+    id/timestamp instead of creating a duplicate, and trims down to 5 entries, oldest
+    first. Same best-effort posture as the Keychain lookup below: a failed fetch just
+    means the Recent list renders nothing, it never blocks the rest of the Hosts screen.
   - **Settings (`SettingsPage.tsx`, gear icon pinned to the bottom of `Sidebar`) - master
     password is optional, and off by default.** A brand-new install never shows an
     unlock/setup prompt at all - `AppSettings.RequireMasterPassword` defaults to `false`,
@@ -280,10 +290,10 @@ spirit of Termius, targeting Linux, macOS and Windows.
     new crypto boundary, but re-verified anyway since it's a real change to a core
     security flow.
 - **Shared connect/host form (`web/src/components/ConnectionForm.tsx`):** the "new host"
-  form and the Recent-connections reconnect form (`HostDetailsPanel`'s `connect` mode -
-  the old standalone Quick Connect page's form used to be the third caller, before it was
-  removed) used to be separately maintained and drifted - the host form had no
-  private-key option at all. Both now render the same `ConnectionForm`, parameterized by
+  form (`HostDetailsPanel`'s `new` mode) and the ad hoc connect form (`QuickConnectModal`,
+  triggered by the "Quick connect" button on the Hosts screen) used to be separately
+  maintained and drifted - the host form had no private-key option at all. Both now
+  render the same `ConnectionForm`, parameterized by
   `includeName`/`submitLabel`/`onSubmit` rather than by a `mode` enum, so the field markup
   (and its ids: `#host`/`#port`/`#username`/`#password`/`#privateKey`/`#passphrase`) is
   identical in both places. `CredentialRecord` gained an optional `Passphrase` field

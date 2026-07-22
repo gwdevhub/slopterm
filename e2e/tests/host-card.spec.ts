@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -35,7 +35,7 @@ test('a host card shows user@host and its auth method at a glance, and double-cl
   await cardButton.dblclick()
   await expect(page.locator('.xterm-rows')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
 
-  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
   await gotoSection(page, 'Hosts')
   await page.click('text=card summary test host')
   await page.getByRole('button', { name: 'Delete', exact: true }).click()

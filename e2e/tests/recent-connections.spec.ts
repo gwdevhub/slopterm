@@ -13,45 +13,34 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
   sshPassword: string
 }
 
-test('shows a recent connection on the Hosts screen and reconnects to it', async ({ page }) => {
+test('quick-connects via the modal, then reconnects from Recent without retyping the password', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')
   await ensureVaultUnlocked(page)
 
-  // A saved host to connect through - the ad hoc "type and connect without saving" form
-  // no longer exists (that was the old Quick Connect page), every connection now goes
-  // through a saved Host's "SSH" button.
-  await page.click('button:has-text("New host")')
-  await page.fill('#name', 'recent test host')
+  await page.click('button:has-text("Quick connect")')
+  await expect(page.getByRole('heading', { name: 'Quick connect' })).toBeVisible()
   await page.fill('#host', ctx.sshHost)
   await page.fill('#port', String(ctx.sshPort))
   await page.fill('#username', ctx.sshUsername)
   await page.fill('#password', ctx.sshPassword)
-  await page.click('button:has-text("Save host")')
-  await expect(page.getByText('recent test host')).toBeVisible({ timeout: 10_000 })
-
-  await page.getByRole('button', { name: `SSH to recent test host` }).click()
+  // Exact match matters: a plain :has-text("Connect")/has-text selector also matches the
+  // "Quick connect" trigger button itself (substring, case-insensitive), which is still
+  // present (just visually behind the modal overlay).
+  await page.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.locator('.xterm-rows:visible')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
 
-  // Closing the last tab drops back to the currently-selected section (Hosts), so the
-  // just-made connection should now show up in the Recent list above the host grid.
-  const recentLabel = `${ctx.sshUsername}@${ctx.sshHost}:${ctx.sshPort}`
-  await expect(page.getByText(recentLabel)).toBeVisible({ timeout: 10_000 })
+  // Closing the last tab drops back to the currently-selected section (Hosts) - the
+  // connection just made should now show up in Recent, snapped to the bottom of the
+  // screen below the host grid, rendered with the same card layout as a saved host.
+  await expect(page.getByRole('heading', { name: 'Recent' })).toBeVisible({ timeout: 10_000 })
+  const recentSummary = `${ctx.sshUsername}@${ctx.sshHost}:${ctx.sshPort}`
+  await expect(page.getByText(recentSummary)).toBeVisible()
 
-  await page.getByText(recentLabel).click()
-  await expect(page.locator('#host')).toHaveValue(ctx.sshHost)
-  await expect(page.locator('#port')).toHaveValue(String(ctx.sshPort))
-  await expect(page.locator('#username')).toHaveValue(ctx.sshUsername)
-
-  // The recent-reconnect form isn't tied to the saved host - it doesn't know a password,
-  // so filling one in and submitting connects directly without ever touching the vault.
-  await page.fill('#password', ctx.sshPassword)
-  await page.click('button:has-text("Connect")')
+  // The whole point of RecentConnectionRecord retaining the credential: reconnecting via
+  // the card's SSH button must not require retyping the password.
+  await page.getByRole('button', { name: `SSH to ${ctx.sshHost}` }).click()
   await expect(page.locator('.xterm-rows:visible')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
-
-  await gotoSection(page, 'Hosts')
-  await page.click('text=recent test host')
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
 })

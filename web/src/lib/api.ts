@@ -207,6 +207,37 @@ export async function clearLogs(): Promise<void> {
   await fetch('/api/vault/logs', { method: 'DELETE' })
 }
 
+export interface RecentConnectionRecord {
+  host: string
+  port: number
+  username: string
+  authMethod: 'password' | 'privateKey'
+  secret?: string
+  passphrase?: string
+}
+
+export interface SavedRecentConnection {
+  id: string
+  updatedAt: string
+  connection: RecentConnectionRecord
+}
+
+export async function listRecentConnections(): Promise<SavedRecentConnection[]> {
+  const res = await fetch('/api/vault/recent-connections')
+  await throwOnError(res)
+  return res.json()
+}
+
+// Fire-and-forget like the backend's own AppendLog - never worth blocking or surfacing an
+// error for, since it's just remembering a destination for next time.
+export async function upsertRecentConnection(connection: RecentConnectionRecord): Promise<void> {
+  await fetch('/api/vault/recent-connections', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(connection),
+  })
+}
+
 export interface AppSettingsInfo {
   requireMasterPassword: boolean
 }

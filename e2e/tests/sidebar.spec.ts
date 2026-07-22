@@ -41,8 +41,3 @@ test('mobile menu overlay opens from a menu button, selects a section, and close
   await expect(page.getByRole('button', { name: 'Keychain', exact: true })).toBeHidden()
   await expect(page.getByRole('button', { name: 'Open menu' })).toBeVisible()
 })
-
-test('nothing labeled "Quick Connect" exists anymore', async ({ page }) => {
-  await page.goto(ctx.baseUrl)
-  await expect(page.getByText('Quick Connect')).toHaveCount(0)
-})

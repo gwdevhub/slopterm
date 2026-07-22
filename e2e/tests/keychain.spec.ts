@@ -26,8 +26,8 @@ test('saves a key in the Keychain and reuses it from the shared connection form'
   await page.click('button:has-text("Save key")')
   await expect(page.getByText('e2e laptop key')).toBeVisible({ timeout: 10_000 })
 
-  // Reuse it from the "new host" form, which shares ConnectionForm with the Recent
-  // reconnect form (the old standalone Quick Connect page used to be a third caller).
+  // Reuse it from the "new host" form, which shares ConnectionForm with the Quick
+  // Connect modal (a third caller, triggered from the Hosts screen's own button).
   await gotoSection(page, 'Hosts')
   await page.click('button:has-text("New host")')
   await page.getByRole('radio', { name: 'Private key' }).check()

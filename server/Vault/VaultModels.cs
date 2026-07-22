@@ -83,6 +83,28 @@ public sealed class LogEntryRecord
 }
 
 /// <summary>
+/// A remembered ad hoc ("Quick Connect") destination, keyed by host:port:username. Unlike
+/// LogEntryRecord (host/port/username only, deliberately never a credential) this actually
+/// retains the credential that was used, so reconnecting from the Recent list works with
+/// one click/double-click the same way a saved Host does - a plain connection log can't
+/// do that without storing secrets in a place meant to survive forever and be exported
+/// unencrypted-adjacent. Only ad hoc connects (Quick Connect, or reconnecting to an
+/// existing Recent) upsert one of these; connecting via an already-saved Host does not,
+/// since that credential already lives permanently in HostRecord and doesn't need a
+/// second copy here. VaultService.UpsertRecentConnection caps the total count and evicts
+/// the oldest beyond it.
+/// </summary>
+public sealed class RecentConnectionRecord
+{
+    public required string Host { get; set; }
+    public required int Port { get; set; }
+    public required string Username { get; set; }
+    public required string AuthMethod { get; set; } // "password" | "privateKey"
+    public string? Secret { get; set; } // password or private key contents
+    public string? Passphrase { get; set; } // only meaningful when AuthMethod is "privateKey"
+}
+
+/// <summary>
 /// A GitHub personal access token, used only to call the GitHub API when checking for/
 /// downloading app updates (see UpdateService) - gwdevhub/terminal is a private repo, so
 /// unauthenticated requests 404. Stored encrypted like any other secret (unlike

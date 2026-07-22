@@ -1,4 +1,4 @@
-import type { ConnectRequest, SavedHost } from './api'
+import type { ConnectRequest, SavedHost, SavedRecentConnection } from './api'
 
 // Shared by the saved-host "Connect"/"SSH"/"SFTP" buttons (HostDetailsPanel, HostGrid) -
 // picks the first usable credential off a host record. Full multi-credential selection
@@ -17,6 +17,24 @@ export function resolveConnectRequest(host: SavedHost): ConnectRequest | undefin
     password: credential.kind === 'password' ? credential.secret : undefined,
     privateKey: credential.kind === 'privateKey' ? credential.secret : undefined,
     passphrase: credential.kind === 'privateKey' ? credential.passphrase : undefined,
+    columns: 80,
+    rows: 24,
+  }
+}
+
+// Mirrors resolveConnectRequest, but for a Recent connection - RecentConnectionRecord
+// always carries exactly one credential (never a list), so there's no "first usable
+// credential" search needed.
+export function resolveRecentConnectRequest(recent: SavedRecentConnection): ConnectRequest {
+  const { connection } = recent
+  return {
+    host: connection.host,
+    port: connection.port,
+    username: connection.username,
+    authMethod: connection.authMethod,
+    password: connection.authMethod === 'password' ? connection.secret : undefined,
+    privateKey: connection.authMethod === 'privateKey' ? connection.secret : undefined,
+    passphrase: connection.authMethod === 'privateKey' ? connection.passphrase : undefined,
     columns: 80,
     rows: 24,
   }
