@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { SavedHost } from '../lib/api'
+import { HostsIcon, PlusIcon } from './icons'
 
 interface HostGridProps {
   hosts: SavedHost[]
@@ -36,9 +37,10 @@ export function HostGrid({ hosts, selectedId, onSelect, onNewHost }: HostGridPro
         <button
           type="button"
           onClick={onNewHost}
-          className="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+          className="flex items-center gap-1.5 rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
         >
-          + New host
+          <PlusIcon aria-hidden="true" className="h-4 w-4" />
+          New host
         </button>
       </div>
 
@@ -56,7 +58,7 @@ export function HostGrid({ hosts, selectedId, onSelect, onNewHost }: HostGridPro
                   : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
               }`}
             >
-              <span aria-hidden="true" className="text-lg">🖥</span>
+              <HostsIcon aria-hidden="true" className="h-5 w-5 text-slate-400" />
               <span className="truncate font-medium text-slate-100">{saved.host.name}</span>
               <span className="truncate text-xs text-slate-400">
                 {usernames.length > 0 ? usernames.join(', ') : saved.host.address}

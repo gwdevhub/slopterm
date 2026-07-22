@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { createHost, deleteHost, type ConnectRequest, type CredentialRecord, type SavedHost } from '../lib/api'
 import { ConnectionForm, type ConnectionFormValues } from './ConnectionForm'
+import { CloseIcon } from './icons'
 
 interface HostDetailsPanelProps {
   mode: 'view' | 'new' | 'empty'
@@ -71,7 +72,7 @@ export function HostDetailsPanel({ mode, host, onConnect, onDeleted, onSaved, on
       <div className="flex w-full flex-col gap-3 border-t border-slate-800 sm:w-80 sm:border-t-0 sm:border-l">
         <div className="flex items-center justify-between p-4 pb-0">
           <h3 className="font-semibold text-slate-100">New host</h3>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-200">✕</button>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-200"><CloseIcon aria-hidden="true" className="h-4 w-4" /></button>
         </div>
         <ConnectionForm includeName submitLabel="Save host" onSubmit={handleSave} errorMessage={error} />
       </div>
@@ -90,7 +91,7 @@ export function HostDetailsPanel({ mode, host, onConnect, onDeleted, onSaved, on
     <div className="flex w-full flex-col gap-4 border-t border-slate-800 p-4 sm:w-80 sm:border-t-0 sm:border-l">
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-slate-100">Host Details</h3>
-        <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-200 sm:hidden">✕</button>
+        <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-200 sm:hidden"><CloseIcon aria-hidden="true" className="h-4 w-4" /></button>
       </div>
 
       <div>

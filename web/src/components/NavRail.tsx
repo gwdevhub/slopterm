@@ -1,3 +1,15 @@
+import {
+  HostsIcon,
+  KeychainIcon,
+  KnownHostsIcon,
+  LogsIcon,
+  PortForwardingIcon,
+  QuickConnectIcon,
+  SettingsIcon,
+  SnippetsIcon,
+} from './icons'
+import type { ComponentType, SVGProps } from 'react'
+
 export type NavSection =
   | 'quickConnect'
   | 'hosts'
@@ -8,14 +20,14 @@ export type NavSection =
   | 'logs'
   | 'settings'
 
-const SECTIONS: { id: Exclude<NavSection, 'settings'>; label: string; icon: string }[] = [
-  { id: 'quickConnect', label: 'Quick Connect', icon: '⚡' },
-  { id: 'hosts', label: 'Hosts', icon: '🖥' },
-  { id: 'keychain', label: 'Keychain', icon: '🔑' },
-  { id: 'portForwarding', label: 'Port Forwarding', icon: '↔' },
-  { id: 'snippets', label: 'Snippets', icon: '📋' },
-  { id: 'knownHosts', label: 'Known Hosts', icon: '📖' },
-  { id: 'logs', label: 'Logs', icon: '🗒' },
+const SECTIONS: { id: Exclude<NavSection, 'settings'>; label: string; icon: ComponentType<SVGProps<SVGSVGElement>> }[] = [
+  { id: 'quickConnect', label: 'Quick Connect', icon: QuickConnectIcon },
+  { id: 'hosts', label: 'Hosts', icon: HostsIcon },
+  { id: 'keychain', label: 'Keychain', icon: KeychainIcon },
+  { id: 'portForwarding', label: 'Port Forwarding', icon: PortForwardingIcon },
+  { id: 'snippets', label: 'Snippets', icon: SnippetsIcon },
+  { id: 'knownHosts', label: 'Known Hosts', icon: KnownHostsIcon },
+  { id: 'logs', label: 'Logs', icon: LogsIcon },
 ]
 
 interface NavRailProps {
@@ -39,7 +51,7 @@ export function NavRail({ active, onSelect }: NavRailProps) {
     >
       {SECTIONS.map((section) => (
         <button key={section.id} type="button" onClick={() => onSelect(section.id)} className={buttonClasses(active === section.id)}>
-          <span aria-hidden="true">{section.icon}</span>
+          <section.icon aria-hidden="true" className="h-5 w-5 shrink-0" />
           {section.label}
         </button>
       ))}
@@ -50,7 +62,7 @@ export function NavRail({ active, onSelect }: NavRailProps) {
         onClick={() => onSelect('settings')}
         className={`${buttonClasses(active === 'settings')} sm:mt-auto`}
       >
-        <span aria-hidden="true">⚙</span>
+        <SettingsIcon aria-hidden="true" className="h-5 w-5 shrink-0" />
         Settings
       </button>
     </nav>

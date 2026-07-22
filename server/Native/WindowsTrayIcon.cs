@@ -29,6 +29,10 @@ public sealed class WindowsTrayIcon : IDisposable
     private const uint TPM_RIGHTALIGN = 0x0008;
     private const uint TPM_BOTTOMALIGN = 0x0020;
 
+    private const uint IMAGE_ICON = 1;
+    private const uint LR_LOADFROMFILE = 0x00000010;
+    private const uint LR_DEFAULTSIZE = 0x00000040;
+
     private const int IDM_OPEN = 1;
     private const int IDM_QUIT = 2;
 
@@ -94,7 +98,7 @@ public sealed class WindowsTrayIcon : IDisposable
             uID = 1,
             uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP,
             uCallbackMessage = WM_TRAYCALLBACK,
-            hIcon = LoadIcon(nint.Zero, new nint(32512)), // IDI_APPLICATION - stock icon for now
+            hIcon = LoadAppIcon(),
             szTip = _tooltip,
         };
         Shell_NotifyIcon(NIM_ADD, ref iconData);
@@ -151,6 +155,33 @@ public sealed class WindowsTrayIcon : IDisposable
             default:
                 return DefWindowProc(hwnd, msg, wParam, lParam);
         }
+    }
+
+    /// <summary>
+    /// Loads the embedded app.ico (same design as favicon.svg/the PWA icons, see
+    /// AGENTS.md's System tray note) via LoadImage(LR_LOADFROMFILE) - which needs a real
+    /// file path, so the embedded bytes are copied to a temp file once. Falls back to the
+    /// stock IDI_APPLICATION icon if the resource is somehow missing, rather than failing
+    /// to show a tray icon at all.
+    /// </summary>
+    private static nint LoadAppIcon()
+    {
+        var assembly = typeof(WindowsTrayIcon).Assembly;
+        var resourceName = Array.Find(assembly.GetManifestResourceNames(), n => n.EndsWith("app.ico", StringComparison.Ordinal));
+        if (resourceName is null)
+        {
+            return LoadIcon(nint.Zero, new nint(32512)); // IDI_APPLICATION
+        }
+
+        using var stream = assembly.GetManifestResourceStream(resourceName)!;
+        var tempPath = Path.Combine(Path.GetTempPath(), "slopterm-tray.ico");
+        using (var fileStream = File.Create(tempPath))
+        {
+            stream.CopyTo(fileStream);
+        }
+
+        var hIcon = LoadImage(nint.Zero, tempPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+        return hIcon != nint.Zero ? hIcon : LoadIcon(nint.Zero, new nint(32512));
     }
 
     private static void ShowContextMenu(nint hwnd)
@@ -253,6 +284,9 @@ public sealed class WindowsTrayIcon : IDisposable
 
     [DllImport("user32.dll")]
     private static extern nint LoadIcon(nint hInstance, nint lpIconName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint LoadImage(nint hinst, string lpszName, uint uType, int cxDesired, int cyDesired, uint fuLoad);
 
     [DllImport("user32.dll")]
     private static extern nint CreatePopupMenu();

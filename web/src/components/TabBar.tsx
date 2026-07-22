@@ -1,3 +1,5 @@
+import { CloseIcon, PlusIcon } from './icons'
+
 export interface SessionTab {
   id: string
   label: string
@@ -32,7 +34,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onNew }: TabBarProps
             onClick={() => onClose(tab.id)}
             className="opacity-70 hover:opacity-100"
           >
-            ✕
+            <CloseIcon aria-hidden="true" className="h-3.5 w-3.5" />
           </button>
         </div>
       ))}
@@ -44,7 +46,7 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onNew }: TabBarProps
           activeId === null ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:bg-slate-800'
         }`}
       >
-        +
+        <PlusIcon aria-hidden="true" className="h-4 w-4" />
       </button>
     </div>
   )

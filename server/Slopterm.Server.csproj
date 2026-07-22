@@ -37,6 +37,9 @@
          copied to disk next to the exe, so a single published file is truly everything. -->
     <Content Remove="wwwroot/**" />
     <EmbeddedResource Include="wwwroot/**" />
+    <!-- Matches favicon.svg/the PWA icons - see WindowsTrayIcon.cs's LoadAppIcon. -->
+    <Content Remove="Native/app.ico" />
+    <EmbeddedResource Include="Native/app.ico" />
   </ItemGroup>
 
 </Project>
