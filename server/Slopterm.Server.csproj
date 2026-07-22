@@ -32,6 +32,11 @@
     <!-- We self-host via Kestrel only; suppress the IIS-hosting web.config this SDK
          otherwise generates, since it implies a deployment model we don't support. -->
     <IsWebConfigTransformDisabled>true</IsWebConfigTransformDisabled>
+    <!-- Sets the .exe's own Win32 icon resource (Explorer/taskbar/file properties) -
+         distinct from Native/app.ico's use as an embedded resource that
+         WindowsTrayIcon/AppWindowManager load at runtime for the tray/window icon. Same
+         source file; only takes effect on a real win-x64 PE, ignored elsewhere. -->
+    <ApplicationIcon>Native/app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
