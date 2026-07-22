@@ -118,6 +118,24 @@ spirit of Termius, targeting Linux, macOS and Windows.
   Recent connections: `VaultService.GetOpenTabs`/`SaveOpenTabs` silently return
   empty/no-op if the vault is locked, so a locked vault just means nothing restores, not
   an error at startup.
+- **Debounced terminal resize (`TerminalView.tsx`):** the `ResizeObserver` driving
+  `fitAddon.fit()` used to call it straight from the observer callback, on every single
+  notification. A real drag-resize fires roughly one notification per animation frame -
+  confirmed by instrumenting it directly (~30 notifications over half a second of
+  dragging) - and `fit()` calling `term.resize()` does a full renderer clear-and-redraw
+  every time the computed cols/rows actually change, which xterm does via rewriting
+  `.xterm-screen`'s inline `style` attribute. Measuring that directly (a
+  `MutationObserver` on `.xterm-screen`'s `style` attribute) showed 17 real redraws for
+  one such burst - that pileup, not any single miscalculation, is what read as "flickers
+  as it constantly resizes up and down." Fixed by debouncing: the observer now just
+  restarts a 75ms timer on every notification and only calls `fit()` once activity
+  settles, cutting that same burst down to exactly one redraw (verified the same way,
+  see `e2e/tests/terminal-resize.spec.ts`). The initial `fitAddon.fit()` call right after
+  `term.open()` stays synchronous/undebounced - only resize-triggered fits are delayed.
+  The container div also got `overflow-hidden` added defensively, so its own box can
+  never be nudged by xterm's rendered content (e.g. sub-pixel cell-size rounding) - it
+  must stay purely parent-driven, since `fit()` computes rows/cols *from* this element's
+  size in the first place.
 - **SFTP dual-pane browser (`SftpView.tsx`/`FilePane.tsx`, backend `SftpSession.cs`/
   `LocalFileSystem.cs`):** opened by a host card's "SFTP" button - local filesystem (the
   machine running slopterm) on the left, the connected host's remote filesystem on the

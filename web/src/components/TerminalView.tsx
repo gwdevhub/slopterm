@@ -80,10 +80,24 @@ export function TerminalView({ sessionId, isActive }: TerminalViewProps) {
     // NOTE: this only resizes the local xterm.js viewport. The backend's
     // ShellStream has a fixed size for the session (see AGENTS.md); the
     // server-side PTY does not learn about this resize yet.
-    const resizeObserver = new ResizeObserver(() => fitAddon.fit())
+    //
+    // Debounced rather than calling fitAddon.fit() straight from the observer: a real
+    // drag-resize fires roughly one ResizeObserver notification per frame (confirmed by
+    // instrumenting it directly - ~30 notifications over half a second of dragging), and
+    // fit() calling term.resize() does a full renderer clear-and-redraw every time it
+    // actually changes cols/rows. Applying that on every intermediate frame - including
+    // whatever transient sizes happen to fall exactly on a column/row boundary as a
+    // scrollbar's reserved gutter comes in and out of the width calculation - is what
+    // reads as flicker; only the settled size after the resize stops actually matters.
+    let resizeTimeout: ReturnType<typeof setTimeout> | undefined
+    const resizeObserver = new ResizeObserver(() => {
+      clearTimeout(resizeTimeout)
+      resizeTimeout = setTimeout(() => fitAddon.fit(), 75)
+    })
     resizeObserver.observe(container)
 
     return () => {
+      clearTimeout(resizeTimeout)
       resizeObserver.disconnect()
       dataDisposable.dispose()
       socket.close()
@@ -100,5 +114,8 @@ export function TerminalView({ sessionId, isActive }: TerminalViewProps) {
     }
   }, [isActive])
 
-  return <div ref={containerRef} className="h-full bg-black p-1 sm:p-2" />
+  // overflow-hidden so this container's own box can never be nudged by xterm's rendered
+  // content (e.g. a fractional cell-size rounding mismatch) - it must stay purely
+  // parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size.
+  return <div ref={containerRef} className="h-full overflow-hidden bg-black p-1 sm:p-2" />
 }
