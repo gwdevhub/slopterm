@@ -105,6 +105,36 @@ public sealed class RecentConnectionRecord
 }
 
 /// <summary>
+/// One entry in OpenTabsRecord - enough of a ConnectRequest to reconnect a tab that was
+/// still open the last time the app closed. Same "retains the credential" trade-off as
+/// RecentConnectionRecord, for the same reason: there's no other way to reconnect
+/// automatically on the next launch.
+/// </summary>
+public sealed class OpenTabRecord
+{
+    public required string Kind { get; set; } // "ssh" | "sftp"
+    public required string Label { get; set; }
+    public required string Host { get; set; }
+    public required int Port { get; set; }
+    public required string Username { get; set; }
+    public required string AuthMethod { get; set; } // "password" | "privateKey"
+    public string? Secret { get; set; }
+    public string? Passphrase { get; set; }
+}
+
+/// <summary>
+/// secrets/open-tabs.json - a single fixed-id record (like GithubTokenRecord), snapshotting
+/// every currently-open tab. Rewritten wholesale on every add/remove/reconnect rather than
+/// upserted piecemeal (there's no natural per-tab identity to key on across restarts), so
+/// the app can restore the exact tab set - and which one was active - on the next launch.
+/// </summary>
+public sealed class OpenTabsRecord
+{
+    public List<OpenTabRecord> Tabs { get; set; } = [];
+    public int? ActiveIndex { get; set; }
+}
+
+/// <summary>
 /// A GitHub personal access token, used only to call the GitHub API when checking for/
 /// downloading app updates (see UpdateService) - gwdevhub/terminal is a private repo, so
 /// unauthenticated requests 404. Stored encrypted like any other secret (unlike

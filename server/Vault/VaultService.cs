@@ -373,6 +373,43 @@ public sealed class VaultService
         SaveRecord("secrets", GithubTokenRecordId, new GithubTokenRecord { Token = token });
     }
 
+    private const string OpenTabsRecordId = "open-tabs";
+
+    /// <summary>Empty if locked or nothing saved yet - never throws (this drives app startup).</summary>
+    public OpenTabsRecord GetOpenTabs()
+    {
+        if (!IsUnlocked)
+        {
+            return new OpenTabsRecord();
+        }
+
+        var path = Path.Combine(_vaultDir, "secrets", $"{OpenTabsRecordId}.json");
+        if (!File.Exists(path))
+        {
+            return new OpenTabsRecord();
+        }
+
+        var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
+        if (envelope is null)
+        {
+            return new OpenTabsRecord();
+        }
+
+        var json = VaultCrypto.Decrypt(_key!, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
+        return JsonSerializer.Deserialize<OpenTabsRecord>(json) ?? new OpenTabsRecord();
+    }
+
+    /// <summary>Best-effort, same as AppendLog/UpsertRecentConnection - silently no-ops if locked.</summary>
+    public void SaveOpenTabs(OpenTabsRecord record)
+    {
+        if (!IsUnlocked)
+        {
+            return;
+        }
+
+        SaveRecord("secrets", OpenTabsRecordId, record);
+    }
+
     public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, HostRecord Record)> ListHosts() => ListRecords<HostRecord>("hosts");
     public string SaveHost(string? id, HostRecord record) => SaveRecord("hosts", id, record);
     public bool DeleteHost(string id) => DeleteRecord("hosts", id);

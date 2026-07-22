@@ -650,6 +650,17 @@ app.MapPost("/api/vault/recent-connections", (RecentConnectionRecord request) =>
     return Results.NoContent();
 });
 
+// Both best-effort like /api/vault/logs - GetOpenTabs returns an empty snapshot rather
+// than 401 if the vault happens to be locked (a brand-new app window shouldn't error out
+// just because it hasn't unlocked yet), and the POST silently no-ops the same way.
+app.MapGet("/api/vault/open-tabs", () => Results.Ok(vault.GetOpenTabs()));
+
+app.MapPost("/api/vault/open-tabs", (OpenTabsRecord request) =>
+{
+    vault.SaveOpenTabs(request);
+    return Results.NoContent();
+});
+
 app.MapDelete("/api/ssh/session/{sessionId}", (string sessionId) =>
 {
     var removed = sessions.Remove(sessionId);

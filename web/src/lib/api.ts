@@ -238,6 +238,40 @@ export async function upsertRecentConnection(connection: RecentConnectionRecord)
   })
 }
 
+export interface OpenTabRecord {
+  kind: 'ssh' | 'sftp'
+  label: string
+  host: string
+  port: number
+  username: string
+  authMethod: 'password' | 'privateKey'
+  secret?: string
+  passphrase?: string
+}
+
+export interface OpenTabsRecord {
+  tabs: OpenTabRecord[]
+  activeIndex: number | null
+}
+
+// Best-effort like listRecentConnections - a locked/missing vault just means "nothing to
+// restore", not an error App.tsx needs to handle specially at startup.
+export async function getOpenTabs(): Promise<OpenTabsRecord> {
+  const res = await fetch('/api/vault/open-tabs')
+  await throwOnError(res)
+  return res.json()
+}
+
+// Fire-and-forget like upsertRecentConnection - called on every tab add/remove/reconnect,
+// so it must never block the UI action that triggered it.
+export async function saveOpenTabs(record: OpenTabsRecord): Promise<void> {
+  await fetch('/api/vault/open-tabs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(record),
+  })
+}
+
 export interface AppSettingsInfo {
   requireMasterPassword: boolean
 }

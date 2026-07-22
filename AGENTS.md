@@ -88,12 +88,36 @@ spirit of Termius, targeting Linux, macOS and Windows.
   (`TerminalTabIcon`/`SftpTabIcon` in `icons.tsx`) since both kinds can be open side by
   side now. There is no "new tab"/"+" button in `TabBar` anymore - new sessions only
   start from a host card's SSH/SFTP buttons, never from the tab bar itself. Clicking a
-  tab's close button doesn't close it immediately - it opens `ConfirmDialog.tsx` (a
-  small shared modal, not the browser's own `window.confirm()`) with Enter confirming
+  *connected* tab's close button doesn't close it immediately - it opens `ConfirmDialog.tsx`
+  (a small shared modal, not the browser's own `window.confirm()`) with Enter confirming
   and Escape cancelling regardless of which element has focus; `App.tsx` only actually
   disconnects and removes the tab once that's confirmed. The same component backs
   Settings' vault reset/import confirmations (see the Vault section) - one place for
-  every "are you sure?" moment in the app instead of each caller rolling its own.
+  every "are you sure?" moment in the app instead of each caller rolling its own. A tab
+  that's still reconnecting (see below) skips this confirmation entirely and closes at
+  once - there's no live session yet to accidentally lose.
+- **Restoring tabs across restarts (`App.tsx`, `ReconnectingPane.tsx`, backend
+  `OpenTabsRecord`):** every open tab now carries its own `ConnectRequest` (`SessionTab.request`
+  in `TabBar.tsx`), and `App.tsx` snapshots the whole tab list - kind, label, host/port/
+  username, and the credential actually used, plus which tab was active - to a single
+  vault-encrypted `secrets/open-tabs.json` record on every add/remove/reconnect (rewritten
+  wholesale, not upserted piecemeal, since there's no stable per-tab identity across a
+  restart). On startup `App.tsx` fetches that snapshot once and recreates each tab
+  immediately in a `'connecting'` state (rendering `ReconnectingPane` instead of
+  `TerminalView`/`SftpView` until it resolves), then calls the same `connect`/`sftpConnect`
+  each tab would use normally. A tab's `id` had to stop being the backend session id at
+  this point - a reconnecting tab has no session yet - so it's now a client-generated
+  `crypto.randomUUID()` that's stable for the tab's whole lifetime, with `sessionId`
+  tracked as its own nullable field instead. Retries are indefinite with capped
+  exponential backoff (2s up to 30s) rather than giving up after N attempts - the whole
+  point is unattended recovery (e.g. the target host still booting after a reboot) - and
+  a "Retry now" button in `ReconnectingPane` lets the user skip the wait. If a tab is
+  closed/cancelled while a connect attempt is still in flight and that attempt then
+  succeeds anyway, `App.tsx` disconnects the now-orphaned session immediately rather than
+  leaving it dangling server-side with no tab pointing at it. Same best-effort posture as
+  Recent connections: `VaultService.GetOpenTabs`/`SaveOpenTabs` silently return
+  empty/no-op if the vault is locked, so a locked vault just means nothing restores, not
+  an error at startup.
 - **SFTP dual-pane browser (`SftpView.tsx`/`FilePane.tsx`, backend `SftpSession.cs`/
   `LocalFileSystem.cs`):** opened by a host card's "SFTP" button - local filesystem (the
   machine running slopterm) on the left, the connected host's remote filesystem on the
