@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -36,7 +36,7 @@ test('creates a vault, saves a host, connects to it, and deletes it', async ({ p
     expect(await page.locator('.xterm-rows').innerText()).toContain('Welcome to OpenSSH Server')
   }).toPass({ timeout: 15_000 })
 
-  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
   await gotoSection(page, 'Hosts')
   await page.click('text=e2e test host')
   await page.getByRole('button', { name: 'Delete', exact: true }).click()

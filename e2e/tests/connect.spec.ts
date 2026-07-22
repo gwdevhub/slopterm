@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -48,7 +48,7 @@ test('connects over SSH and shows live shell output', async ({ page }) => {
     expect(await terminalText(page)).toContain(marker)
   }).toPass({ timeout: 10_000 })
 
-  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
 
   // Clean up - other spec files assert "No saved hosts yet." against this same shared
   // vault, so anything created here must not leak past this test.

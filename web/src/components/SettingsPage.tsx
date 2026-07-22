@@ -6,6 +6,7 @@ import {
   resetVaultToDefault,
   setRequireMasterPassword,
 } from '../lib/api'
+import { ConfirmDialog } from './ConfirmDialog'
 import { UpdateSection } from './UpdateSection'
 
 const inputClasses =
@@ -21,8 +22,10 @@ export function SettingsPage() {
   const [exportError, setExportError] = useState<string | null>(null)
   const [importBusy, setImportBusy] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
+  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null)
   const [resetBusy, setResetBusy] = useState(false)
   const [resetError, setResetError] = useState<string | null>(null)
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const importFileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -48,16 +51,17 @@ export function SettingsPage() {
     importFileInputRef.current?.click()
   }
 
-  async function handleImportFile(event: ChangeEvent<HTMLInputElement>) {
+  function handleImportFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
+    setPendingImportFile(file)
+  }
 
-    const confirmed = window.confirm(
-      'Importing a backup replaces your current vault entirely - hosts, snippets, Keychain ' +
-        'entries, logs, and settings - with whatever is in the file. This cannot be undone. Continue?',
-    )
-    if (!confirmed) return
+  async function handleConfirmImport() {
+    const file = pendingImportFile
+    setPendingImportFile(null)
+    if (!file) return
 
     setImportBusy(true)
     setImportError(null)
@@ -73,13 +77,8 @@ export function SettingsPage() {
     }
   }
 
-  async function handleReset() {
-    const confirmed = window.confirm(
-      'This permanently deletes every saved host, snippet, Keychain entry, and log, and ' +
-        'resets Settings to default. This cannot be undone. Reset everything?',
-    )
-    if (!confirmed) return
-
+  async function handleConfirmReset() {
+    setResetConfirmOpen(false)
     setResetBusy(true)
     setResetError(null)
     try {
@@ -222,7 +221,7 @@ export function SettingsPage() {
         </p>
         <button
           type="button"
-          onClick={handleReset}
+          onClick={() => setResetConfirmOpen(true)}
           disabled={resetBusy}
           className="self-start rounded border border-red-800 bg-red-950/40 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-950 disabled:opacity-50"
         >
@@ -230,6 +229,28 @@ export function SettingsPage() {
         </button>
         {resetError && <p className="text-sm text-red-400">{resetError}</p>}
       </div>
+
+      {pendingImportFile && (
+        <ConfirmDialog
+          title="Import backup?"
+          message="Importing a backup replaces your current vault entirely - hosts, snippets, Keychain entries, logs, and settings - with whatever is in the file. This cannot be undone."
+          confirmLabel="Import"
+          danger
+          onConfirm={() => void handleConfirmImport()}
+          onCancel={() => setPendingImportFile(null)}
+        />
+      )}
+
+      {resetConfirmOpen && (
+        <ConfirmDialog
+          title="Reset everything?"
+          message="This permanently deletes every saved host, snippet, Keychain entry, and log, and resets Settings to default. This cannot be undone."
+          confirmLabel="Reset"
+          danger
+          onConfirm={() => void handleConfirmReset()}
+          onCancel={() => setResetConfirmOpen(false)}
+        />
+      )}
     </div>
   )
 }

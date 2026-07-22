@@ -4,6 +4,7 @@ import { TabBar, type SessionTab } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
 import { SftpView } from './components/SftpView'
 import { SectionContent } from './components/SectionContent'
+import { ConfirmDialog } from './components/ConfirmDialog'
 import {
   checkForUpdate,
   connect,
@@ -66,6 +67,7 @@ function App() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [isConnecting, setIsConnecting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [pendingCloseTabId, setPendingCloseTabId] = useState<string | null>(null)
 
   function handleSelectSection(nextSection: NavSection) {
     setSection(nextSection)
@@ -125,6 +127,8 @@ function App() {
     })
   }
 
+  const pendingCloseTab = tabs.find((t) => t.id === pendingCloseTabId)
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-950 sm:flex-row">
       <Sidebar
@@ -135,7 +139,7 @@ function App() {
         updateAvailable={updateAvailable}
       />
       <div className="flex min-h-0 flex-1 flex-col">
-        <TabBar tabs={tabs} activeId={activeTabId} onSelect={setActiveTabId} onClose={handleCloseTab} />
+        <TabBar tabs={tabs} activeId={activeTabId} onSelect={setActiveTabId} onClose={setPendingCloseTabId} />
         <div className="relative min-h-0 flex-1">
           {/* Every open tab's view stays mounted (just hidden) when inactive, so switching
               tabs doesn't tear down its WebSocket/SFTP connection - see issue #9's
@@ -162,6 +166,20 @@ function App() {
           )}
         </div>
       </div>
+
+      {pendingCloseTab && (
+        <ConfirmDialog
+          title="Close this session?"
+          message={`Close ${pendingCloseTab.label}? This ends its ${pendingCloseTab.kind === 'sftp' ? 'SFTP' : 'SSH'} connection.`}
+          confirmLabel="Close"
+          danger
+          onConfirm={() => {
+            handleCloseTab(pendingCloseTab.id)
+            setPendingCloseTabId(null)
+          }}
+          onCancel={() => setPendingCloseTabId(null)}
+        />
+      )}
     </div>
   )
 }

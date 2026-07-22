@@ -16,6 +16,16 @@ export function gotoSection(page: Page, name: string) {
   return page.getByRole('button', { name, exact: true }).click()
 }
 
+// Closing a tab now opens a ConfirmDialog (Close/Cancel) instead of closing immediately -
+// every test that closes a tab needs both clicks, so this is the one place that knows it.
+// `first` matches tabs.spec.ts's need to close a specific one of two identically-labeled
+// tabs (both sessions to the same host).
+export async function closeTab(page: Page, label: string, options?: { first?: boolean }) {
+  const closeButton = page.getByRole('button', { name: `Close ${label}` })
+  await (options?.first ? closeButton.first() : closeButton).click()
+  await page.getByRole('button', { name: 'Close', exact: true }).click()
+}
+
 export async function ensureVaultUnlocked(page: Page) {
   // VaultGate shows "Loading vault..." while its initial status fetch is in flight -
   // checking isVisible() before that resolves gives a false negative (nothing has

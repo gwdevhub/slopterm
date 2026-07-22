@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -88,7 +88,7 @@ test('two concurrent tabs keep separate live sessions when switching between the
   }).toPass({ timeout: 10_000 })
 
   // Close the first tab - the second tab's session must be unaffected.
-  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).first().click()
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`, { first: true })
   await expect(async () => {
     const text = await terminalText(page)
     expect(text).toContain(markerB)
@@ -104,7 +104,7 @@ test('two concurrent tabs keep separate live sessions when switching between the
   // Clean up the saved host - other spec files (e.g. vault.spec.ts) assert "No saved
   // hosts yet." against this same shared vault, so anything created here must not leak
   // past this test.
-  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
   await gotoSection(page, 'Hosts')
   await page.click('text=tabs test host')
   await page.getByRole('button', { name: 'Delete', exact: true }).click()

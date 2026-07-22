@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -32,7 +32,7 @@ test('shows a recent connection on the Hosts screen and reconnects to it', async
 
   await page.getByRole('button', { name: `SSH to recent test host` }).click()
   await expect(page.locator('.xterm-rows:visible')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
-  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
 
   // Closing the last tab drops back to the currently-selected section (Hosts), so the
   // just-made connection should now show up in the Recent list above the host grid.
@@ -49,7 +49,7 @@ test('shows a recent connection on the Hosts screen and reconnects to it', async
   await page.fill('#password', ctx.sshPassword)
   await page.click('button:has-text("Connect")')
   await expect(page.locator('.xterm-rows:visible')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
-  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
 
   await gotoSection(page, 'Hosts')
   await page.click('text=recent test host')
