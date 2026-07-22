@@ -16,21 +16,32 @@ public static class BrowserLauncher
 {
     private static readonly string[] WindowsAppPathExeNames = ["chrome.exe", "msedge.exe", "brave.exe"];
 
-    public static void Launch(string url)
+    /// <returns>
+    /// The launched process if this opened a dedicated chromeless app-mode window - the
+    /// caller (AppWindowManager) tracks it so "Quit" from the tray can close it along with
+    /// everything else, since a window we opened for the user is ours to close, unlike a
+    /// tab in whatever general-purpose browser session they already had running. Null if
+    /// this fell back to the OS's default-browser handling instead, which must never be
+    /// force-closed - that's an ordinary browser window/tab that may have other unrelated
+    /// tabs open in it.
+    /// </returns>
+    public static Process? Launch(string url)
     {
-        if (TryLaunchChromiumAppMode(url))
+        var appModeProcess = TryLaunchChromiumAppMode(url);
+        if (appModeProcess is not null)
         {
-            return;
+            return appModeProcess;
         }
 
         Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        return null;
     }
 
-    private static bool TryLaunchChromiumAppMode(string url)
+    private static Process? TryLaunchChromiumAppMode(string url)
     {
         if (!OperatingSystem.IsWindows())
         {
-            return false;
+            return null;
         }
 
         try
@@ -56,8 +67,7 @@ public static class BrowserLauncher
                     psi.ArgumentList.Add($"--window-size={saved.Width},{saved.Height}");
                 }
 
-                Process.Start(psi);
-                return true;
+                return Process.Start(psi);
             }
         }
         catch
@@ -66,7 +76,7 @@ public static class BrowserLauncher
             // back to the default-browser tab above - never worth crashing the app over.
         }
 
-        return false;
+        return null;
     }
 
     // Chrome/Edge/Brave all register their install path under this "App Paths" registry
