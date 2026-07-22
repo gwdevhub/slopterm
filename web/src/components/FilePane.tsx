@@ -49,10 +49,10 @@ export function FilePane({ title, initialPath, list }: FilePaneProps) {
   }, [path])
 
   return (
-    <div role="region" aria-label={title} className="flex min-h-0 flex-1 flex-col border-slate-800 sm:border-r last:border-r-0">
+    <div role="region" aria-label={title} className="flex min-h-0 min-w-0 flex-1 flex-col border-slate-800 sm:border-r last:border-r-0">
       <div className="flex shrink-0 items-center gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2 text-sm">
-        <span className="font-medium text-slate-200">{title}</span>
-        <span className="truncate text-slate-500">{listing?.path ?? ''}</span>
+        <span className="shrink-0 font-medium text-slate-200">{title}</span>
+        <span className="min-w-0 flex-1 truncate text-slate-500">{listing?.path ?? ''}</span>
       </div>
 
       {error && <p className="p-3 text-sm text-red-300">{error}</p>}
@@ -86,7 +86,7 @@ export function FilePane({ title, initialPath, list }: FilePaneProps) {
               ) : (
                 <FileIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-slate-500" />
               )}
-              <span className="truncate">{entry.name}</span>
+              <span className="min-w-0 flex-1 truncate">{entry.name}</span>
               {!entry.isDirectory && <span className="ml-auto shrink-0 text-xs text-slate-500">{formatSize(entry.size)}</span>}
             </button>
           </li>
