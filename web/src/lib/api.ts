@@ -251,6 +251,54 @@ export async function resetVaultToDefault(): Promise<void> {
   await throwOnError(res)
 }
 
+export interface SftpConnectResponse {
+  sessionId: string
+  homeDirectory: string
+}
+
+export async function sftpConnect(request: ConnectRequest): Promise<SftpConnectResponse> {
+  const res = await fetch('/api/sftp/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function sftpDisconnect(sessionId: string): Promise<void> {
+  await fetch(`/api/sftp/session/${sessionId}`, { method: 'DELETE' })
+}
+
+export interface FsEntry {
+  name: string
+  isDirectory: boolean
+  size: number
+  modifiedUtc: string
+}
+
+// Local and remote listings share this shape (see server/SftpSession.cs/LocalFileSystem.cs)
+// so the dual-pane SFTP browser can render both sides with identical UI code.
+export interface FsListing {
+  path: string
+  parent: string | null
+  entries: FsEntry[]
+}
+
+export async function sftpList(sessionId: string, path?: string): Promise<FsListing> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : ''
+  const res = await fetch(`/api/sftp/${sessionId}/list${query}`)
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function localList(path?: string): Promise<FsListing> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : ''
+  const res = await fetch(`/api/local/list${query}`)
+  await throwOnError(res)
+  return res.json()
+}
+
 export interface WindowPosition {
   x: number
   y: number

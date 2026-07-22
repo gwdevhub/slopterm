@@ -9,8 +9,10 @@ export const E2E_VAULT_PASSWORD = 'e2e-shared-test-master-password'
 
 export function gotoSection(page: Page, name: string) {
   // Exact match matters for labels that are a substring of another (e.g. "Hosts" vs.
-  // "Known Hosts", "Connect" vs. "Quick Connect") - a has-text()/text= selector would
-  // ambiguously match both.
+  // "Known Hosts") - a has-text()/text= selector would ambiguously match both. Resolves
+  // to the desktop sidebar's button - the mobile menu overlay's equivalent button shares
+  // the same accessible name, but it's excluded from the accessibility tree (and so from
+  // this lookup) via `display:none` at the default (desktop-sized) test viewport.
   return page.getByRole('button', { name, exact: true }).click()
 }
 

@@ -47,7 +47,8 @@ builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, p
 var app = builder.Build();
 
 var launchToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
-var sessions = new SessionStore();
+var sessions = new SessionStore<TerminalSession>();
+var sftpSessions = new SessionStore<SftpSession>();
 var vault = new VaultService();
 // If settings (persisted from a previous run) say a master password isn't required, this
 // transparently unlocks the vault right now - the frontend never sees an unlock prompt.
@@ -124,7 +125,7 @@ app.MapPost("/api/ssh/connect", (ConnectRequest request) =>
     try
     {
         var session = TerminalSession.Connect(request);
-        sessions.Add(session);
+        sessions.Add(session.Id, session);
         vault.AppendLog(new LogEntryRecord
         {
             Event = "connected",
@@ -144,6 +145,56 @@ app.MapPost("/api/ssh/connect", (ConnectRequest request) =>
             Username = request.Username,
             Detail = ex.Message,
         });
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/sftp/connect", (ConnectRequest request) =>
+{
+    try
+    {
+        var session = SftpSession.Connect(request);
+        sftpSessions.Add(session.Id, session);
+        return Results.Ok(new { sessionId = session.Id, homeDirectory = session.HomeDirectory });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapGet("/api/sftp/{sessionId}/list", (string sessionId, string? path) =>
+{
+    var session = sftpSessions.Get(sessionId);
+    if (session is null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        return Results.Ok(session.ListDirectory(path));
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapDelete("/api/sftp/session/{sessionId}", (string sessionId) =>
+{
+    sftpSessions.Remove(sessionId);
+    return Results.NoContent();
+});
+
+app.MapGet("/api/local/list", (string? path) =>
+{
+    try
+    {
+        return Results.Ok(LocalFileSystem.ListDirectory(path));
+    }
+    catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or ArgumentException)
+    {
         return Results.BadRequest(new { error = ex.Message });
     }
 });

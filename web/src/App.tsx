@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { AppShell } from './components/AppShell'
+import { Sidebar, type NavSection } from './components/Sidebar'
 import { TabBar, type SessionTab } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
-import { connect, disconnect, saveWindowPosition, type ConnectRequest } from './lib/api'
+import { SftpView } from './components/SftpView'
+import { SectionContent } from './components/SectionContent'
+import { connect, disconnect, saveWindowPosition, sftpConnect, sftpDisconnect, type ConnectRequest } from './lib/api'
 
 // Browsers don't expose a "window moved" event, and JS can't reposition the current
 // top-level window after the fact anyway (only the launcher can, via Chrome/Edge's
@@ -33,18 +35,45 @@ function useRememberWindowPosition() {
 
 function App() {
   useRememberWindowPosition()
+  const [section, setSection] = useState<NavSection>('hosts')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [tabs, setTabs] = useState<SessionTab[]>([])
-  // null = the "new connection" view (AppShell) is showing, not any particular tab.
+  // null = the currently-selected sidebar section is showing, not any particular tab.
   const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [isConnecting, setIsConnecting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  function handleSelectSection(nextSection: NavSection) {
+    setSection(nextSection)
+    setActiveTabId(null)
+  }
 
   async function handleConnect(request: ConnectRequest) {
     setIsConnecting(true)
     setErrorMessage(null)
     try {
       const response = await connect(request)
-      const tab: SessionTab = { id: response.sessionId, label: `${request.username}@${request.host}` }
+      const tab: SessionTab = { id: response.sessionId, label: `${request.username}@${request.host}`, kind: 'ssh' }
+      setTabs((prev) => [...prev, tab])
+      setActiveTabId(tab.id)
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to connect')
+    } finally {
+      setIsConnecting(false)
+    }
+  }
+
+  async function handleConnectSftp(request: ConnectRequest, label: string) {
+    setIsConnecting(true)
+    setErrorMessage(null)
+    try {
+      const response = await sftpConnect(request)
+      const tab: SessionTab = {
+        id: response.sessionId,
+        label: `${label} (SFTP)`,
+        kind: 'sftp',
+        homeDirectory: response.homeDirectory,
+      }
       setTabs((prev) => [...prev, tab])
       setActiveTabId(tab.id)
     } catch (err) {
@@ -55,7 +84,13 @@ function App() {
   }
 
   function handleCloseTab(id: string) {
-    void disconnect(id)
+    const tab = tabs.find((t) => t.id === id)
+    if (tab?.kind === 'sftp') {
+      void sftpDisconnect(id)
+    } else {
+      void disconnect(id)
+    }
+
     setTabs((prev) => {
       const remaining = prev.filter((t) => t.id !== id)
       setActiveTabId((current) => {
@@ -67,29 +102,40 @@ function App() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-slate-950">
-      {tabs.length > 0 && (
-        <TabBar
-          tabs={tabs}
-          activeId={activeTabId}
-          onSelect={setActiveTabId}
-          onClose={handleCloseTab}
-          onNew={() => setActiveTabId(null)}
-        />
-      )}
-      <div className="relative min-h-0 flex-1">
-        {/* Every open tab's TerminalView stays mounted (just hidden) when inactive, so
-            switching tabs doesn't tear down its WebSocket - see issue #9's requirement. */}
-        {tabs.map((tab) => (
-          <div key={tab.id} className={`absolute inset-0 ${activeTabId === tab.id ? 'block' : 'hidden'}`}>
-            <TerminalView sessionId={tab.id} isActive={activeTabId === tab.id} />
-          </div>
-        ))}
-        {activeTabId === null && (
-          <div className="absolute inset-0 overflow-y-auto">
-            <AppShell onConnect={handleConnect} errorMessage={errorMessage} isConnecting={isConnecting} />
-          </div>
-        )}
+    <div className="flex h-full min-h-0 flex-col bg-slate-950 sm:flex-row">
+      <Sidebar
+        active={section}
+        onSelect={handleSelectSection}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+      />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <TabBar tabs={tabs} activeId={activeTabId} onSelect={setActiveTabId} onClose={handleCloseTab} />
+        <div className="relative min-h-0 flex-1">
+          {/* Every open tab's view stays mounted (just hidden) when inactive, so switching
+              tabs doesn't tear down its WebSocket/SFTP connection - see issue #9's
+              requirement, now shared by both SSH and SFTP tabs. */}
+          {tabs.map((tab) => (
+            <div key={tab.id} className={`absolute inset-0 ${activeTabId === tab.id ? 'block' : 'hidden'}`}>
+              {tab.kind === 'ssh' ? (
+                <TerminalView sessionId={tab.id} isActive={activeTabId === tab.id} />
+              ) : (
+                <SftpView sessionId={tab.id} homeDirectory={tab.homeDirectory ?? '/'} />
+              )}
+            </div>
+          ))}
+          {activeTabId === null && (
+            <div className="absolute inset-0 overflow-y-auto">
+              <SectionContent
+                section={section}
+                onConnect={handleConnect}
+                onConnectSftp={handleConnectSftp}
+                errorMessage={errorMessage}
+                isConnecting={isConnecting}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

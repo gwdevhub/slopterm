@@ -13,32 +13,45 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
   sshPassword: string
 }
 
-test('shows a recent connection on Quick Connect and reconnects to it', async ({ page }) => {
+test('shows a recent connection on the Hosts screen and reconnects to it', async ({ page }) => {
   await page.goto(ctx.baseUrl)
-
-  // Unlock the vault first - AppendLog is a no-op while locked, so the connect below
-  // wouldn't otherwise leave a "connected" entry for Recents to pick up.
-  await gotoSection(page, 'Logs')
+  await gotoSection(page, 'Hosts')
   await ensureVaultUnlocked(page)
 
-  await gotoSection(page, 'Quick Connect')
+  // A saved host to connect through - the ad hoc "type and connect without saving" form
+  // no longer exists (that was the old Quick Connect page), every connection now goes
+  // through a saved Host's "SSH" button.
+  await page.click('button:has-text("New host")')
+  await page.fill('#name', 'recent test host')
   await page.fill('#host', ctx.sshHost)
   await page.fill('#port', String(ctx.sshPort))
   await page.fill('#username', ctx.sshUsername)
   await page.fill('#password', ctx.sshPassword)
-  await page.click('button[type=submit]')
+  await page.click('button:has-text("Save host")')
+  await expect(page.getByText('recent test host')).toBeVisible({ timeout: 10_000 })
+
+  await page.getByRole('button', { name: `SSH to recent test host` }).click()
   await expect(page.locator('.xterm-rows:visible')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
   await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
 
-  // Closing the last tab remounts AppShell fresh (back on Quick Connect by default), so
-  // the just-made connection should now show up as a recent.
+  // Closing the last tab drops back to the currently-selected section (Hosts), so the
+  // just-made connection should now show up in the Recent list above the host grid.
   const recentLabel = `${ctx.sshUsername}@${ctx.sshHost}:${ctx.sshPort}`
   await expect(page.getByText(recentLabel)).toBeVisible({ timeout: 10_000 })
 
-  await page.fill('#host', 'should-be-overwritten.example')
   await page.getByText(recentLabel).click()
-
   await expect(page.locator('#host')).toHaveValue(ctx.sshHost)
   await expect(page.locator('#port')).toHaveValue(String(ctx.sshPort))
   await expect(page.locator('#username')).toHaveValue(ctx.sshUsername)
+
+  // The recent-reconnect form isn't tied to the saved host - it doesn't know a password,
+  // so filling one in and submitting connects directly without ever touching the vault.
+  await page.fill('#password', ctx.sshPassword)
+  await page.click('button:has-text("Connect")')
+  await expect(page.locator('.xterm-rows:visible')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
+  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+
+  await gotoSection(page, 'Hosts')
+  await page.click('text=recent test host')
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
 })

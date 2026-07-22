@@ -54,21 +54,30 @@ test('records connection attempts in the logs section', async ({ page }) => {
     await expect(page.getByText('No connection history yet.')).toBeVisible({ timeout: 10_000 })
   }
 
-  // A real successful connect and a real failed one, via Quick Connect.
-  await gotoSection(page, 'Quick Connect')
+  // A real successful connect via a saved host's "SSH" button (there's no more ad hoc
+  // "type and connect without saving" form - that was the old Quick Connect page).
+  await gotoSection(page, 'Hosts')
+  await page.click('button:has-text("New host")')
+  await page.fill('#name', 'log test host')
   await page.fill('#host', ctx.sshHost)
   await page.fill('#port', String(ctx.sshPort))
   await page.fill('#username', ctx.sshUsername)
   await page.fill('#password', ctx.sshPassword)
-  await page.click('button[type=submit]')
+  await page.click('button:has-text("Save host")')
+  await expect(page.getByText('log test host')).toBeVisible({ timeout: 10_000 })
+
+  await page.getByRole('button', { name: 'SSH to log test host' }).click()
   await expect(page.locator('.xterm-rows:visible')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
   await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
 
-  await page.fill('#host', ctx.sshHost)
-  await page.fill('#port', String(ctx.sshPort))
-  await page.fill('#username', ctx.sshUsername)
+  // Back on Hosts, that successful connect now shows up as a Recent - reuse it (with a
+  // deliberately wrong password) for the real failed-connect case, rather than a second
+  // saved host.
+  const recentLabel = `${ctx.sshUsername}@${ctx.sshHost}:${ctx.sshPort}`
+  await expect(page.getByText(recentLabel)).toBeVisible({ timeout: 10_000 })
+  await page.getByText(recentLabel).click()
   await page.fill('#password', 'definitely-wrong')
-  await page.click('button[type=submit]')
+  await page.click('button:has-text("Connect")')
   // Scoped to the error paragraph's own styling rather than a broad text regex - the
   // static "Authentication" section label on this same form also matches a naive
   // /authentication/i search, which is an ambiguous strict-mode match in Playwright.
@@ -81,4 +90,8 @@ test('records connection attempts in the logs section', async ({ page }) => {
 
   await page.click('button:has-text("Clear logs")')
   await expect(page.getByText('No connection history yet.')).toBeVisible({ timeout: 10_000 })
+
+  await gotoSection(page, 'Hosts')
+  await page.click('text=log test host')
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
 })

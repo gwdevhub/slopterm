@@ -31,8 +31,6 @@ test('creates a vault, saves a host, connects to it, and deletes it', async ({ p
   await expect(page.getByText('e2e test host')).toBeVisible({ timeout: 10_000 })
   await page.click('text=e2e test host')
 
-  // Exact match matters here too: "Quick Connect" (the nav item, always rendered)
-  // also contains the substring "Connect".
   await page.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(async () => {
     expect(await page.locator('.xterm-rows').innerText()).toContain('Welcome to OpenSSH Server')

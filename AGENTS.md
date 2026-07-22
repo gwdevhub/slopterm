@@ -16,23 +16,72 @@ spirit of Termius, targeting Linux, macOS and Windows.
   (xterm.js) is the one exception where small-screen usability is inherently limited, but
   its surrounding chrome (tabs, keyboard toolbar, connect/disconnect controls) must still
   work at phone width.
-- **App shell (implemented, `web/src/components/AppShell.tsx` + `NavRail`/`HostGrid`/
-  `HostDetailsPanel`/`HostsSection`):** the Termius-reference 3-pane layout (issues #8/#10)
-  - left nav rail (Quick Connect/Hosts/Keychain/Port Forwarding/Snippets/Known
-  Hosts/Logs - Quick Connect, Hosts, Keychain, Snippets and Logs are functional, the rest
-  are "coming soon" placeholders), a searchable host card grid, and a right-hand Host Details panel (always
-  present on desktop, even empty, so its container never has to be added later). Mobile
-  collapse (issue #11's baseline, not a full separate spec pass): the nav rail becomes a
-  horizontally-scrollable bar, the grid drops to one column, and the details panel stacks
-  below the grid with its own close button instead of living in a persistent side column.
+- **App shell (implemented, `web/src/App.tsx` + `Sidebar`/`HostGrid`/`HostDetailsPanel`/
+  `HostsSection`/`SectionContent`):** the Termius-reference layout (issues #8/#10), now
+  restructured so the sidebar is always visible instead of living inside a "new
+  connection" view. `Sidebar.tsx` renders Hosts/Keychain/Port Forwarding/Snippets/Known
+  Hosts/Logs/Settings (Hosts, Keychain, Snippets and Logs are functional, the rest are
+  "coming soon" placeholders via `SectionContent.tsx`'s `COMING_SOON` map) - there is no
+  "Quick Connect" nav item anymore; every connection now starts from a saved Host (see
+  below). On desktop/tablet it's a persistent left column with a collapse toggle at its
+  top (fixed-height header row, deliberately the same height as `TabBar`'s row so the two
+  align as one continuous toolbar) that shrinks it to icons-only - collapsed state is
+  plain component state, not persisted, so it always starts expanded (this also keeps
+  every e2e test's exact-match nav-label lookups working unchanged). Below `sm` width the
+  desktop column is replaced outright (not just reflowed) by a slim top bar with only a
+  menu button; tapping it opens a full-screen overlay listing every section with its full
+  label, and selecting one both navigates and closes the overlay. Both variants are always
+  in the DOM (Tailwind's `hidden`/`sm:hidden` toggle which is visible via CSS media
+  queries) but that's safe for Playwright's `getByRole` lookups because a `display:none`
+  subtree is excluded from the accessibility tree entirely - the two copies never appear
+  as an ambiguous double-match at any one viewport width.
+
+  `App.tsx` owns the sidebar's active section, the collapsed flag, and the open tabs -
+  clicking any sidebar item sets `activeTabId` to `null` so the section shows even while
+  tabs stay open in the background (see multi-session tabs below); it does not close any
+  tab. `HostsSection` shows a searchable host card grid with a "Recent" list above it
+  (moved here from the old Quick Connect page, see `RecentConnections.tsx` - picking a
+  recent opens `HostDetailsPanel`'s `connect` mode, a `ConnectionForm` prefilled with
+  host/port/username but not saved to the vault) and a right-hand Host Details panel
+  (always present on desktop, even empty, so its container never has to be added later).
+  Each host card has two buttons on its right edge - "SSH" (`HostGrid`'s `onSsh`, opens a
+  terminal tab) and "SFTP" (`onSftp`, opens a dual-pane file browser tab, see below) -
+  both resolve the host's first usable credential via `lib/hosts.ts`'s
+  `resolveConnectRequest`, shared with `HostDetailsPanel`'s own "Connect" button so there
+  is exactly one place that logic lives. Mobile collapse for the grid/details panel itself
+  (issue #11's baseline, not a full separate spec pass): the grid drops to one column, and
+  the details panel stacks below the grid with its own close button instead of living in
+  a persistent side column.
+
   Multi-session tabs (issue #9, implemented) let more than one connection stay open at
-  once - see `TabBar.tsx`/`App.tsx`. Every open tab's `TerminalView` stays mounted (just
-  CSS `hidden`) even while inactive, so switching tabs doesn't tear down its WebSocket -
-  proved via an e2e test that types into two separate live sessions and confirms neither
-  leaks into the other. Catch from that testing: switching tabs alone doesn't move
-  keyboard focus into the newly-visible terminal (it stays mounted-but-hidden, so nothing
-  else does it) - `TerminalView` takes an `isActive` prop and re-`focus()`s itself when it
-  becomes the active tab.
+  once - see `TabBar.tsx`/`App.tsx`. Every open tab's view (`TerminalView` for `kind:
+  'ssh'`, `SftpView` for `kind: 'sftp'`) stays mounted (just CSS `hidden`) even while
+  inactive, so switching tabs doesn't tear down its WebSocket/SFTP connection - proved via
+  an e2e test that types into two separate live sessions and confirms neither leaks into
+  the other. Catch from that testing: switching tabs alone doesn't move keyboard focus
+  into the newly-visible terminal (it stays mounted-but-hidden, so nothing else does it) -
+  `TerminalView` takes an `isActive` prop and re-`focus()`s itself when it becomes the
+  active tab (`SftpView` has no such focus concern, so it doesn't take that prop). Each
+  tab shows a small icon differentiating SSH from SFTP (`TerminalTabIcon`/`SftpTabIcon` in
+  `icons.tsx`) since both kinds can be open side by side now. There is no "new tab"/"+"
+  button in `TabBar` anymore - new sessions only start from a host card's SSH/SFTP
+  buttons, never from the tab bar itself.
+- **SFTP dual-pane browser (`SftpView.tsx`/`FilePane.tsx`, backend `SftpSession.cs`/
+  `LocalFileSystem.cs`):** opened by a host card's "SFTP" button - local filesystem (the
+  machine running slopterm) on the left, the connected host's remote filesystem on the
+  right, sharing one `FilePane` component since the backend normalizes both sides to the
+  same `FsListing { path, parent, entries }` shape (`SftpSession.ListDirectory`'s POSIX
+  parent computation and `LocalFileSystem.ListDirectory`'s `DirectoryInfo.Parent` both
+  produce it) - the frontend never needs to know or care which OS a path came from.
+  `SftpSession` reuses `SshConnectionInfoFactory` (factored out of `TerminalSession` for
+  exactly this) so the Windows X25519 key-exchange workaround and the 10s connect timeout
+  apply identically to both interactive shells and file transfers, instead of drifting if
+  copy-pasted. Browsing/navigation only for now - upload/download/transfer between the two
+  panes is a natural follow-up, not implemented here. The local-listing endpoint
+  (`GET /api/local/list`) is gated the same way every other API path is (loopback + 
+  launch-token/cookie, see Program.cs's middleware) - it's full local filesystem access
+  over HTTP, but that's consistent with the app's existing trust model (it already lets
+  you open an SSH session out from this same machine).
 - **Backend:** .NET 8 + SSH.NET (`Renci.SshNet`) — owns all SSH/SFTP/port-forwarding I/O,
   serves the built React bundle plus a WebSocket PTY stream over a local ASP.NET Core
   (Kestrel) HTTP server.
@@ -110,30 +159,34 @@ spirit of Termius, targeting Linux, macOS and Windows.
     identical per-record-file pattern - not before, per the "three similar lines beats a
     premature abstraction" rule; three *full* CRUD implementations was worth collapsing.
   - **Snippets** (`SnippetsSection.tsx`, `snippets/{id}.json`): saved reusable commands,
-    copy-to-clipboard rather than sent directly into a terminal - the nav rail and an
-    active session tab are mutually exclusive in the current layout (`App.tsx` only
-    renders `AppShell` when no tab is active), so there's no terminal visible to inject
-    into while this section is showing. Direct injection is a natural follow-up if the
-    shell and an open session ever coexist.
+    copy-to-clipboard rather than sent directly into a terminal - a sidebar section and an
+    active session tab are still mutually exclusive in the main content area (`App.tsx`
+    only renders `SectionContent` when `activeTabId` is null), so there's no terminal
+    visible to inject into while this section is showing. Direct injection is a natural
+    follow-up if the section content and an open session ever coexist on screen.
   - **Logs** (`LogsSection.tsx`, `logs/{id}.json`): an append-only record of connection
     attempts (`connected`/`connect_failed`/`disconnected`), written by `Program.cs`
     whenever `/api/ssh/connect` succeeds/fails and whenever a session is actually removed
     (guarded by `SessionStore.Remove`'s return value so a natural WS-close racing an
     explicit disconnect call logs exactly once, not twice). **Best-effort by design**:
-    `VaultService.AppendLog` silently no-ops if the vault is locked, since Quick Connect
-    must keep working with no vault at all.
-  - **Recent connections (`RecentConnections.tsx`, bottom half of Quick Connect):**
-    derived entirely client-side from the existing Logs data - no new backend endpoint or
-    stored record type. Filters to `connected` events, dedupes by `username@host:port`
-    keeping the first (i.e. most recent, since `ListLogs` already returns newest-first),
-    caps at 5. Deliberately only ever prefills `ConnectionForm`'s host/port/username on
-    click, never a credential - `LogEntryRecord` never stores one, so there's nothing to
-    reuse safely. `ConnectionForm` treats its `initialValues` prop as seed-only state (not
-    controlled), so `AppShell` remounts it via `key={JSON.stringify(prefill)}` when a
-    recent is picked, rather than the form syncing to prop changes via an effect. Same
-    best-effort posture as the Keychain lookup: a failed/locked-vault fetch just means the
-    section renders nothing, it never blocks Quick Connect.
-  - **Settings (`SettingsPage.tsx`, gear icon pinned to the bottom of `NavRail`) - master
+    `VaultService.AppendLog` silently no-ops if the vault is locked - there's currently no
+    UI path that locks it mid-session (see the re-key section below), so this mostly
+    guards a future manual "Lock" action rather than anything reachable today.
+  - **Recent connections (`RecentConnections.tsx`, top of the Hosts screen - moved there
+    from the old standalone Quick Connect page):** derived entirely client-side from the
+    existing Logs data - no new backend endpoint or stored record type. Filters to
+    `connected` events, dedupes by `username@host:port` keeping the first (i.e. most
+    recent, since `ListLogs` already returns newest-first), caps at 5. Deliberately only
+    ever prefills a `ConnectionForm`'s host/port/username on click, never a credential -
+    `LogEntryRecord` never stores one, so there's nothing to reuse safely. Picking a
+    recent opens `HostDetailsPanel`'s `connect` mode (a `ConnectionForm` that calls
+    `onConnect` directly instead of saving a host); `ConnectionForm` treats its
+    `initialValues` prop as seed-only state (not controlled), so `HostDetailsPanel`
+    remounts it via `key={JSON.stringify(connectPrefill)}` when a recent is picked, rather
+    than the form syncing to prop changes via an effect. Same best-effort posture as the
+    Keychain lookup below: a failed fetch just means the Recent list renders nothing, it
+    never blocks the rest of the Hosts screen.
+  - **Settings (`SettingsPage.tsx`, gear icon pinned to the bottom of `Sidebar`) - master
     password is optional, and off by default.** A brand-new install never shows an
     unlock/setup prompt at all - `AppSettings.RequireMasterPassword` defaults to `false`,
     so `EnsureUnlockedIfPasswordNotRequired` auto-creates and auto-unlocks the vault on
@@ -189,14 +242,16 @@ spirit of Termius, targeting Linux, macOS and Windows.
     already-cross-platform-verified Argon2id/AES-GCM primitives in a new sequence, not a
     new crypto boundary, but re-verified anyway since it's a real change to a core
     security flow.
-- **Shared connect/host form (`web/src/components/ConnectionForm.tsx`):** Quick Connect
-  and the "new host" form used to be two separately maintained forms and drifted - the
-  host form had no private-key option at all. Both now render the same `ConnectionForm`,
-  parameterized by `includeName`/`submitLabel`/`onSubmit` rather than by a `mode` enum, so
-  the field markup (and its ids: `#host`/`#port`/`#username`/`#password`/`#privateKey`/
-  `#passphrase`) is identical in both places. `CredentialRecord` gained an optional
-  `Passphrase` field (previously only `Secret`) so a saved host's private-key credential
-  can carry a passphrase too - a nullable additive field, not a breaking schema change.
+- **Shared connect/host form (`web/src/components/ConnectionForm.tsx`):** the "new host"
+  form and the Recent-connections reconnect form (`HostDetailsPanel`'s `connect` mode -
+  the old standalone Quick Connect page's form used to be the third caller, before it was
+  removed) used to be separately maintained and drifted - the host form had no
+  private-key option at all. Both now render the same `ConnectionForm`, parameterized by
+  `includeName`/`submitLabel`/`onSubmit` rather than by a `mode` enum, so the field markup
+  (and its ids: `#host`/`#port`/`#username`/`#password`/`#privateKey`/`#passphrase`) is
+  identical in both places. `CredentialRecord` gained an optional `Passphrase` field
+  (previously only `Secret`) so a saved host's private-key credential can carry a
+  passphrase too - a nullable additive field, not a breaking schema change.
 - **Keychain (implemented, `KeychainSection.tsx`, `keychain/{id}.json`):** saved,
   reusable SSH private keys (`KeychainEntryRecord { Name, PrivateKey, Passphrase? }`),
   following the same generic `VaultService` CRUD pattern as Snippets/Logs. `ConnectionForm`
@@ -205,11 +260,12 @@ spirit of Termius, targeting Linux, macOS and Windows.
   (only shown when the vault is unlocked and has entries). Saving a *new* key to the
   Keychain from either form is an explicit opt-in checkbox + name field, never automatic -
   avoids silently proliferating copies of key material without consent. The Keychain
-  lookup itself is best-effort (`.catch(() => [])`): Quick Connect must keep working with
-  no vault at all, so a locked/nonexistent vault just means the "use a saved key" dropdown
-  doesn't render, it never blocks connecting with a pasted/browsed key. No new trust
-  boundary is crossed by reusing a key this way - `GET /api/vault/hosts` already returns
-  fully decrypted secrets to the authenticated frontend today.
+  lookup itself stays best-effort (`.catch(() => [])`) even though every `ConnectionForm`
+  instance now lives inside the vault-gated Hosts screen - a locked/momentarily-erroring
+  fetch just means the "use a saved key" dropdown doesn't render, it never blocks
+  connecting with a pasted/browsed key. No new trust boundary is crossed by reusing a key
+  this way - `GET /api/vault/hosts` already returns fully decrypted secrets to the
+  authenticated frontend today.
 - **Sync is a hard requirement**, not a stretch goal. Design is zero-knowledge: only the
   AES-GCM ciphertext ever leaves the device, the master key/password never does. Start
   with a git-backed sync backend (push/pull the encrypted blob to a private repo or gist)

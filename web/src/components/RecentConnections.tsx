@@ -29,12 +29,13 @@ function recentsFromLogs(logs: SavedLogEntry[]): (RecentConnection & { key: stri
   return recents
 }
 
-// Sits below the Quick Connect form so a previous destination is one click away instead
-// of retyping host/port/username. Only host/port/username are logged (see LogEntryRecord),
-// never credentials, so selecting a recent just prefills the form - the user still
-// supplies a password/key. Best-effort like the Keychain lookup in ConnectionForm: Quick
-// Connect must keep working with no vault at all, so a failed/locked-vault fetch just
-// means this section renders nothing rather than blocking the page.
+// Sits above the host card grid on the Hosts screen (replaces the old standalone Quick
+// Connect page) so a previous destination is one click away instead of retyping
+// host/port/username. Only host/port/username are logged (see LogEntryRecord), never
+// credentials, so selecting a recent just prefills the connect form - the user still
+// supplies a password/key. HostsSection is always vault-gated, but the fetch stays
+// best-effort (like the Keychain lookup in ConnectionForm) so a transient failure just
+// means this section renders nothing rather than blocking the rest of the page.
 export function RecentConnections({ onSelect }: RecentConnectionsProps) {
   const [recents, setRecents] = useState<(RecentConnection & { key: string; timestamp: string })[]>([])
 
@@ -49,8 +50,8 @@ export function RecentConnections({ onSelect }: RecentConnectionsProps) {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-md flex-col gap-2 border-t border-slate-800 p-4 sm:p-6">
-      <h2 className="text-sm font-medium text-slate-300">Recent connections</h2>
+    <div className="flex flex-col gap-2 p-3 pb-0 sm:p-4 sm:pb-0">
+      <h2 className="text-sm font-medium text-slate-300">Recent</h2>
       <ul className="flex flex-col gap-1">
         {recents.map((recent) => (
           <li key={recent.key}>
