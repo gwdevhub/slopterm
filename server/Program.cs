@@ -207,6 +207,44 @@ app.MapDelete("/api/sftp/session/{sessionId}", (string sessionId) =>
     return Results.NoContent();
 });
 
+app.MapPost("/api/sftp/{sessionId}/upload", async (string sessionId, SftpUploadRequest request, CancellationToken ct) =>
+{
+    var session = sftpSessions.Get(sessionId);
+    if (session is null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        await session.UploadFileAsync(request.LocalPath, request.RemoteDir, ct);
+        return Results.NoContent();
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/sftp/{sessionId}/download", async (string sessionId, SftpDownloadRequest request, CancellationToken ct) =>
+{
+    var session = sftpSessions.Get(sessionId);
+    if (session is null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        await session.DownloadFileAsync(request.RemotePath, request.LocalDir, ct);
+        return Results.NoContent();
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
 app.MapGet("/api/local/list", (string? path) =>
 {
     try

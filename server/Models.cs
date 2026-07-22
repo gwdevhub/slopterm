@@ -39,3 +39,15 @@ public sealed class UpdateApplyRequest
     public required long AssetId { get; set; }
     public required string ExpectedSha256 { get; set; }
 }
+
+public sealed class SftpUploadRequest
+{
+    public required string LocalPath { get; set; }
+    public required string RemoteDir { get; set; }
+}
+
+public sealed class SftpDownloadRequest
+{
+    public required string RemotePath { get; set; }
+    public required string LocalDir { get; set; }
+}

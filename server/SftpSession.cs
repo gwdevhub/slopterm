@@ -49,6 +49,25 @@ public sealed class SftpSession : IDisposable
         return new FsListing(target, ComputePosixParent(target), entries);
     }
 
+    /// <summary>Uploads a local file into a remote directory, keeping its original file name.</summary>
+    public async Task UploadFileAsync(string localPath, string remoteDir, CancellationToken ct)
+    {
+        var remotePath = JoinPosixPath(remoteDir, Path.GetFileName(localPath));
+        await using var stream = File.OpenRead(localPath);
+        await _client.UploadFileAsync(stream, remotePath, ct);
+    }
+
+    /// <summary>Downloads a remote file into a local directory, keeping its original file name.</summary>
+    public async Task DownloadFileAsync(string remotePath, string localDir, CancellationToken ct)
+    {
+        var fileName = remotePath.TrimEnd('/').Split('/').Last();
+        var localPath = Path.Combine(localDir, fileName);
+        await using var stream = File.Create(localPath);
+        await _client.DownloadFileAsync(remotePath, stream, ct);
+    }
+
+    private static string JoinPosixPath(string dir, string name) => dir.EndsWith('/') ? dir + name : dir + "/" + name;
+
     private static string? ComputePosixParent(string path)
     {
         var trimmed = path.TrimEnd('/');

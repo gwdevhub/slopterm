@@ -83,12 +83,24 @@ spirit of Termius, targeting Linux, macOS and Windows.
   `SftpSession` reuses `SshConnectionInfoFactory` (factored out of `TerminalSession` for
   exactly this) so the Windows X25519 key-exchange workaround and the 10s connect timeout
   apply identically to both interactive shells and file transfers, instead of drifting if
-  copy-pasted. Browsing/navigation only for now - upload/download/transfer between the two
-  panes is a natural follow-up, not implemented here. The local-listing endpoint
-  (`GET /api/local/list`) is gated the same way every other API path is (loopback + 
-  launch-token/cookie, see Program.cs's middleware) - it's full local filesystem access
-  over HTTP, but that's consistent with the app's existing trust model (it already lets
-  you open an SSH session out from this same machine).
+  copy-pasted. The local-listing endpoint (`GET /api/local/list`) is gated the same way
+  every other API path is (loopback + launch-token/cookie, see Program.cs's middleware) -
+  it's full local filesystem access over HTTP, but that's consistent with the app's
+  existing trust model (it already lets you open an SSH session out from this same
+  machine).
+  - **Drag-and-drop transfer:** dragging a file from one pane onto the other
+    uploads/downloads it into whichever directory that pane currently shows -
+    `FilePane` makes files (not directories - recursive transfer isn't supported yet, so
+    directory entries are simply never made `draggable`) draggable via the HTML5 DnD API,
+    encoding `{ side, path }` as JSON under a custom `application/x-slopterm-file`
+    MIME type; `SftpView` is the drop handler (the one place that legitimately needs to
+    know about both panes at once) and calls `SftpSession.UploadFileAsync`/
+    `DownloadFileAsync` (`SftpClient.UploadFileAsync`/`DownloadFileAsync` under the hood),
+    then bumps a `reloadToken` prop on the destination pane to force it to re-fetch its
+    *current* directory (its `path` state doesn't change, so that alone can't be a
+    `useEffect` dependency). Verified directly against a real SSH/SFTP server: dragged a
+    real file each direction, confirmed the transferred file's content matched byte-for-
+    byte on both sides, not just that a same-named entry appeared in the listing.
 - **Backend:** .NET 8 + SSH.NET (`Renci.SshNet`) — owns all SSH/SFTP/port-forwarding I/O,
   serves the built React bundle plus a WebSocket PTY stream over a local ASP.NET Core
   (Kestrel) HTTP server.

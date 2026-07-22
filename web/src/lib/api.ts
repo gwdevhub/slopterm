@@ -356,6 +356,24 @@ export async function localList(path?: string): Promise<FsListing> {
   return res.json()
 }
 
+export async function sftpUpload(sessionId: string, localPath: string, remoteDir: string): Promise<void> {
+  const res = await fetch(`/api/sftp/${sessionId}/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ localPath, remoteDir }),
+  })
+  await throwOnError(res)
+}
+
+export async function sftpDownload(sessionId: string, remotePath: string, localDir: string): Promise<void> {
+  const res = await fetch(`/api/sftp/${sessionId}/download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ remotePath, localDir }),
+  })
+  await throwOnError(res)
+}
+
 export interface WindowPosition {
   x: number
   y: number
