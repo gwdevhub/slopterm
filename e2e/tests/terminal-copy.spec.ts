@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -12,14 +13,34 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
   sshPassword: string
 }
 
-async function connect(page: Page) {
+// Every connection now starts from a saved Host's "SSH" button - there's no more ad hoc
+// "type and connect without saving" form (that was the old Quick Connect page).
+async function connect(page: Page, hostName: string) {
   await page.goto(ctx.baseUrl)
+  await gotoSection(page, 'Hosts')
+  await ensureVaultUnlocked(page)
+
+  await page.click('button:has-text("New host")')
+  await page.fill('#name', hostName)
   await page.fill('#host', ctx.sshHost)
   await page.fill('#port', String(ctx.sshPort))
   await page.fill('#username', ctx.sshUsername)
   await page.fill('#password', ctx.sshPassword)
-  await page.click('button[type=submit]')
+  await page.click('button:has-text("Save host")')
+  await expect(page.getByText(hostName)).toBeVisible({ timeout: 10_000 })
+
+  await page.getByRole('button', { name: `SSH to ${hostName}` }).click()
   await expect(page.locator('.xterm-rows')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
+}
+
+// Closes the tab and deletes the saved host - other spec files assert "No saved hosts
+// yet." against this same shared vault, so anything created here must not leak past
+// whichever test created it.
+async function cleanup(page: Page, hostName: string) {
+  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+  await gotoSection(page, 'Hosts')
+  await page.click(`text=${hostName}`)
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
 }
 
 // Double-clicks the given (already-visible, on-screen-by-itself) word inside the
@@ -41,8 +62,9 @@ test('ctrl+c copies the selection and clears it, so a second ctrl+c interrupts i
   context,
 }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  const hostName = 'ctrlc copy test host'
   const marker = `copymarker${Date.now()}`
-  await connect(page)
+  await connect(page, hostName)
 
   await page.keyboard.type(`echo ${marker}`)
   await page.keyboard.press('Enter')
@@ -62,13 +84,14 @@ test('ctrl+c copies the selection and clears it, so a second ctrl+c interrupts i
   await page.waitForTimeout(500)
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('sentinel-value')
 
-  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+  await cleanup(page, hostName)
 })
 
 test('ctrl+shift+c copies the selection without clearing it', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  const hostName = 'ctrl-shift-c test host'
   const marker = `shiftcopymarker${Date.now()}`
-  await connect(page)
+  await connect(page, hostName)
 
   await page.keyboard.type(`echo ${marker}`)
   await page.keyboard.press('Enter')
@@ -89,11 +112,12 @@ test('ctrl+shift+c copies the selection without clearing it', async ({ page, con
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(marker)
   }).toPass({ timeout: 5_000 })
 
-  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+  await cleanup(page, hostName)
 })
 
 test('ctrl+c with no selection sends an interrupt to the remote process', async ({ page }) => {
-  await connect(page)
+  const hostName = 'ctrlc interrupt test host'
+  await connect(page, hostName)
 
   await page.keyboard.type('sleep 20')
   await page.keyboard.press('Enter')
@@ -108,5 +132,5 @@ test('ctrl+c with no selection sends an interrupt to the remote process', async 
   // interrupt a hard failure rather than a slow pass.
   await expect(page.locator('.xterm-rows')).toContainText(marker, { timeout: 5_000 })
 
-  await page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` }).click()
+  await cleanup(page, hostName)
 })
