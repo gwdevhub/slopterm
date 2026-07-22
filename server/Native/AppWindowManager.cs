@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -30,6 +31,14 @@ public static class AppWindowManager
     private static readonly object Lock = new();
     private static readonly ManualResetEventSlim WindowReady = new(false);
     private static PhotinoWindow? _window;
+
+    // Only ever populated by the BrowserLauncher fallback below (no webview runtime
+    // installed) - tracked so "Quit" can close these along with the rest of the app
+    // instead of leaving an orphaned window pointed at a now-dead server. Every fallback
+    // launch appends here rather than replacing, since clicking "Open" repeatedly while
+    // still in fallback mode currently opens a new window each time (see EnsureWindowOpen -
+    // it can never find a tracked native window to focus in this mode, so it always retries).
+    private static readonly List<Process> FallbackBrowserProcesses = [];
 
     // Guards against a genuine race: EnsureWindowOpen's "does a window exist yet" check
     // and the point where RunWindow actually assigns _window happen on different threads
@@ -69,6 +78,52 @@ public static class AppWindowManager
 
         thread.Start();
         WindowReady.Wait();
+    }
+
+    /// <summary>
+    /// Called from the tray icon's "Quit" so nothing opened on the user's behalf is left
+    /// dangling once the app itself is gone - the Photino window doesn't need any special
+    /// handling here (it lives on a background thread that dies with the process once
+    /// Program.cs's own shutdown falls through), but a fallback browser window/tab is a
+    /// completely separate OS process that Quit would otherwise never touch at all.
+    /// </summary>
+    public static void CloseAllFallbackBrowserWindows()
+    {
+        List<Process> toClose;
+        lock (Lock)
+        {
+            toClose = [.. FallbackBrowserProcesses];
+            FallbackBrowserProcesses.Clear();
+        }
+
+        foreach (var process in toClose)
+        {
+            try
+            {
+                if (process.HasExited)
+                {
+                    continue;
+                }
+
+                // CloseMainWindow asks it to close itself gracefully first (its own exit
+                // handlers, if any, still get to run) - Kill is the fallback for a window
+                // that doesn't respond (e.g. the app-mode window never got focus/a message
+                // loop tick to process the close request).
+                if (!process.CloseMainWindow())
+                {
+                    process.Kill();
+                }
+                else if (!process.WaitForExit(TimeSpan.FromSeconds(2)))
+                {
+                    process.Kill();
+                }
+            }
+            catch
+            {
+                // Best-effort - Quit must never hang or crash over a browser window that
+                // won't close cleanly.
+            }
+        }
     }
 
     private static void RunWindow(string url)
@@ -137,7 +192,14 @@ public static class AppWindowManager
 
             WindowReady.Set();
             ReportMissingRuntime(ex);
-            BrowserLauncher.Launch(url);
+            var fallbackProcess = BrowserLauncher.Launch(url);
+            if (fallbackProcess is not null)
+            {
+                lock (Lock)
+                {
+                    FallbackBrowserProcesses.Add(fallbackProcess);
+                }
+            }
         }
         finally
         {

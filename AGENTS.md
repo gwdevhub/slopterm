@@ -461,6 +461,24 @@ spirit of Termius, targeting Linux, macOS and Windows.
   message-handling code follows the standard, well-documented Win32 tray pattern
   (`WM_LBUTTONUP`/`WM_RBUTTONUP` forwarded through the callback message), but hasn't been
   click-tested end-to-end on real hardware.
+- **"Quit" closes everything the app opened, not just itself.** The main Photino window
+  needs no special handling for this (it lives on a background thread that dies with the
+  process once `app.Lifetime.StopApplication()` unblocks `WaitForShutdownAsync` and
+  `Program.cs` falls through) - but a `BrowserLauncher` fallback window (no webview
+  runtime installed) is a completely separate OS process that stopping the server alone
+  never touches, previously left running and pointed at a now-dead server after Quit.
+  `AppWindowManager.CloseAllFallbackBrowserWindows()` (called from the tray's `Quit`
+  wrapper in `Program.cs`, alongside `StopApplication`) tracks every such process
+  `BrowserLauncher.Launch` returns and tries `CloseMainWindow()` then `Kill()` on each.
+  Deliberately does **not** apply to the OS-default-browser fallback (a plain tab in
+  whatever general browser session the user already had open) - `Launch` only returns a
+  trackable `Process` for the dedicated chromeless `--app=` window case, since force-
+  closing a real browser window could take other unrelated tabs down with it. Verified
+  under Wine that the app still starts/registers its tray icon/shuts down cleanly with
+  this change; the specific "close a tracked fallback window" path itself wasn't
+  exercisable there since this sandbox's Wine has no Chrome/Edge/Brave installed to
+  trigger that fallback in the first place (falls straight to the untracked
+  default-browser case instead, same as documented above).
 
 ## Native app window (Photino)
 

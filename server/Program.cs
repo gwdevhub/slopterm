@@ -683,6 +683,17 @@ var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
 
 void OpenWindow() => AppWindowManager.EnsureWindowOpen(launchUrl);
 
+void Quit()
+{
+    // Closes anything opened on the user's behalf that stopping this process alone
+    // wouldn't - a fallback browser window (no webview runtime installed) is a separate
+    // OS process Program.cs's own shutdown never touches. The main Photino window needs
+    // no equivalent call here: it lives on a background thread that already dies once
+    // StopApplication unblocks WaitForShutdownAsync below and the process exits.
+    AppWindowManager.CloseAllFallbackBrowserWindows();
+    app.Lifetime.StopApplication();
+}
+
 WindowsTrayIcon? trayIcon = null;
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
@@ -690,7 +701,7 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     // only way to reach the app. Left-click/"Open" focuses the one slopterm window if
     // it's already open, or creates it fresh otherwise (see AppWindowManager);
     // "Quit" stops it.
-    trayIcon = new WindowsTrayIcon("slopterm", OpenWindow, () => app.Lifetime.StopApplication());
+    trayIcon = new WindowsTrayIcon("slopterm", OpenWindow, Quit);
     trayIcon.Start();
 }
 else
