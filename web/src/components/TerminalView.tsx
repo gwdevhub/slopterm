@@ -31,6 +31,35 @@ export function TerminalView({ sessionId, isActive }: TerminalViewProps) {
     fitAddon.fit()
     termRef.current = term
 
+    // Ctrl+C is overloaded in every terminal: with a selection active it should copy
+    // (and clear the selection, matching what most terminal emulators do), with nothing
+    // selected it's the interrupt signal and must reach the remote process as usual.
+    // Ctrl+Shift+C always copies without touching the selection. attachCustomKeyEventHandler
+    // runs before xterm's own key handling; returning false suppresses it (so xterm never
+    // turns the keydown into onData for the copy cases), returning true lets the keydown
+    // fall through to xterm's default handling, which is what actually sends \x03.
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown' || !event.ctrlKey || event.altKey || event.metaKey || event.code !== 'KeyC') {
+        return true
+      }
+
+      if (event.shiftKey) {
+        const selection = term.getSelection()
+        if (selection) {
+          void navigator.clipboard.writeText(selection)
+        }
+        return false
+      }
+
+      if (term.hasSelection()) {
+        void navigator.clipboard.writeText(term.getSelection())
+        term.clearSelection()
+        return false
+      }
+
+      return true
+    })
+
     const socket = new WebSocket(terminalSocketUrl(sessionId))
     socket.binaryType = 'arraybuffer'
 

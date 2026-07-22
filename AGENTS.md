@@ -61,11 +61,18 @@ spirit of Termius, targeting Linux, macOS and Windows.
   the other. Catch from that testing: switching tabs alone doesn't move keyboard focus
   into the newly-visible terminal (it stays mounted-but-hidden, so nothing else does it) -
   `TerminalView` takes an `isActive` prop and re-`focus()`s itself when it becomes the
-  active tab (`SftpView` has no such focus concern, so it doesn't take that prop). Each
-  tab shows a small icon differentiating SSH from SFTP (`TerminalTabIcon`/`SftpTabIcon` in
-  `icons.tsx`) since both kinds can be open side by side now. There is no "new tab"/"+"
-  button in `TabBar` anymore - new sessions only start from a host card's SSH/SFTP
-  buttons, never from the tab bar itself.
+  active tab (`SftpView` has no such focus concern, so it doesn't take that prop). Ctrl+C
+  is overloaded like every other terminal: with a selection active it copies to the
+  clipboard and clears the selection instead of sending an interrupt; with nothing
+  selected it sends the real interrupt signal as usual; Ctrl+Shift+C always copies without
+  touching the selection. Implemented via `Terminal.attachCustomKeyEventHandler` in
+  `TerminalView.tsx`, which runs before xterm's own key handling - returning `false`
+  suppresses xterm's default handling entirely (used for both copy cases), returning
+  `true` lets the keydown fall through to xterm as normal (which is what actually emits
+  the `\x03` interrupt byte). Each tab shows a small icon differentiating SSH from SFTP
+  (`TerminalTabIcon`/`SftpTabIcon` in `icons.tsx`) since both kinds can be open side by
+  side now. There is no "new tab"/"+" button in `TabBar` anymore - new sessions only
+  start from a host card's SSH/SFTP buttons, never from the tab bar itself.
 - **SFTP dual-pane browser (`SftpView.tsx`/`FilePane.tsx`, backend `SftpSession.cs`/
   `LocalFileSystem.cs`):** opened by a host card's "SFTP" button - local filesystem (the
   machine running slopterm) on the left, the connected host's remote filesystem on the
