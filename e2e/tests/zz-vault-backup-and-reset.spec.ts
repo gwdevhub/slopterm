@@ -33,11 +33,12 @@ test('master password is disabled by default, and Settings can export/import/res
   const backupPath = await download.path()
   expect(backupPath).toBeTruthy()
 
-  // Reset triggers a window.location.reload() once the request completes - wait for the
-  // actual reload (not just the click dispatching) before continuing, otherwise the next
-  // step can race the reload and observe a half-navigated page.
-  page.once('dialog', (dialog) => dialog.accept())
-  await Promise.all([page.waitForEvent('load'), page.click('button:has-text("Reset everything to default")')])
+  // Reset opens a ConfirmDialog rather than reloading immediately - only the confirm
+  // click actually triggers the request and the window.location.reload() once it
+  // completes, so only that click needs to race waitForEvent('load'), not the one that
+  // just opens the dialog.
+  await page.click('button:has-text("Reset everything to default")')
+  await Promise.all([page.waitForEvent('load'), page.getByRole('button', { name: 'Reset', exact: true }).click()])
 
   await gotoSection(page, 'Settings')
   await expect(page.getByRole('button', { name: 'Disabled' })).toBeVisible({ timeout: 10_000 })
@@ -46,18 +47,19 @@ test('master password is disabled by default, and Settings can export/import/res
   await expect(page.getByText('No saved hosts yet.')).toBeVisible({ timeout: 10_000 })
 
   // Import the backup taken before the reset - the host should come back. Also reloads
-  // once it completes.
+  // once it completes (again via the ConfirmDialog's own confirm click, not the file
+  // picker step itself).
   await gotoSection(page, 'Settings')
-  page.once('dialog', (dialog) => dialog.accept())
-  await Promise.all([page.waitForEvent('load'), page.setInputFiles('input[type=file]', backupPath!)])
+  await page.setInputFiles('input[type=file]', backupPath!)
+  await Promise.all([page.waitForEvent('load'), page.getByRole('button', { name: 'Import', exact: true }).click()])
 
   await gotoSection(page, 'Hosts')
   await expect(page.getByText('backup-e2e-host')).toBeVisible({ timeout: 10_000 })
 
   // Leave the shared vault in the pristine default state for anyone re-running the suite.
   await gotoSection(page, 'Settings')
-  page.once('dialog', (dialog) => dialog.accept())
-  await Promise.all([page.waitForEvent('load'), page.click('button:has-text("Reset everything to default")')])
+  await page.click('button:has-text("Reset everything to default")')
+  await Promise.all([page.waitForEvent('load'), page.getByRole('button', { name: 'Reset', exact: true }).click()])
 
   await gotoSection(page, 'Settings')
   await expect(page.getByRole('button', { name: 'Disabled' })).toBeVisible({ timeout: 10_000 })

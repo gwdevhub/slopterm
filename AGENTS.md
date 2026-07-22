@@ -72,7 +72,13 @@ spirit of Termius, targeting Linux, macOS and Windows.
   the `\x03` interrupt byte). Each tab shows a small icon differentiating SSH from SFTP
   (`TerminalTabIcon`/`SftpTabIcon` in `icons.tsx`) since both kinds can be open side by
   side now. There is no "new tab"/"+" button in `TabBar` anymore - new sessions only
-  start from a host card's SSH/SFTP buttons, never from the tab bar itself.
+  start from a host card's SSH/SFTP buttons, never from the tab bar itself. Clicking a
+  tab's close button doesn't close it immediately - it opens `ConfirmDialog.tsx` (a
+  small shared modal, not the browser's own `window.confirm()`) with Enter confirming
+  and Escape cancelling regardless of which element has focus; `App.tsx` only actually
+  disconnects and removes the tab once that's confirmed. The same component backs
+  Settings' vault reset/import confirmations (see the Vault section) - one place for
+  every "are you sure?" moment in the app instead of each caller rolling its own.
 - **SFTP dual-pane browser (`SftpView.tsx`/`FilePane.tsx`, backend `SftpSession.cs`/
   `LocalFileSystem.cs`):** opened by a host card's "SFTP" button - local filesystem (the
   machine running slopterm) on the left, the connected host's remote filesystem on the
@@ -252,7 +258,7 @@ spirit of Termius, targeting Linux, macOS and Windows.
     the exact state a brand-new install starts in. Deliberately does **not** require the
     vault to already be unlocked - this is the recovery path for someone who's locked
     themselves out of their own master password, so requiring it first would defeat the
-    entire point. The frontend's confirmation is a plain `window.confirm()`, not a
+    entire point. The frontend's confirmation is `ConfirmDialog.tsx` (see below), not a
     password re-check - matches what was actually asked for (an "are you sure" gate), not
     an additional server-side authorization boundary.
   - Verified the full re-key lifecycle (toggle off, restart, toggle back on with a new

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -52,7 +52,7 @@ test('dragging a file from one SFTP pane onto the other uploads/downloads it', a
     await remoteRegion.getByText(localFileName, { exact: true }).dragTo(localRegion)
     await expect(page.getByText(`Downloaded ${localFileName}`)).toBeVisible({ timeout: 10_000 })
 
-    await page.getByRole('button', { name: 'Close transfer test host (SFTP)' }).click()
+    await closeTab(page, 'transfer test host (SFTP)')
     await gotoSection(page, 'Hosts')
     await page.click('text=transfer test host')
     await page.getByRole('button', { name: 'Delete', exact: true }).click()
