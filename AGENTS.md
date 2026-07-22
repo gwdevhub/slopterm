@@ -419,6 +419,13 @@ spirit of Termius, targeting Linux, macOS and Windows.
   per the original ask) when a startup check finds an update available
   (`App.tsx`'s `useUpdateAvailable`, checked once, not polled) - the actual check/apply UI
   only lives in Settings itself.
+- **One button, not two.** The Updates section always shows a status line (checking/
+  error/unsupported/up to date/update available) *and* a single primary button whose
+  label and action both track that state: `"Checking…"` (disabled) while a check is in
+  flight, `"Update now"` when one's available, `"Check now"` otherwise (including right
+  after an error, or in a dev build where re-checking is harmless even if unlikely to
+  help) - never two separate buttons for "check" vs. "update," and never just text with
+  no way to act on it.
 - Browsing/navigating aside, there's deliberately no in-app UI for the numbered/`VERSION`
   release channel - self-update always targets the rolling `latest` release, matching
   what "the latest version of the exe" means throughout this feature.

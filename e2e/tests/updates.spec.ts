@@ -23,7 +23,16 @@ test('Settings shows the Updates section and reaches a terminal state', async ({
   await ensureVaultUnlocked(page)
 
   await expect(page.getByRole('heading', { name: 'Updates' })).toBeVisible({ timeout: 10_000 })
-  await expect(page.getByText('Checking for updates…')).not.toBeVisible({ timeout: 15_000 })
+  // The primary button starts disabled with "Checking…" while the initial check is in
+  // flight, then settles to an enabled "Check now" or "Update now" once it resolves -
+  // never clicked here (which live outcome shows up depends on live network/repo state,
+  // and clicking "Update now" would kick off a real, destructive apply against this dev
+  // server), just observed reaching one of those two labels.
+  const button = page.getByRole('button', { name: /Checking…|Check now|Update now/ })
+  await expect(button).toBeVisible({ timeout: 10_000 })
+  await expect(button).toBeEnabled({ timeout: 15_000 })
+  await expect(button).toHaveText(/Check now|Update now/)
+  await expect(page.getByText('Checking for updates…')).not.toBeVisible()
 })
 
 test('saves and clears a GitHub token', async ({ page }) => {

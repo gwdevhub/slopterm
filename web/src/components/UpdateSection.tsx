@@ -136,6 +136,7 @@ function UpdateProgressDialog({ onDone }: { onDone: () => void }) {
 
 export function UpdateSection() {
   const [check, setCheck] = useState<UpdateCheckResult | null>(null)
+  const [checking, setChecking] = useState(true)
   const [checkError, setCheckError] = useState<string | null>(null)
   const [hasToken, setHasToken] = useState<boolean | null>(null)
   const [tokenInput, setTokenInput] = useState('')
@@ -156,12 +157,31 @@ export function UpdateSection() {
   }, [])
 
   async function refreshCheck() {
+    setChecking(true)
     setCheckError(null)
     try {
       const result = await checkForUpdate()
       if (mountedRef.current) setCheck(result)
     } catch (err) {
       if (mountedRef.current) setCheckError(err instanceof Error ? err.message : 'Failed to check for updates')
+    } finally {
+      if (mountedRef.current) setChecking(false)
+    }
+  }
+
+  const updateAvailable = check?.supported && !check.error && check.updateAvailable
+
+  // One button whose meaning tracks whatever state the check is in - "Update now" only
+  // when there's actually somewhere to go, "Check now" otherwise (including right after
+  // an error or in dev mode, where re-checking is harmless even if unlikely to help),
+  // and disabled with a "Checking…" label while a check is in flight so it's never
+  // ambiguous whether a click landed.
+  function handlePrimaryAction() {
+    if (checking) return
+    if (updateAvailable) {
+      void handleUpdateNow()
+    } else {
+      void refreshCheck()
     }
   }
 
@@ -200,46 +220,38 @@ export function UpdateSection() {
     <div className="flex flex-col gap-3 border-t border-slate-800 pt-4">
       <h3 className="font-medium text-slate-100">Updates</h3>
 
-      <div className="rounded border border-slate-700 bg-slate-900 p-4">
-        {check === null && !checkError && <p className="text-sm text-slate-400">Checking for updates…</p>}
-        {checkError && <p className="text-sm text-red-400">{checkError}</p>}
-        {check && !check.supported && (
+      <div className="flex flex-col gap-2 rounded border border-slate-700 bg-slate-900 p-4">
+        {checking && <p className="text-sm text-slate-400">Checking for updates…</p>}
+        {!checking && checkError && <p className="text-sm text-red-400">{checkError}</p>}
+        {!checking && check && !check.supported && (
           <p className="text-sm text-slate-400">{check.error ?? 'Update checks are not available.'}</p>
         )}
-        {check?.supported && check.error && (
-          <>
-            <p className="text-sm text-amber-300">{check.error}</p>
-            <button
-              type="button"
-              onClick={() => void refreshCheck()}
-              className="mt-2 rounded bg-slate-800 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-700"
-            >
-              Retry
-            </button>
-          </>
-        )}
-        {check?.supported && !check.error && !check.updateAvailable && (
+        {!checking && check?.supported && check.error && <p className="text-sm text-amber-300">{check.error}</p>}
+        {!checking && check?.supported && !check.error && !check.updateAvailable && (
           <p className="text-sm text-emerald-400">
             You're up to date <span className="text-slate-500">({shortSha(check.currentSha256)})</span>
           </p>
         )}
-        {check?.supported && !check.error && check.updateAvailable && (
-          <div className="flex flex-col gap-2">
+        {!checking && check?.supported && !check.error && check.updateAvailable && (
+          <>
             <p className="text-sm text-slate-100">
               A new version is available{check.latestTagName ? ` (${check.latestTagName})` : ''}.
             </p>
             <p className="text-xs text-slate-500">
               {shortSha(check.currentSha256)} → {shortSha(check.latestSha256)}
             </p>
-            <button
-              type="button"
-              onClick={handleUpdateNow}
-              className="self-start rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
-            >
-              Update now
-            </button>
-          </div>
+          </>
         )}
+        <button
+          type="button"
+          onClick={handlePrimaryAction}
+          disabled={checking}
+          className={`self-start rounded px-4 py-2 text-sm font-medium text-white disabled:opacity-50 ${
+            updateAvailable ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
+          }`}
+        >
+          {checking ? 'Checking…' : updateAvailable ? 'Update now' : 'Check now'}
+        </button>
       </div>
 
       <form onSubmit={handleSaveToken} className="flex flex-col gap-2">
