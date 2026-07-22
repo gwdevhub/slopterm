@@ -140,25 +140,27 @@ spirit of Termius, targeting Linux, macOS and Windows.
   actually matched the surrounding text color. Replaced with one hand-authored outline
   icon family (24x24 viewBox, `stroke="currentColor"`, no fill) so every icon inherits
   whatever color/size its container already uses (`className="h-5 w-5"` etc.) instead of
-  relying on emoji-font rendering. The app's own brand mark (`web/public/favicon.svg`, the
-  PWA icon PNGs, and the Windows tray icon) was also redrawn from scratch to actually be
-  the same design everywhere - previously `favicon.svg` was an unrelated multi-color,
-  blur-filtered lightning-bolt export, and the tray icon was just Windows' generic stock
-  `IDI_APPLICATION` icon (no branding at all). All three now render the same flat
-  dark-navy-background + indigo terminal-prompt (`>_`) mark - a purpose-built app icon
-  (not reused from any single nav item) chosen for being immediately readable as "this is
-  a terminal app," rather than an abstract shape. `server/Native/app.ico` (16/32/48/256px
-  frames) is embedded the same way `wwwroot/**` is, and `WindowsTrayIcon.cs`'s
-  `LoadAppIcon()` copies it to a temp file once and loads it via
-  `LoadImage(..., LR_LOADFROMFILE)` - deliberately not `System.Drawing.Common` (a real,
-  non-trivial dependency) or hand-parsing the .ico's resource-directory format via
-  `LookupIconIdFromDirectoryEx` (fragile, and that API actually expects RT_GROUP_ICON
-  layout, not a plain .ico file's own directory structure) - falls back to the stock
-  `IDI_APPLICATION` icon if the embedded resource is somehow missing, so a broken icon
-  asset can never prevent the tray icon itself from showing. Verified under Wine: the
-  temp `.ico` file is written with the exact byte-for-byte size of the embedded resource,
-  and `Shell_NotifyIcon`/`systray_add_icon` trace shows it registering and painting with
-  no fallback triggered.
+  relying on emoji-font rendering. The app's own brand mark - the purple/blue
+  lightning-bolt (`web/public/favicon.svg`, the PWA icon PNGs, `server/Native/app.ico`,
+  and `server/Native/app.png`) - is rendered consistently everywhere it appears: browser
+  tab/PWA icon, the Windows tray icon, the Photino window icon (Linux/macOS), and the
+  win-x64 published .exe's own Win32 icon (`<ApplicationIcon>` in
+  `Slopterm.Server.csproj`, same `app.ico` file, distinct from its use as an embedded
+  runtime resource). An earlier pass briefly replaced the bolt with a flat
+  dark-navy-background + indigo terminal-prompt (`>_`) mark across all of these, but that
+  was reverted back to the original bolt design. `server/Native/app.ico` (16/32/48/256px
+  PNG-compressed frames, rendered from `favicon.svg` via a headless Chromium screenshot
+  since no local SVG rasterizer/ImageMagick is available) is embedded the same way
+  `wwwroot/**` is, and `WindowsTrayIcon.cs`'s `LoadAppIcon()` copies it to a temp file
+  once and loads it via `LoadImage(..., LR_LOADFROMFILE)` - deliberately not
+  `System.Drawing.Common` (a real, non-trivial dependency) or hand-parsing the .ico's
+  resource-directory format via `LookupIconIdFromDirectoryEx` (fragile, and that API
+  actually expects RT_GROUP_ICON layout, not a plain .ico file's own directory structure)
+  - falls back to the stock `IDI_APPLICATION` icon if the embedded resource is somehow
+  missing, so a broken icon asset can never prevent the tray icon itself from showing.
+  Verified under Wine: the temp `.ico` file is written with the exact byte-for-byte size
+  of the embedded resource, and `Shell_NotifyIcon`/`systray_add_icon` trace shows it
+  registering and painting with no fallback triggered.
 - **Vault (implemented, `server/Vault/`):** local, per-item records (stable id +
   `updatedAt`) — not one monolithic blob — encrypted with AES-GCM behind a master
   password (Argon2id KDF via `Konscious.Security.Cryptography.Argon2`, a justified
