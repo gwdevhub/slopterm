@@ -25,4 +25,36 @@ public static class LocalFileSystem
 
         return new FsListing(dir.FullName, dir.Parent?.FullName, entries);
     }
+
+    // Renames a local file or directory to a new leaf name within the same parent directory.
+    public static void Rename(string path, string newName)
+    {
+        var parent = Directory.GetParent(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))?.FullName
+            ?? throw new ArgumentException($"Cannot rename a root path: {path}");
+        var destination = Path.Combine(parent, newName);
+        if (Directory.Exists(path))
+        {
+            Directory.Move(path, destination);
+        }
+        else
+        {
+            File.Move(path, destination);
+        }
+    }
+
+    // Deletes a local file or directory (directories are removed recursively).
+    public static void Delete(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        else
+        {
+            File.Delete(path);
+        }
+    }
+
+    // Creates a new directory named `name` under the given parent directory.
+    public static void MakeDirectory(string parentDir, string name) => Directory.CreateDirectory(Path.Combine(parentDir, name));
 }

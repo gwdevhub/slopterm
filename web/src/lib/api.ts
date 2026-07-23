@@ -498,6 +498,65 @@ export async function sftpDownload(sessionId: string, remotePath: string, localD
   await throwOnError(res)
 }
 
+// Remote file-management ops (backed by SftpSession over the live SFTP connection).
+// newName/name are always leaf names, never full paths, matching the backend's own
+// parent-relative handling.
+export async function sftpRename(sessionId: string, path: string, newName: string): Promise<void> {
+  const res = await fetch(`/api/sftp/${sessionId}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, newName }),
+  })
+  await throwOnError(res)
+}
+
+export async function sftpDelete(sessionId: string, path: string): Promise<void> {
+  const res = await fetch(`/api/sftp/${sessionId}/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  await throwOnError(res)
+}
+
+export async function sftpMkdir(sessionId: string, parentDir: string, name: string): Promise<void> {
+  const res = await fetch(`/api/sftp/${sessionId}/mkdir`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ parentDir, name }),
+  })
+  await throwOnError(res)
+}
+
+// Local file-management ops - same shapes as the remote ones, but they hit the machine
+// running slopterm directly and need no session (gated like /api/local/list).
+export async function localRename(path: string, newName: string): Promise<void> {
+  const res = await fetch('/api/local/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, newName }),
+  })
+  await throwOnError(res)
+}
+
+export async function localDelete(path: string): Promise<void> {
+  const res = await fetch('/api/local/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  await throwOnError(res)
+}
+
+export async function localMkdir(parentDir: string, name: string): Promise<void> {
+  const res = await fetch('/api/local/mkdir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ parentDir, name }),
+  })
+  await throwOnError(res)
+}
+
 export interface WindowPosition {
   x: number
   y: number
