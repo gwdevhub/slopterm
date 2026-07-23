@@ -10,6 +10,19 @@ body {
   margin: 0;
 }
 
+/* Custom title bar drag regions (chromeless desktop window). The bar itself is draggable
+   to move the window; interactive controls inside it opt back out so they stay clickable.
+   No-ops in a normal browser, which draws its own chrome. */
+.app-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.app-no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
 /* Thin, blue-tinted scrollbars everywhere instead of the chunky default OS one, so tall
    views (e.g. the Settings page) read as a native app rather than a browser. WebView2 is
    Chromium, so ::-webkit-scrollbar drives the look; scrollbar-width/color is the standards

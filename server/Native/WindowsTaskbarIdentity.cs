@@ -66,6 +66,12 @@ internal static class WindowsTaskbarIdentity
             var windowHandle = FindMainTaskbarWindow();
             if (windowHandle != nint.Zero)
             {
+                // Photino's chromeless window (see AppWindowManager) drops WS_THICKFRAME, so
+                // it can't be edge-resized. Add it back (plus the min/max boxes, so Win+Up/
+                // Down and aero-snap behave) - idempotent, and the style survives WebView2's
+                // init unlike the shell property store below, so once set it stays.
+                EnsureResizableStyle(windowHandle);
+
                 if (IsAppIdApplied(windowHandle))
                 {
                     // Survived since the previous pass without WebView2 clearing it.
@@ -126,6 +132,40 @@ internal static class WindowsTaskbarIdentity
         }, nint.Zero);
 
         return found;
+    }
+
+    /// <summary>
+    /// Re-adds the sizing frame a chromeless Photino window lacks, so the borderless window
+    /// (which draws its own title bar) can still be resized from its edges and maximized/
+    /// snapped like any native window. Idempotent - skips the SetWindowPos reflow once the
+    /// bits are already present.
+    /// </summary>
+    private static void EnsureResizableStyle(nint windowHandle)
+    {
+        if (!OperatingSystem.IsWindows() || windowHandle == nint.Zero)
+        {
+            return;
+        }
+
+        try
+        {
+            var style = GetWindowLong(windowHandle, GwlStyle);
+            var wanted = style | WsThickFrame | WsMinimizeBox | WsMaximizeBox;
+            if (wanted == style)
+            {
+                return;
+            }
+
+            SetWindowLong(windowHandle, GwlStyle, wanted);
+            // SWP_FRAMECHANGED makes the new non-client frame take effect without moving,
+            // resizing, or restacking the window.
+            SetWindowPos(windowHandle, nint.Zero, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoZOrder | SwpFrameChanged);
+        }
+        catch
+        {
+            // Best-effort: a window that won't take the style is still usable (just not
+            // edge-resizable), never a reason to crash.
+        }
     }
 
     private static void ConfigureWindow(nint windowHandle)
@@ -301,8 +341,16 @@ internal static class WindowsTaskbarIdentity
         int Commit();
     }
 
+    private const int GwlStyle = -16;
     private const int GwlExStyle = -20;
     private const int WsExToolWindow = 0x00000080;
+    private const int WsThickFrame = 0x00040000;
+    private const int WsMinimizeBox = 0x00020000;
+    private const int WsMaximizeBox = 0x00010000;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoZOrder = 0x0004;
+    private const uint SwpFrameChanged = 0x0020;
 
     private delegate bool EnumWindowsProc(nint hwnd, nint lParam);
 
@@ -321,6 +369,14 @@ internal static class WindowsTaskbarIdentity
     [SupportedOSPlatform("windows")]
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
     private static extern int GetWindowLong(nint hwnd, int index);
+
+    [SupportedOSPlatform("windows")]
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW")]
+    private static extern int SetWindowLong(nint hwnd, int index, int newLong);
+
+    [SupportedOSPlatform("windows")]
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(nint hwnd, nint hwndInsertAfter, int x, int y, int cx, int cy, uint flags);
 
     [SupportedOSPlatform("windows")]
     [DllImport("user32.dll")]

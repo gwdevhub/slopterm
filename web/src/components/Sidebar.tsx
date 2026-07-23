@@ -20,6 +20,10 @@ interface SidebarProps {
   // just a dot, not a number/toast, per the "not too invasive" requirement. See App.tsx's
   // one-time startup check and UpdateSection.tsx for the actual update UI.
   updateAvailable?: boolean
+  // In the chromeless desktop app the custom TitleBar owns the collapse toggle and Settings
+  // (in its hamburger), so the sidebar drops both to avoid duplicating them. A normal
+  // browser has no title bar, so it keeps them here. Doesn't affect the mobile overlay.
+  hideChromeControls?: boolean
 }
 
 // The persistent left sidebar (issue #8's nav rail, now always visible - there's no more
@@ -27,7 +31,7 @@ interface SidebarProps {
 // gets a real collapsible column; phones get a slim top bar with just a menu button that
 // opens a full-screen overlay instead, since a permanently-visible icon column has no
 // room at phone width.
-export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed, updateAvailable }: SidebarProps) {
+export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed, updateAvailable, hideChromeControls }: SidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
 
   function selectAndClose(section: NavSection) {
@@ -62,16 +66,20 @@ export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed, update
         }`}
       >
         {/* Fixed-height header row, deliberately the same height as TabBar's row so the
-            two align visually as one continuous toolbar across the top of the app. */}
+            two align visually as one continuous toolbar across the top of the app. In the
+            desktop app the collapse toggle moves up into the title bar's hamburger, leaving
+            this as an empty spacer that keeps the sidebar/TabBar top edges aligned. */}
         <div className="flex h-[42px] shrink-0 items-center justify-center border-b border-slate-800 px-1">
-          <button
-            type="button"
-            onClick={onToggleCollapsed}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            className="rounded p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-          >
-            <SidebarToggleIcon aria-hidden="true" className={`h-5 w-5 ${collapsed ? 'rotate-180' : ''}`} />
-          </button>
+          {!hideChromeControls && (
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className="rounded p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+            >
+              <SidebarToggleIcon aria-hidden="true" className={`h-5 w-5 ${collapsed ? 'rotate-180' : ''}`} />
+            </button>
+          )}
         </div>
 
         <div className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
@@ -87,15 +95,17 @@ export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed, update
               {!collapsed && <span className="truncate">{section.label}</span>}
             </button>
           ))}
-          <button
-            type="button"
-            onClick={() => onSelect('settings')}
-            title="Settings"
-            className={`${itemClasses(active === 'settings')} mt-auto`}
-          >
-            {settingsIcon}
-            {!collapsed && <span className="truncate">Settings</span>}
-          </button>
+          {!hideChromeControls && (
+            <button
+              type="button"
+              onClick={() => onSelect('settings')}
+              title="Settings"
+              className={`${itemClasses(active === 'settings')} mt-auto`}
+            >
+              {settingsIcon}
+              {!collapsed && <span className="truncate">Settings</span>}
+            </button>
+          )}
         </div>
       </nav>
 

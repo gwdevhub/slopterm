@@ -6,6 +6,8 @@ import { SftpView } from './components/SftpView'
 import { ReconnectingPane } from './components/ReconnectingPane'
 import { SectionContent } from './components/SectionContent'
 import { ConfirmDialog } from './components/ConfirmDialog'
+import { TitleBar } from './components/TitleBar'
+import { isDesktopApp } from './lib/photino'
 import {
   checkForUpdate,
   connect,
@@ -326,16 +328,26 @@ function App() {
   const pendingCloseTab = tabs.find((t) => t.id === pendingCloseTabId)
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate-950 sm:flex-row">
-      <Sidebar
-        active={section}
-        onSelect={handleSelectSection}
-        collapsed={sidebarCollapsed}
-        onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
-        updateAvailable={updateAvailable}
-      />
-      <div className="flex min-h-0 flex-1 flex-col">
-        <TabBar tabs={tabs} activeId={activeTabId} onSelect={setActiveTabId} onClose={handleRequestClose} />
+    <div className="flex h-full min-h-0 flex-col bg-slate-950">
+      {isDesktopApp && (
+        <TitleBar
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+          onSelectSection={handleSelectSection}
+          updateAvailable={updateAvailable}
+        />
+      )}
+      <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+        <Sidebar
+          active={section}
+          onSelect={handleSelectSection}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+          updateAvailable={updateAvailable}
+          hideChromeControls={isDesktopApp}
+        />
+        <div className="flex min-h-0 flex-1 flex-col">
+          <TabBar tabs={tabs} activeId={activeTabId} onSelect={setActiveTabId} onClose={handleRequestClose} />
         <div className="relative min-h-0 flex-1">
           {/* Every open tab's view stays mounted (just hidden) when inactive, so switching
               tabs doesn't tear down its WebSocket/SFTP connection - see issue #9's
@@ -385,6 +397,7 @@ function App() {
           onCancel={() => setPendingCloseTabId(null)}
         />
       )}
+      </div>
     </div>
   )
 }

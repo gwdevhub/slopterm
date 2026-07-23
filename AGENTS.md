@@ -663,6 +663,48 @@ spirit of Termius, targeting Linux, macOS and Windows.
   primary path specifically because that approach never gave the app a real window
   handle: it couldn't reliably tell whether a window was still open (to single-instance
   it) or read back its position (to remember it) - Photino gives both directly.
+  - **Custom (chromeless) title bar (`SetChromeless(true)` + `web/src/components/TitleBar.tsx`).**
+    The window has no OS caption; the React app draws one integrated top bar instead -
+    a hamburger menu on the left (holding the sidebar collapse toggle and Settings, which
+    the sidebar drops in desktop mode - `Sidebar`'s `hideChromeControls`) and the
+    minimize/maximize/close controls on the right, at the same height. Termius-style, per
+    the reference. Three things this needs, each learned the hard way / from Photino's
+    constraints:
+    - **A chromeless window MUST be given an explicit size and location on Windows** -
+      Photino throws `Startup Parameters Are Not Valid ... Size and location must be
+      specified` if `UseOsDefaultLocation/Size` is left on (which happens on a first cold
+      start with no saved `window.json`). `RunWindow` always sets both now: the saved
+      position or a default centered on the primary screen (`GetSystemMetrics`).
+    - **Chromeless also drops `WS_THICKFRAME`, so the window can't be edge-resized.**
+      `WindowsTaskbarIdentity.EnsureResizableStyle` re-adds `WS_THICKFRAME` +
+      `WS_MINIMIZEBOX`/`WS_MAXIMIZEBOX` via `SetWindowLong`/`SetWindowPos(SWP_FRAMECHANGED)`
+      on the real top-level frame (found by the same enumeration the taskbar-identity code
+      already uses - `PhotinoWindow.WindowHandle` isn't that frame). Verified: the window
+      ends up caption-less but resizable, with working maximize/aero-snap.
+    - **Dragging the bar to move the window needs a WebView2 feature flag, not just the
+      CSS.** `-webkit-app-region: drag` (in `index.css`, with buttons opting out via
+      `no-drag`) is *ignored* by WebView2 unless non-client region support is on - and
+      Photino exposes no setting for it, so `AppWindowManager` switches it on by appending
+      `--enable-features=msWebView2EnableDraggableRegions` to the
+      `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` env var before the webview is created (append,
+      not overwrite, so it composes with anything already there). Without this the title bar
+      renders and the controls work but the window won't move when dragged - the exact
+      symptom that surfaced this. Confirmed the flag reaches WebView2 by inspecting the
+      `msedgewebview2` child process command line.
+    - **Window controls go over Photino's `window.external` message bridge**
+      (`lib/photino.ts`): the title bar posts `wc:min`/`wc:max`/`wc:close`/`wc:ready`, the
+      backend's `RegisterWebMessageReceivedHandler` acts on them, and it pushes
+      `wc:maximized`/`wc:restored` back so the maximize/restore glyph tracks the real state
+      (including changes from Win+Up, snap, etc. via `RegisterMaximizedHandler`/`Restored`).
+      `wc:close` runs the exact same `CloseToTray` logic as the native close (Alt+F4 still
+      routes through `RegisterWindowClosingHandler`), so the title-bar X quits by default.
+      `SavePosition` skips a maximized window so the next cold start doesn't open giant.
+    - `TitleBar` only renders inside Photino (`isDesktopApp` = `window.external.sendMessage`
+      exists); a plain browser (dev, phone, direct URL) has no title bar and the sidebar
+      keeps its own collapse toggle and Settings. Verified end-to-end by driving the real
+      chromeless WebView2 window over CDP: hamburger opens collapse/Settings, the sidebar
+      no longer carries either, maximize grows the window and restore returns it exactly,
+      and the title-bar Close quits the process.
   - **Pin `Photino.NET` to `4.0.16` or later, not `3.2.3`.** `3.2.3`'s Linux native build
     links `libwebkit2gtk-4.0`/`libjavascriptcoregtk-4.0` specifically, which modern
     distros (this repo's own dev sandbox included) no longer ship at all, only the `4.1`

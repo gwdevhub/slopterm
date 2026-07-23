@@ -171,3 +171,32 @@ export function SftpTabIcon(props: IconProps) {
     </svg>
   )
 }
+
+// Window-control glyphs for the custom (chromeless) title bar - thin lines so they read
+// like native Windows caption buttons rather than the app's chunkier nav icons.
+const thin = { ...base, strokeWidth: 1.3 }
+
+export function MinimizeIcon(props: IconProps) {
+  return (
+    <svg {...thin} {...props}>
+      <line x1="6" y1="12" x2="18" y2="12" />
+    </svg>
+  )
+}
+
+export function MaximizeIcon(props: IconProps) {
+  return (
+    <svg {...thin} {...props}>
+      <rect x="6" y="6" width="12" height="12" rx="1" />
+    </svg>
+  )
+}
+
+export function RestoreIcon(props: IconProps) {
+  return (
+    <svg {...thin} {...props}>
+      <rect x="6" y="8" width="10" height="10" rx="1" />
+      <path d="M9 8 V7 a1 1 0 0 1 1-1 h7 a1 1 0 0 1 1 1 v7 a1 1 0 0 1 -1 1 h-1" />
+    </svg>
+  )
+}

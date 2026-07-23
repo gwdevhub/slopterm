@@ -149,9 +149,21 @@ public static class AppWindowManager
 
     private static void RunWindow(string url)
     {
+        // WebView2 ignores the title bar's CSS -webkit-app-region: drag (used to move the
+        // chromeless window) unless non-client region support is enabled - which Photino
+        // doesn't expose, so switch it on through WebView2's browser-args env var before the
+        // webview is created below. Without this the window simply won't move when dragged.
+        EnableWebViewDraggableRegions();
+
         try
         {
-            var window = new PhotinoWindow().SetTitle("slopterm");
+            // Chromeless (no native OS title bar/border) so the React app can draw its own
+            // Termius-style title bar - the hamburger menu (collapse/settings) and the
+            // window's minimize/maximize/close controls all live in one integrated top bar
+            // at the same height, instead of an OS caption stacked above our own toolbar.
+            // The window stays resizable (Photino's Resizable defaults on, independent of
+            // the caption) and draggable via the title bar's CSS -webkit-app-region: drag.
+            var window = new PhotinoWindow().SetTitle("slopterm").SetChromeless(true);
 
             var iconPath = EmbeddedIcon.ExtractToTempFile();
             if (iconPath is not null)
@@ -159,44 +171,84 @@ public static class AppWindowManager
                 window.SetIconFile(iconPath);
             }
 
+            // A chromeless window on Windows MUST have an explicit size and location -
+            // Photino rejects UseOsDefaultLocation/Size for it ("Size and location must be
+            // specified"). So always set both: the saved position if we have one, otherwise
+            // a sensible default centered on the primary screen for a first cold start.
+            window.SetUseOsDefaultLocation(false).SetUseOsDefaultSize(false);
             var saved = WindowPositionStore.Load();
             if (saved is not null)
             {
-                window
-                    .SetUseOsDefaultLocation(false)
-                    .SetLocation(new Point(saved.X, saved.Y))
-                    .SetUseOsDefaultSize(false)
-                    .SetSize(new Size(saved.Width, saved.Height));
+                window.SetLocation(new Point(saved.X, saved.Y)).SetSize(new Size(saved.Width, saved.Height));
+            }
+            else
+            {
+                const int defaultWidth = 1100, defaultHeight = 720;
+                var screenW = OperatingSystem.IsWindows() ? GetSystemMetrics(SmCxScreen) : 1280;
+                var screenH = OperatingSystem.IsWindows() ? GetSystemMetrics(SmCyScreen) : 800;
+                var x = Math.Max(0, (screenW - defaultWidth) / 2);
+                var y = Math.Max(0, (screenH - defaultHeight) / 2);
+                window.SetLocation(new Point(x, y)).SetSize(new Size(defaultWidth, defaultHeight));
             }
 
-            // Captured once, right before minimizing - not continuously via
-            // LocationChanged/SizeChanged. Many windowing APIs (this one included, in
-            // practice) fire spurious move/resize events as part of minimizing or
-            // tearing a window down (classic Win32 reports a minimized window "moving"
-            // to something like (-32000,-32000)), which would otherwise silently
-            // overwrite a perfectly good saved position with garbage.
-            //
-            // Always returns true (cancel the native close) so Photino never destroys the
-            // window here - see the class doc comment for why directly destroying it is a
-            // hard "no" (creating another afterward crashes the process natively). What
-            // differs is what we do instead:
+            // Shared by both the native close (Alt+F4) and the title bar's own close button
+            // (the "wc:close" message below). SavePosition is captured here, right before
+            // minimizing - not continuously via LocationChanged/SizeChanged, since many
+            // windowing APIs fire spurious move/resize events while minimizing or tearing a
+            // window down (classic Win32 reports a minimized window at (-32000,-32000)),
+            // which would otherwise overwrite a perfectly good saved position with garbage.
             //   - CloseToTray on: minimize and leave the app running behind its tray icon.
-            //   - CloseToTray off (default): quit slopterm outright. The window still isn't
+            //   - CloseToTray off (default): quit slopterm outright. The window is never
             //     destroyed here - _onQuit stops the process, and letting process exit tear
-            //     the window down is the one destruction path proven safe. It lingers for
-            //     the instant shutdown takes, exactly as the tray's own "Quit" already does.
-            window.RegisterWindowClosingHandler((_, _) =>
+            //     it down is the one destruction path proven safe (see the class doc).
+            void HandleClose(PhotinoWindow w)
             {
-                SavePosition(window);
+                SavePosition(w);
                 if (_closeToTray?.Invoke() == true)
                 {
-                    window.SetMinimized(true);
+                    w.SetMinimized(true);
                 }
                 else
                 {
                     _onQuit?.Invoke();
                 }
+            }
 
+            // The chromeless window has no OS caption, so the React title bar draws the
+            // window controls and drives them through this message bridge - posted from JS
+            // via window.external.sendMessage, handled here on the window's own thread.
+            window.RegisterWebMessageReceivedHandler((sender, message) =>
+            {
+                var w = (PhotinoWindow)sender!;
+                switch (message)
+                {
+                    case "wc:min":
+                        w.SetMinimized(true);
+                        break;
+                    case "wc:max":
+                        w.SetMaximized(!w.Maximized);
+                        break;
+                    case "wc:close":
+                        HandleClose(w);
+                        break;
+                    case "wc:ready":
+                        // Reply so the title bar's maximize/restore glyph starts correct -
+                        // the frontend can't read the native maximize state directly.
+                        w.SendWebMessage(w.Maximized ? "wc:maximized" : "wc:restored");
+                        break;
+                }
+            });
+
+            // Keep that glyph in sync when the state changes by any other means too
+            // (double-click drag-to-top, Win+Up, aero snap), not just our own button.
+            window.RegisterMaximizedHandler((sender, _) => ((PhotinoWindow)sender!).SendWebMessage("wc:maximized"));
+            window.RegisterRestoredHandler((sender, _) => ((PhotinoWindow)sender!).SendWebMessage("wc:restored"));
+
+            // Always cancel the native close (return true) so Photino never destroys the
+            // window - see the class doc comment for why that's a hard requirement.
+            window.RegisterWindowClosingHandler((_, _) =>
+            {
+                HandleClose(window);
                 return true;
             });
 
@@ -254,10 +306,38 @@ public static class AppWindowManager
         }
     }
 
+    /// <summary>
+    /// Turns on WebView2's non-client region support (so CSS -webkit-app-region: drag makes
+    /// the title bar move the window) by appending the enabling feature flag to WebView2's
+    /// additional-browser-args env var. Appends rather than overwrites so it composes with
+    /// anything already set (e.g. a --remote-debugging-port passed in for testing). Must run
+    /// before the webview is created; idempotent.
+    /// </summary>
+    private static void EnableWebViewDraggableRegions()
+    {
+        const string variable = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
+        const string flag = "--enable-features=msWebView2EnableDraggableRegions";
+
+        var existing = Environment.GetEnvironmentVariable(variable);
+        if (existing is not null && existing.Contains("msWebView2EnableDraggableRegions", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Environment.SetEnvironmentVariable(variable, string.IsNullOrEmpty(existing) ? flag : $"{existing} {flag}");
+    }
+
     private static void SavePosition(PhotinoWindow window)
     {
         try
         {
+            if (window.Maximized)
+            {
+                // Persisting maximized bounds would make the next cold start open as a giant
+                // "restored" window - keep whatever the last real windowed size/pos was.
+                return;
+            }
+
             var width = window.Width;
             var height = window.Height;
             if (width <= 0 || height <= 0)
@@ -306,6 +386,13 @@ public static class AppWindowManager
     [SupportedOSPlatform("windows")]
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(nint hWnd);
+
+    private const int SmCxScreen = 0;
+    private const int SmCyScreen = 1;
+
+    [SupportedOSPlatform("windows")]
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int nIndex);
 
     private static void StartTaskbarIdentityApplier()
     {
