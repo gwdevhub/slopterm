@@ -49,6 +49,25 @@ public static class AppWindowManager
     // above. This flag closes that race.
     private static bool _creating;
 
+    // Set once from Program.cs before the first window opens. _closeToTray reports the live
+    // CloseToTray setting value - read at each close, so toggling it in Settings takes
+    // effect without a restart; _onQuit runs the same clean shutdown the tray's "Quit" does.
+    private static Func<bool>? _closeToTray;
+    private static Action? _onQuit;
+
+    /// <summary>
+    /// Wires up what closing the window does: minimize it to the tray (keeping the app
+    /// running) when <paramref name="closeToTray"/> reports true, or quit outright (the
+    /// default) via <paramref name="onQuit"/>. Call once at startup before the first window
+    /// is opened. The predicate is evaluated at each close, not captured, so a Settings
+    /// toggle applies without a restart.
+    /// </summary>
+    public static void Configure(Func<bool> closeToTray, Action onQuit)
+    {
+        _closeToTray = closeToTray;
+        _onQuit = onQuit;
+    }
+
     public static void EnsureWindowOpen(string url)
     {
         Thread thread;
@@ -157,13 +176,27 @@ public static class AppWindowManager
             // to something like (-32000,-32000)), which would otherwise silently
             // overwrite a perfectly good saved position with garbage.
             //
-            // Cancels the close (returns true) and minimizes instead of letting the
-            // native window actually be destroyed - see the class doc comment for why
-            // that's a hard requirement here, not just a nicety.
+            // Always returns true (cancel the native close) so Photino never destroys the
+            // window here - see the class doc comment for why directly destroying it is a
+            // hard "no" (creating another afterward crashes the process natively). What
+            // differs is what we do instead:
+            //   - CloseToTray on: minimize and leave the app running behind its tray icon.
+            //   - CloseToTray off (default): quit slopterm outright. The window still isn't
+            //     destroyed here - _onQuit stops the process, and letting process exit tear
+            //     the window down is the one destruction path proven safe. It lingers for
+            //     the instant shutdown takes, exactly as the tray's own "Quit" already does.
             window.RegisterWindowClosingHandler((_, _) =>
             {
                 SavePosition(window);
-                window.SetMinimized(true);
+                if (_closeToTray?.Invoke() == true)
+                {
+                    window.SetMinimized(true);
+                }
+                else
+                {
+                    _onQuit?.Invoke();
+                }
+
                 return true;
             });
 

@@ -4,6 +4,7 @@ import {
   getSettings,
   importVaultBackup,
   resetVaultToDefault,
+  setCloseToTray,
   setRequireMasterPassword,
 } from '../lib/api'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -19,6 +20,10 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
+  const [closeToTray, setCloseToTrayState] = useState<boolean | null>(null)
+  const [closeToTrayBusy, setCloseToTrayBusy] = useState(false)
+  const [closeToTrayError, setCloseToTrayError] = useState<string | null>(null)
+
   const [exportError, setExportError] = useState<string | null>(null)
   const [importBusy, setImportBusy] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
@@ -29,7 +34,10 @@ export function SettingsPage() {
   const importFileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    getSettings().then((s) => setRequireMasterPasswordState(s.requireMasterPassword))
+    getSettings().then((s) => {
+      setRequireMasterPasswordState(s.requireMasterPassword)
+      setCloseToTrayState(s.closeToTray)
+    })
   }, [])
 
   async function handleExport() {
@@ -115,7 +123,21 @@ export function SettingsPage() {
     }
   }
 
-  if (requireMasterPassword === null) {
+  async function handleToggleCloseToTray() {
+    if (closeToTray === null) return
+    setCloseToTrayBusy(true)
+    setCloseToTrayError(null)
+    try {
+      const result = await setCloseToTray(!closeToTray)
+      setCloseToTrayState(result.closeToTray)
+    } catch (err) {
+      setCloseToTrayError(err instanceof Error ? err.message : 'Failed to update setting')
+    } finally {
+      setCloseToTrayBusy(false)
+    }
+  }
+
+  if (requireMasterPassword === null || closeToTray === null) {
     return <p className="p-4 text-slate-400">Loading settings…</p>
   }
 
@@ -181,6 +203,30 @@ export function SettingsPage() {
           </div>
         </form>
       )}
+
+      <div className="flex flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="font-medium text-slate-100">Keep running in the tray when closed</p>
+            <p className="text-sm text-slate-400">
+              By default, closing slopterm's window quits the app. Turn this on to instead
+              minimize it and keep it running behind its tray icon (Windows only).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleToggleCloseToTray}
+            disabled={closeToTrayBusy}
+            aria-label="Keep running in the tray when closed"
+            className={`shrink-0 rounded px-4 py-2 text-sm font-medium disabled:opacity-50 ${
+              closeToTray ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+            }`}
+          >
+            {closeToTray ? 'On' : 'Off'}
+          </button>
+        </div>
+        {closeToTrayError && <p className="text-sm text-red-400">{closeToTrayError}</p>}
+      </div>
 
       <UpdateSection />
 

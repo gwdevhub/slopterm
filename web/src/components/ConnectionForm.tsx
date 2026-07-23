@@ -19,6 +19,9 @@ interface ConnectionFormProps {
   onSubmit: (values: ConnectionFormValues) => void
   errorMessage?: string | null
   isSubmitting?: boolean
+  // Pre-fills the fields (the "Edit host" flow). Read once on mount, so callers that switch
+  // the edited host must remount the form (key it by the host id) for new values to take.
+  initialValues?: ConnectionFormValues
 }
 
 const inputClasses =
@@ -36,15 +39,16 @@ export function ConnectionForm({
   onSubmit,
   errorMessage,
   isSubmitting,
+  initialValues,
 }: ConnectionFormProps) {
-  const [name, setName] = useState('')
-  const [host, setHost] = useState('')
-  const [port, setPort] = useState(22)
-  const [username, setUsername] = useState('')
-  const [authMethod, setAuthMethod] = useState<'password' | 'privateKey'>('password')
-  const [password, setPassword] = useState('')
-  const [privateKey, setPrivateKey] = useState('')
-  const [passphrase, setPassphrase] = useState('')
+  const [name, setName] = useState(initialValues?.name ?? '')
+  const [host, setHost] = useState(initialValues?.host ?? '')
+  const [port, setPort] = useState(initialValues?.port ?? 22)
+  const [username, setUsername] = useState(initialValues?.username ?? '')
+  const [authMethod, setAuthMethod] = useState<'password' | 'privateKey'>(initialValues?.authMethod ?? 'password')
+  const [password, setPassword] = useState(initialValues?.password ?? '')
+  const [privateKey, setPrivateKey] = useState(initialValues?.privateKey ?? '')
+  const [passphrase, setPassphrase] = useState(initialValues?.passphrase ?? '')
 
   const [keychainEntries, setKeychainEntries] = useState<SavedKeychainEntry[]>([])
   const [selectedKeychainId, setSelectedKeychainId] = useState('')

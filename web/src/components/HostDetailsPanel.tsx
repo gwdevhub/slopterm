@@ -1,18 +1,52 @@
 import { useState } from 'react'
-import { createHost, deleteHost, type ConnectRequest, type CredentialRecord, type SavedHost } from '../lib/api'
+import { createHost, deleteHost, updateHost, type ConnectRequest, type CredentialRecord, type SavedHost } from '../lib/api'
 import { resolveConnectRequest } from '../lib/hosts'
 import { ConnectionForm, type ConnectionFormValues } from './ConnectionForm'
 import { CloseIcon } from './icons'
 
 interface HostDetailsPanelProps {
-  mode: 'view' | 'new' | 'empty'
+  mode: 'view' | 'new' | 'edit' | 'empty'
   host?: SavedHost
   onConnect: (request: ConnectRequest) => void
   onDeleted: () => void
   onSaved: () => void
   onClose: () => void
+  onEdit?: () => void
   errorMessage?: string | null
   isConnecting?: boolean
+}
+
+// Maps a saved host's first credential onto the flat form shape ConnectionForm edits. The
+// form (like the "new host" flow) edits a single credential; a host with several keeps the
+// rest only until it's saved from here - consistent with there being no multi-credential
+// UI yet (issue #12).
+function hostToFormValues(host: SavedHost): ConnectionFormValues {
+  const credential = host.host.credentials[0]
+  const isKey = credential?.kind === 'privateKey'
+  return {
+    name: host.host.name,
+    host: host.host.address,
+    port: host.host.port,
+    username: credential?.username ?? '',
+    authMethod: isKey ? 'privateKey' : 'password',
+    password: isKey ? '' : (credential?.secret ?? ''),
+    privateKey: isKey ? (credential?.secret ?? '') : '',
+    passphrase: credential?.passphrase ?? '',
+  }
+}
+
+function formValuesToHost(values: ConnectionFormValues): Parameters<typeof createHost>[0] {
+  const credential: CredentialRecord =
+    values.authMethod === 'password'
+      ? { id: crypto.randomUUID(), kind: 'password', username: values.username, secret: values.password }
+      : {
+          id: crypto.randomUUID(),
+          kind: 'privateKey',
+          username: values.username,
+          secret: values.privateKey,
+          passphrase: values.passphrase || undefined,
+        }
+  return { name: values.name ?? '', address: values.host, port: values.port, credentials: [credential] }
 }
 
 // The right-hand "Host Details" panel from the Termius reference (issue #8). Full
@@ -29,6 +63,7 @@ export function HostDetailsPanel({
   onDeleted,
   onSaved,
   onClose,
+  onEdit,
   errorMessage,
   isConnecting,
 }: HostDetailsPanelProps) {
@@ -37,22 +72,18 @@ export function HostDetailsPanel({
   async function handleSave(values: ConnectionFormValues) {
     setError(null)
     try {
-      const credential: CredentialRecord =
-        values.authMethod === 'password'
-          ? { id: crypto.randomUUID(), kind: 'password', username: values.username, secret: values.password }
-          : {
-              id: crypto.randomUUID(),
-              kind: 'privateKey',
-              username: values.username,
-              secret: values.privateKey,
-              passphrase: values.passphrase || undefined,
-            }
-      await createHost({
-        name: values.name ?? '',
-        address: values.host,
-        port: values.port,
-        credentials: [credential],
-      })
+      await createHost(formValuesToHost(values))
+      onSaved()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save host')
+    }
+  }
+
+  async function handleUpdate(values: ConnectionFormValues) {
+    if (!host) return
+    setError(null)
+    try {
+      await updateHost(host.id, formValuesToHost(values))
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save host')
@@ -80,6 +111,25 @@ export function HostDetailsPanel({
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-200"><CloseIcon aria-hidden="true" className="h-4 w-4" /></button>
         </div>
         <ConnectionForm includeName submitLabel="Save host" onSubmit={handleSave} errorMessage={error} />
+      </div>
+    )
+  }
+
+  if (mode === 'edit' && host) {
+    return (
+      <div className="flex w-full flex-col gap-3 border-t border-slate-800 sm:w-80 sm:border-t-0 sm:border-l">
+        <div className="flex items-center justify-between p-4 pb-0">
+          <h3 className="font-semibold text-slate-100">Edit host</h3>
+          <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-200"><CloseIcon aria-hidden="true" className="h-4 w-4" /></button>
+        </div>
+        <ConnectionForm
+          key={host.id}
+          includeName
+          submitLabel="Save changes"
+          initialValues={hostToFormValues(host)}
+          onSubmit={handleUpdate}
+          errorMessage={error}
+        />
       </div>
     )
   }
@@ -133,6 +183,15 @@ export function HostDetailsPanel({
         >
           Connect
         </button>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
+          >
+            Edit
+          </button>
+        )}
         <button
           type="button"
           onClick={handleDelete}

@@ -1,3 +1,4 @@
+import type { MouseEvent } from 'react'
 import { HostsIcon } from './icons'
 
 interface HostCardProps {
@@ -10,14 +11,18 @@ interface HostCardProps {
   onSelect: () => void
   onSsh: () => void
   onSftp: () => void
+  // Right-click anywhere on the card opens our own context menu (Connect/Edit/…) instead
+  // of the browser's - omitted for lists that don't offer one (e.g. Recent connections).
+  onContextMenu?: (event: MouseEvent) => void
 }
 
 // The card look from the Termius reference (issue #10) - shared by HostGrid (saved
 // hosts) and RecentConnections so both lists render identically instead of Recent having
 // its own, different-looking row style.
-export function HostCard({ name, summary, authLabel, selected, canConnect, isConnecting, onSelect, onSsh, onSftp }: HostCardProps) {
+export function HostCard({ name, summary, authLabel, selected, canConnect, isConnecting, onSelect, onSsh, onSftp, onContextMenu }: HostCardProps) {
   return (
     <div
+      onContextMenu={onContextMenu}
       className={`flex items-stretch gap-2 rounded border p-3 text-left ${
         selected ? 'border-indigo-500 bg-slate-900' : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
       }`}

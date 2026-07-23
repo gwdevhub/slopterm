@@ -28,6 +28,16 @@ public sealed class SetRequireMasterPasswordRequest
     public string? NewPassword { get; set; } // needed when turning protection on
 }
 
+public sealed class SetCloseToTrayRequest
+{
+    public required bool Enabled { get; set; }
+}
+
+public sealed class ImportHostShareRequest
+{
+    public required string Token { get; set; }
+}
+
 public sealed class SetGithubTokenRequest
 {
     // Null/empty clears it.

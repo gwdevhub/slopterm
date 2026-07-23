@@ -24,6 +24,21 @@ public static class VaultCrypto
     // confidentiality against anyone who has both the vault files and this app's source.
     public const string NoPasswordSeed = "slopterm-no-master-password-mode-v1";
 
+    // Non-secret, app-wide key material for the portable "share a host" format (see
+    // HostShareCodec). Deliberately public, exactly like NoPasswordSeed above: a shared
+    // host token is meant to be decodable by ANY slopterm instance, so this provides
+    // encoding/obfuscation (the raw password/key never sits on the clipboard as plaintext)
+    // NOT confidentiality against someone who already has this app. Anyone running slopterm
+    // can decode a token - that's the whole point of the feature.
+    public const string ShareSeed = "slopterm-host-share-key-v1";
+
+    /// <summary>
+    /// The fixed AES-256 key for the host-share format. SHA-256 of the public ShareSeed -
+    /// no Argon2/salt here on purpose: this isn't guarding a secret (see ShareSeed), it just
+    /// needs to be a stable 32-byte key every slopterm build derives identically.
+    /// </summary>
+    public static byte[] DeriveShareKey() => SHA256.HashData(Encoding.UTF8.GetBytes(ShareSeed));
+
     public static byte[] DeriveKey(
         string masterPassword, byte[] salt, int iterations, int memoryKb, int parallelism)
     {

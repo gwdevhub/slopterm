@@ -83,3 +83,34 @@ test('toggling "require master password" off and back on re-keys the vault corre
     })
   }, newPassword)
 })
+
+test('"keep running in the tray when closed" defaults to off and toggles + persists', async ({ page }) => {
+  await page.goto(ctx.baseUrl)
+  await gotoSection(page, 'Hosts')
+  await ensureVaultUnlocked(page)
+
+  await gotoSection(page, 'Settings')
+  await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 10_000 })
+
+  // Identified by the button's stable aria-label (its visible text flips On/Off, so the
+  // label is what stays constant across toggles).
+  const toggle = page.getByRole('button', { name: 'Keep running in the tray when closed' })
+
+  // Off by default - closing the window quits the app rather than minimizing to the tray.
+  // (This assumes the default starting state; no other test file touches close-to-tray.)
+  await expect(toggle).toHaveText('Off')
+  const before = await page.evaluate(async () => (await (await fetch('/api/settings')).json()).closeToTray)
+  expect(before).toBe(false)
+
+  // Turning it on persists to the backend...
+  await toggle.click()
+  await expect(toggle).toHaveText('On')
+  const afterOn = await page.evaluate(async () => (await (await fetch('/api/settings')).json()).closeToTray)
+  expect(afterOn).toBe(true)
+
+  // ...and turning it back off restores the shared default the rest of the suite expects.
+  await toggle.click()
+  await expect(toggle).toHaveText('Off')
+  const afterOff = await page.evaluate(async () => (await (await fetch('/api/settings')).json()).closeToTray)
+  expect(afterOff).toBe(false)
+})

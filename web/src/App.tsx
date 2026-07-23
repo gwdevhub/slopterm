@@ -60,6 +60,23 @@ function useRememberWindowPosition() {
   }, [])
 }
 
+// Replace the browser's default right-click menu with nothing, so the app reads as a native
+// window rather than a web page. Our own context menus (host cards, etc.) open via React
+// onContextMenu handlers that run first during bubbling and aren't affected by this. Text
+// fields keep their native menu, so right-click paste still works where it's actually useful
+// (pasting a share token, a private key, a password).
+function useSuppressBrowserContextMenu() {
+  useEffect(() => {
+    function onContextMenu(event: MouseEvent) {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, [contenteditable="true"]')) return
+      event.preventDefault()
+    }
+    window.addEventListener('contextmenu', onContextMenu)
+    return () => window.removeEventListener('contextmenu', onContextMenu)
+  }, [])
+}
+
 function requestToOpenTabRecord(tab: SessionTab) {
   const { request } = tab
   return {
@@ -76,6 +93,7 @@ function requestToOpenTabRecord(tab: SessionTab) {
 
 function App() {
   useRememberWindowPosition()
+  useSuppressBrowserContextMenu()
   const updateAvailable = useUpdateAvailable()
   const [section, setSection] = useState<NavSection>('hosts')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
