@@ -49,6 +49,13 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, startupComm
     // turns the keydown into onData for the copy cases), returning true lets the keydown
     // fall through to xterm's default handling, which is what actually sends \x03.
     term.attachCustomKeyEventHandler((event) => {
+      // Ctrl+T is the app's "duplicate this tab" shortcut (issue #51, handled at the
+      // window level in App.tsx). Swallow it here so a focused terminal doesn't also send
+      // the literal \x14 (DC4) control byte to the remote shell.
+      if (event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === 'KeyT') {
+        return false
+      }
+
       if (event.type !== 'keydown' || !event.ctrlKey || event.altKey || event.metaKey || event.code !== 'KeyC') {
         return true
       }

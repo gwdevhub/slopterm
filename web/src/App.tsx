@@ -115,6 +115,13 @@ function App() {
     tabsRef.current = tabs
   }, [tabs])
 
+  // Kept in a ref (like tabsRef) so the Ctrl+T keydown listener can read the currently
+  // active tab without re-subscribing on every activeTabId change.
+  const activeTabIdRef = useRef<string | null>(activeTabId)
+  useEffect(() => {
+    activeTabIdRef.current = activeTabId
+  }, [activeTabId])
+
   const retryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
   const retryDelaysRef = useRef(new Map<string, number>())
 
@@ -295,6 +302,30 @@ function App() {
       setIsConnecting(false)
     }
   }
+
+  // Ctrl+T opens another tab connected to the same server as the active one (issue #51) -
+  // a no-op when a sidebar section is showing instead of a tab (nothing to duplicate).
+  // Reuses the active tab's own ConnectRequest/kind rather than re-resolving a saved Host,
+  // so it works identically for a saved-Host, Quick Connect or Recent-originated tab. A
+  // window-level listener (not the xterm handler in TerminalView) is what covers both SSH
+  // and SFTP tabs, since SFTP tabs never mount an xterm. preventDefault suppresses the
+  // browser/OS default (new browser tab) while the app has focus.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== 't' || !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+      event.preventDefault()
+      const active = tabsRef.current.find((t) => t.id === activeTabIdRef.current)
+      if (!active) return
+      if (active.kind === 'ssh') void handleConnect(active.request, active.startupCommands)
+      else void handleConnectSftp(active.request, active.label.replace(/ \(SFTP\)$/, ''))
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+    // handleConnect/handleConnectSftp are stable enough (plain closures over setState) that
+    // re-subscribing on their identity would just churn the listener; the live tab/active-id
+    // are read from refs so this stays mounted once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function handleCloseTab(id: string) {
     const tab = tabs.find((t) => t.id === id)

@@ -108,3 +108,53 @@ test('two concurrent tabs keep separate live sessions when switching between the
   await gotoSection(page, 'Hosts')
   await deleteHost(page, 'tabs test host')
 })
+
+test('Ctrl+T duplicates the active tab into a new tab on the same host', async ({ page }) => {
+  await page.goto(ctx.baseUrl)
+  await gotoSection(page, 'Hosts')
+  await ensureVaultUnlocked(page)
+
+  await page.click('button:has-text("New host")')
+  await page.fill('#name', 'ctrl-t test host')
+  await page.fill('#host', ctx.sshHost)
+  await page.fill('#port', String(ctx.sshPort))
+  await page.fill('#username', ctx.sshUsername)
+  await page.fill('#password', ctx.sshPassword)
+  await page.click('button:has-text("Save host")')
+  await expect(page.getByText('ctrl-t test host')).toBeVisible({ timeout: 10_000 })
+
+  // Open one SSH tab from the host card, then wait for its live shell.
+  await gotoSection(page, 'Hosts')
+  await page.getByRole('button', { name: 'SSH to ctrl-t test host' }).click()
+  await expect(async () => {
+    expect(await terminalText(page)).toContain('Welcome to OpenSSH Server')
+  }).toPass({ timeout: 15_000 })
+
+  // exact: true so this matches only the tab-select buttons, not each tab's neighboring
+  // "Close {label}" button (whose accessible name contains the same label) - otherwise
+  // every tab would count twice.
+  const tabButton = page.getByRole('button', { name: `${ctx.sshUsername}@${ctx.sshHost}`, exact: true })
+  await expect(tabButton).toHaveCount(1)
+
+  // Ctrl+T should open a SECOND tab connected to the same host and make it active.
+  await page.keyboard.press('Control+t')
+  await expect(tabButton).toHaveCount(2, { timeout: 15_000 })
+  await expect(async () => {
+    expect(await terminalText(page)).toContain('Welcome to OpenSSH Server')
+  }).toPass({ timeout: 15_000 })
+
+  // Prove the new tab is a live, independent session - a marker typed here must land in
+  // it and not be a stale echo of the first tab.
+  const marker = `CTRL_T_${Date.now()}`
+  await page.keyboard.type(`echo ${marker}`)
+  await page.keyboard.press('Enter')
+  await expect(async () => {
+    expect(await terminalText(page)).toContain(marker)
+  }).toPass({ timeout: 10_000 })
+
+  // Clean up both tabs and the saved host (shared vault - see the note above).
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`, { first: true })
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
+  await gotoSection(page, 'Hosts')
+  await deleteHost(page, 'ctrl-t test host')
+})
