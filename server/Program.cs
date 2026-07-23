@@ -366,6 +366,17 @@ app.MapPost("/api/update/apply", (UpdateApplyRequest request) =>
     }
 
     var githubToken = vault.GetGithubToken();
+
+    // Captured before ApplyAsync runs, not re-read afterwards: ApplyAsync renames this
+    // process's own running executable out from under it (old -> ".old", new binary into
+    // the vacated path), and on Linux Environment.ProcessPath is backed by /proc/self/exe,
+    // which follows that rename for the rest of this process's life - verified directly
+    // (renamed a running process's own exe file, then placed a new file at the original
+    // path; /proc/<pid>/exe kept reporting the renamed-away ".old" path, never the new
+    // file). Re-reading Environment.ProcessPath after the swap would relaunch the old,
+    // backed-up binary instead of the freshly installed one.
+    var exePathForRestart = Environment.ProcessPath!;
+
     _ = Task.Run(async () =>
     {
         try
@@ -396,7 +407,7 @@ app.MapPost("/api/update/apply", (UpdateApplyRequest request) =>
             // process, so the new instance never races the old one for the same port.
             await app.StopAsync();
 
-            Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false });
+            Process.Start(new ProcessStartInfo(exePathForRestart) { UseShellExecute = false });
 
             // Deliberately NOT relying on this background task's completion unblocking
             // Program.cs's own `await app.WaitForShutdownAsync()` and falling through
