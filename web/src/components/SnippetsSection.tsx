@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { createSnippet, deleteSnippet, listSnippets, type SavedSnippet } from '../lib/api'
+import { createSnippet, deleteSnippet, listSnippets, updateSnippet, type SavedSnippet } from '../lib/api'
 import { VaultGate } from './VaultGate'
 
 const inputClasses =
@@ -22,6 +22,10 @@ function SnippetsList() {
   const [snippets, setSnippets] = useState<SavedSnippet[]>([])
   const [name, setName] = useState('')
   const [command, setCommand] = useState('')
+  // Set while the form below is editing an existing snippet rather than creating a new
+  // one - the PUT endpoint already existed (same pattern as hosts before someone wired
+  // that one up), this was just missing a frontend caller/UI entirely.
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -32,9 +36,26 @@ function SnippetsList() {
     listSnippets().then(setSnippets)
   }
 
-  async function handleAdd(event: FormEvent) {
+  function handleEdit(s: SavedSnippet) {
+    setEditingId(s.id)
+    setName(s.snippet.name)
+    setCommand(s.snippet.command)
+  }
+
+  function handleCancelEdit() {
+    setEditingId(null)
+    setName('')
+    setCommand('')
+  }
+
+  async function handleSubmit(event: FormEvent) {
     event.preventDefault()
-    await createSnippet({ name, command })
+    if (editingId) {
+      await updateSnippet(editingId, { name, command })
+    } else {
+      await createSnippet({ name, command })
+    }
+    setEditingId(null)
     setName('')
     setCommand('')
     refresh()
@@ -42,6 +63,7 @@ function SnippetsList() {
 
   async function handleDelete(id: string) {
     await deleteSnippet(id)
+    if (editingId === id) handleCancelEdit()
     refresh()
   }
 
@@ -60,7 +82,9 @@ function SnippetsList() {
           <li key={s.id} className="flex items-center justify-between gap-2 rounded border border-slate-700 bg-slate-900 p-3">
             <div className="min-w-0">
               <p className="truncate font-medium text-slate-100">{s.snippet.name}</p>
-              <p className="truncate font-mono text-xs text-slate-400">{s.snippet.command}</p>
+              <p className="truncate font-mono text-xs text-slate-400" title={s.snippet.command}>
+                {s.snippet.command}
+              </p>
             </div>
             <div className="flex shrink-0 gap-2">
               <button
@@ -69,6 +93,13 @@ function SnippetsList() {
                 className="rounded bg-indigo-600 px-3 py-1 text-sm text-white hover:bg-indigo-500"
               >
                 {copiedId === s.id ? 'Copied!' : 'Copy'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleEdit(s)}
+                className="rounded bg-slate-800 px-3 py-1 text-sm text-slate-300 hover:bg-slate-700"
+              >
+                Edit
               </button>
               <button
                 type="button"
@@ -83,8 +114,8 @@ function SnippetsList() {
         {snippets.length === 0 && <p className="text-sm text-slate-500">No saved snippets yet.</p>}
       </ul>
 
-      <form onSubmit={handleAdd} className="flex flex-col gap-2 border-t border-slate-800 pt-4">
-        <h3 className="text-sm font-medium text-slate-300">Add a snippet</h3>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-2 border-t border-slate-800 pt-4">
+        <h3 className="text-sm font-medium text-slate-300">{editingId ? 'Edit snippet' : 'Add a snippet'}</h3>
         <input className={inputClasses} placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
         <textarea
           className={`${inputClasses} h-20 font-mono text-xs`}
@@ -93,9 +124,20 @@ function SnippetsList() {
           onChange={(e) => setCommand(e.target.value)}
           required
         />
-        <button type="submit" className="rounded bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500">
-          Save snippet
-        </button>
+        <div className="flex gap-2">
+          <button type="submit" className="flex-1 rounded bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500">
+            {editingId ? 'Save changes' : 'Save snippet'}
+          </button>
+          {editingId && (
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              className="rounded bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </form>
     </div>
   )

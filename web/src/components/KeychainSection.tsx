@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
-import { createKeychainEntry, deleteKeychainEntry, listKeychainEntries, type SavedKeychainEntry } from '../lib/api'
+import {
+  createKeychainEntry,
+  deleteKeychainEntry,
+  listKeychainEntries,
+  updateKeychainEntry,
+  type SavedKeychainEntry,
+} from '../lib/api'
 import { VaultGate } from './VaultGate'
 
 const inputClasses =
@@ -21,6 +27,12 @@ function KeychainList() {
   const [privateKey, setPrivateKey] = useState('')
   const [passphrase, setPassphrase] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // Set while the form below is editing an existing entry rather than creating a new
+  // one - the PUT endpoint already existed (same pattern as hosts before someone wired
+  // that one up), this was just missing a frontend caller/UI entirely. Safe to pre-fill
+  // the actual key/passphrase here since listKeychainEntries() already returns them in
+  // full - ConnectionForm's own "use a saved key" dropdown already relies on that.
+  const [editingId, setEditingId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -38,11 +50,32 @@ function KeychainList() {
     setPrivateKey(await file.text())
   }
 
-  async function handleAdd(event: FormEvent) {
+  function handleEdit(entry: SavedKeychainEntry) {
+    setEditingId(entry.id)
+    setName(entry.entry.name)
+    setPrivateKey(entry.entry.privateKey)
+    setPassphrase(entry.entry.passphrase ?? '')
+    setError(null)
+  }
+
+  function handleCancelEdit() {
+    setEditingId(null)
+    setName('')
+    setPrivateKey('')
+    setPassphrase('')
+    setError(null)
+  }
+
+  async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     setError(null)
     try {
-      await createKeychainEntry({ name, privateKey, passphrase: passphrase || undefined })
+      if (editingId) {
+        await updateKeychainEntry(editingId, { name, privateKey, passphrase: passphrase || undefined })
+      } else {
+        await createKeychainEntry({ name, privateKey, passphrase: passphrase || undefined })
+      }
+      setEditingId(null)
       setName('')
       setPrivateKey('')
       setPassphrase('')
@@ -54,6 +87,7 @@ function KeychainList() {
 
   async function handleDelete(id: string) {
     await deleteKeychainEntry(id)
+    if (editingId === id) handleCancelEdit()
     refresh()
   }
 
@@ -65,20 +99,29 @@ function KeychainList() {
         {entries.map((e) => (
           <li key={e.id} className="flex items-center justify-between gap-2 rounded border border-slate-700 bg-slate-900 p-3">
             <p className="truncate font-medium text-slate-100">{e.entry.name}</p>
-            <button
-              type="button"
-              onClick={() => handleDelete(e.id)}
-              className="shrink-0 rounded bg-slate-800 px-3 py-1 text-sm text-slate-300 hover:bg-slate-700"
-            >
-              Delete
-            </button>
+            <div className="flex shrink-0 gap-2">
+              <button
+                type="button"
+                onClick={() => handleEdit(e)}
+                className="rounded bg-slate-800 px-3 py-1 text-sm text-slate-300 hover:bg-slate-700"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDelete(e.id)}
+                className="rounded bg-slate-800 px-3 py-1 text-sm text-slate-300 hover:bg-slate-700"
+              >
+                Delete
+              </button>
+            </div>
           </li>
         ))}
         {entries.length === 0 && <p className="text-sm text-slate-500">No saved keys yet.</p>}
       </ul>
 
-      <form onSubmit={handleAdd} className="flex flex-col gap-2 border-t border-slate-800 pt-4">
-        <h3 className="text-sm font-medium text-slate-300">Add a key</h3>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-2 border-t border-slate-800 pt-4">
+        <h3 className="text-sm font-medium text-slate-300">{editingId ? 'Edit key' : 'Add a key'}</h3>
         <input className={inputClasses} placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
         <div className="flex items-center justify-between">
           <label className="text-xs tracking-wide text-slate-500 uppercase" htmlFor="keychain-private-key">Private key</label>
@@ -107,9 +150,20 @@ function KeychainList() {
           onChange={(e) => setPassphrase(e.target.value)}
         />
         {error && <p className="text-sm text-red-400">{error}</p>}
-        <button type="submit" className="rounded bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500">
-          Save key
-        </button>
+        <div className="flex gap-2">
+          <button type="submit" className="flex-1 rounded bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500">
+            {editingId ? 'Save changes' : 'Save key'}
+          </button>
+          {editingId && (
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              className="rounded bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </form>
     </div>
   )

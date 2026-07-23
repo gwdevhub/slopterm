@@ -257,7 +257,14 @@ spirit of Termius, targeting Linux, macOS and Windows.
     active session tab are still mutually exclusive in the main content area (`App.tsx`
     only renders `SectionContent` when `activeTabId` is null), so there's no terminal
     visible to inject into while this section is showing. Direct injection is a natural
-    follow-up if the section content and an open session ever coexist on screen.
+    follow-up if the section content and an open session ever coexist on screen. Editable,
+    not just create/delete - clicking a list item's "Edit" pre-fills the same Name/Command
+    form the "Add a snippet" flow already uses (an `editingId` flips its submit between
+    `createSnippet`/`updateSnippet` and its label between "Save snippet"/"Save changes",
+    plus a Cancel button to discard); `PUT /api/vault/snippets/{id}` already existed on the
+    backend (the same generic per-record-file CRUD every vault list uses) but had no
+    frontend caller at all until this, so there was genuinely no way to fix a typo without
+    deleting and re-creating the whole entry.
   - **Startup snippets per host** (`HostRecord.StartupSnippetIds`, `ConnectionForm.tsx`'s
     checklist, used by both `HostModal`'s new-host and edit-host modes): a saved host can
     have one or more Snippets attached, sent to the shell in order right after that host's
@@ -435,7 +442,12 @@ spirit of Termius, targeting Linux, macOS and Windows.
   fetch just means the "use a saved key" dropdown doesn't render, it never blocks
   connecting with a pasted/browsed key. No new trust boundary is crossed by reusing a key
   this way - `GET /api/vault/hosts` already returns fully decrypted secrets to the
-  authenticated frontend today.
+  authenticated frontend today. Editable, not just create/delete, same as Snippets above -
+  the list only ever shows an entry's *name*, but clicking "Edit" safely pre-fills the
+  actual private key/passphrase into the form too (not just the name), since
+  `listKeychainEntries()` already returns them in full to this same authenticated frontend
+  (`ConnectionForm`'s own "use a saved key" dropdown already relied on that); Cancel
+  discards without calling `updateKeychainEntry`.
 - **Sync is a hard requirement**, not a stretch goal. Design is zero-knowledge: only the
   AES-GCM ciphertext ever leaves the device, the master key/password never does. Start
   with a git-backed sync backend (push/pull the encrypted blob to a private repo or gist)

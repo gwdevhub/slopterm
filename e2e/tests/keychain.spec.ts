@@ -43,6 +43,43 @@ test('saves a key in the Keychain and reuses it from the shared connection form'
   await expect(page.getByText('No saved keys yet.')).toBeVisible({ timeout: 10_000 })
 })
 
+test('a keychain entry can be edited in place, and Cancel discards unsaved changes', async ({ page }) => {
+  await page.goto(ctx.baseUrl)
+  await gotoSection(page, 'Keychain')
+  await ensureVaultUnlocked(page)
+
+  await page.fill('input[placeholder=Name]', 'edit test key')
+  await page.fill('#keychain-private-key', FAKE_KEY)
+  await page.fill('input[placeholder="Passphrase (optional)"]', 'original-passphrase')
+  await page.click('button:has-text("Save key")')
+  await expect(page.getByText('edit test key')).toBeVisible({ timeout: 10_000 })
+
+  // Edit pre-fills the real key/passphrase (listKeychainEntries already returns them in
+  // full - ConnectionForm's own "use a saved key" dropdown already relies on that), not
+  // just the name. Cancel must discard any changes made while it was open.
+  await page.click('button:has-text("Edit")')
+  await expect(page.locator('#keychain-private-key')).toHaveValue(FAKE_KEY)
+  await expect(page.locator('input[placeholder="Passphrase (optional)"]')).toHaveValue('original-passphrase')
+  await page.fill('input[placeholder=Name]', 'edit test key SHOULD NOT SAVE')
+  await page.click('button:has-text("Cancel")')
+  await expect(page.getByText('edit test key', { exact: true })).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText('edit test key SHOULD NOT SAVE')).not.toBeVisible()
+
+  // Save changes does persist.
+  await page.click('button:has-text("Edit")')
+  await page.fill('input[placeholder=Name]', 'edit test key RENAMED')
+  await page.fill('input[placeholder="Passphrase (optional)"]', 'new-passphrase')
+  await page.click('button:has-text("Save changes")')
+  await expect(page.getByText('edit test key RENAMED')).toBeVisible({ timeout: 10_000 })
+
+  await page.click('button:has-text("Edit")')
+  await expect(page.locator('input[placeholder="Passphrase (optional)"]')).toHaveValue('new-passphrase')
+  await page.click('button:has-text("Cancel")')
+
+  await page.click('button:has-text("Delete")')
+  await expect(page.getByText('No saved keys yet.')).toBeVisible({ timeout: 10_000 })
+})
+
 test('browses a key file and can opt in to saving it to the Keychain', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')

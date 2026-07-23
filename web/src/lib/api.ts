@@ -176,6 +176,15 @@ export async function createSnippet(snippet: SnippetRecord): Promise<{ id: strin
   return res.json()
 }
 
+export async function updateSnippet(id: string, snippet: SnippetRecord): Promise<void> {
+  const res = await fetch(`/api/vault/snippets/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(snippet),
+  })
+  await throwOnError(res)
+}
+
 export async function deleteSnippet(id: string): Promise<void> {
   await fetch(`/api/vault/snippets/${id}`, { method: 'DELETE' })
 }
@@ -206,6 +215,15 @@ export async function createKeychainEntry(entry: KeychainEntryRecord): Promise<{
   })
   await throwOnError(res)
   return res.json()
+}
+
+export async function updateKeychainEntry(id: string, entry: KeychainEntryRecord): Promise<void> {
+  const res = await fetch(`/api/vault/keychain/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(entry),
+  })
+  await throwOnError(res)
 }
 
 export async function deleteKeychainEntry(id: string): Promise<void> {

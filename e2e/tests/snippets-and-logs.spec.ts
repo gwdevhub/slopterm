@@ -36,6 +36,37 @@ test('saves a snippet and copies it to the clipboard', async ({ page, context })
   await expect(page.getByText('No saved snippets yet.')).toBeVisible({ timeout: 10_000 })
 })
 
+test('a snippet can be edited in place, and Cancel discards unsaved changes', async ({ page }) => {
+  await page.goto(ctx.baseUrl)
+  await gotoSection(page, 'Snippets')
+  await ensureVaultUnlocked(page)
+
+  await page.fill('input[placeholder=Name]', 'edit test snippet')
+  await page.fill('textarea[placeholder=Command]', 'echo original')
+  await page.click('button:has-text("Save snippet")')
+  await expect(page.getByText('edit test snippet')).toBeVisible({ timeout: 10_000 })
+
+  // Cancel discards - the form pre-fills from the existing snippet, but backing out must
+  // not touch the saved value.
+  await page.click('button:has-text("Edit")')
+  await expect(page.locator('input[placeholder=Name]')).toHaveValue('edit test snippet')
+  await expect(page.locator('textarea[placeholder=Command]')).toHaveValue('echo original')
+  await page.fill('textarea[placeholder=Command]', 'echo should not be saved')
+  await page.click('button:has-text("Cancel")')
+  await expect(page.getByText('echo original')).toBeVisible()
+
+  // Save changes does persist.
+  await page.click('button:has-text("Edit")')
+  await page.fill('input[placeholder=Name]', 'edit test snippet RENAMED')
+  await page.fill('textarea[placeholder=Command]', 'echo updated')
+  await page.click('button:has-text("Save changes")')
+  await expect(page.getByText('edit test snippet RENAMED')).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText('echo updated')).toBeVisible()
+
+  await page.click('button:has-text("Delete")')
+  await expect(page.getByText('No saved snippets yet.')).toBeVisible({ timeout: 10_000 })
+})
+
 test('records connection attempts in the logs section', async ({ page }) => {
   await page.goto(ctx.baseUrl)
 
