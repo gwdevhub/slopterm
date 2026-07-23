@@ -203,8 +203,11 @@ public sealed class ForwardingService : IDisposable
             lock (_lock)
             {
                 _forwards[ruleId] = new ActiveForward(rule);
-                if (_monitor is null)
+                if (_monitor is null || _monitor.IsCompleted)
                 {
+                    // The previous monitor task may have died (e.g. an unexpected exception) -
+                    // restart it rather than leaving this host's forwards unattended forever.
+                    _cts?.Cancel();
                     _cts = new CancellationTokenSource();
                     var token = _cts.Token;
                     _monitor = Task.Run(() => MonitorLoop(token));
@@ -270,69 +273,92 @@ public sealed class ForwardingService : IDisposable
             var backoff = TimeSpan.FromSeconds(2);
             while (!token.IsCancellationRequested)
             {
-                bool needsConnect;
-                lock (_lock)
+                try
                 {
-                    needsConnect = _forwards.Count > 0 && _client is not { IsConnected: true };
+                    RunMonitorIteration(token, ref backoff);
                 }
-
-                if (needsConnect)
+                catch (Exception ex) when (!token.IsCancellationRequested)
                 {
-                    SshClient? fresh = null;
-                    try
+                    // Anything unexpected here (e.g. SSH.NET's IsConnected throwing once a
+                    // session has died from a timeout) must never end this loop - a dead host
+                    // forward that nothing retries is worse than a noisy retry.
+                    lock (_lock)
                     {
-                        fresh = new SshClient(SshConnectionInfoFactory.Create(_request))
-                        {
-                            KeepAliveInterval = TimeSpan.FromSeconds(30),
-                        };
-                        fresh.Connect();
-                        lock (_lock)
-                        {
-                            DisposeClientLocked();
-                            _client = fresh;
-                            _connectionState = "connected";
-                            _connectionError = null;
-                            // The old client's ports died with it - drop them so they get
-                            // freshly added below.
-                            foreach (var forward in _forwards.Values)
-                            {
-                                forward.Port = null;
-                                forward.Error = null;
-                            }
-                        }
-
-                        fresh = null; // ownership handed to _client
-                        backoff = TimeSpan.FromSeconds(2);
+                        DisposeClientLocked();
+                        _connectionState = "error";
+                        _connectionError = ex.Message;
                     }
-                    catch (Exception ex)
-                    {
-                        fresh?.Dispose();
-                        lock (_lock)
-                        {
-                            _connectionState = "error";
-                            _connectionError = ex.Message;
-                        }
 
-                        Wait(token, backoff);
-                        backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 1.5, 30));
-                        continue;
-                    }
+                    Wait(token, backoff);
+                    backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 1.5, 30));
                 }
-
-                lock (_lock)
-                {
-                    if (_client is { IsConnected: true })
-                    {
-                        foreach (var (id, _) in _forwards)
-                        {
-                            ApplyForwardLocked(id);
-                        }
-                    }
-                }
-
-                _wake.Wait(TimeSpan.FromSeconds(5), token);
-                _wake.Reset();
             }
+        }
+
+        private void RunMonitorIteration(CancellationToken token, ref TimeSpan backoff)
+        {
+            bool needsConnect;
+            lock (_lock)
+            {
+                needsConnect = _forwards.Count > 0 && _client is not { IsConnected: true };
+            }
+
+            if (needsConnect)
+            {
+                SshClient? fresh = null;
+                try
+                {
+                    fresh = new SshClient(SshConnectionInfoFactory.Create(_request))
+                    {
+                        KeepAliveInterval = TimeSpan.FromSeconds(30),
+                    };
+                    fresh.Connect();
+                    lock (_lock)
+                    {
+                        DisposeClientLocked();
+                        _client = fresh;
+                        _connectionState = "connected";
+                        _connectionError = null;
+                        // The old client's ports died with it - drop them so they get
+                        // freshly added below.
+                        foreach (var forward in _forwards.Values)
+                        {
+                            forward.Port = null;
+                            forward.Error = null;
+                        }
+                    }
+
+                    fresh = null; // ownership handed to _client
+                    backoff = TimeSpan.FromSeconds(2);
+                }
+                catch (Exception ex)
+                {
+                    fresh?.Dispose();
+                    lock (_lock)
+                    {
+                        _connectionState = "error";
+                        _connectionError = ex.Message;
+                    }
+
+                    Wait(token, backoff);
+                    backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 1.5, 30));
+                    return;
+                }
+            }
+
+            lock (_lock)
+            {
+                if (_client is { IsConnected: true })
+                {
+                    foreach (var (id, _) in _forwards)
+                    {
+                        ApplyForwardLocked(id);
+                    }
+                }
+            }
+
+            _wake.Wait(TimeSpan.FromSeconds(5), token);
+            _wake.Reset();
         }
 
         private void ApplyForwardLocked(string ruleId)
