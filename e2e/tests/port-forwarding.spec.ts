@@ -33,7 +33,9 @@ test('port forwarding: create a rule through the section and see it listed', asy
   })
 
   await gotoSection(page, 'Port Forwarding')
-  await expect(page.getByRole('heading', { name: 'Port Forwarding' })).toBeVisible()
+  // The section has no heading - it's the Hosts-style toolbar + card grid (see CardGrid),
+  // so the "New port forward" button is what confirms it rendered.
+  await expect(page.getByRole('button', { name: 'New port forward' })).toBeVisible()
 
   // Add a local forward through the form (opened from the "New port forward" button).
   await page.getByRole('button', { name: 'New port forward' }).click()
