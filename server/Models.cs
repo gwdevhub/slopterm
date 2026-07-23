@@ -14,6 +14,13 @@ public sealed class ConnectRequest
 
     public int Columns { get; set; } = 80;
     public int Rows { get; set; } = 24;
+
+    /// <summary>
+    /// The saved host's id, when this connection is to one (null for Quick Connect / Recent).
+    /// Lets the connect endpoint bring that host's port forwards up automatically - see
+    /// ForwardingService.
+    /// </summary>
+    public string? HostId { get; set; }
 }
 
 public sealed class VaultPasswordRequest

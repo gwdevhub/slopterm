@@ -56,6 +56,31 @@ public sealed class CredentialRecord
     public string? Passphrase { get; set; } // only meaningful when Kind is "privateKey"
 }
 
+/// <summary>
+/// An SSH port-forward rule that tunnels through a saved host (HostId). Uniform bind ->
+/// destination shape for both directions, matching SSH.NET's ForwardedPortLocal/Remote
+/// (bound host/port, then the host/port the other end connects to):
+///   - "local":  bind BindAddress:BindPort on THIS machine; connections tunnel out and the
+///     SSH server connects them to DestinationAddress:DestinationPort (as it sees them).
+///   - "remote": the SSH SERVER binds BindAddress:BindPort; connections tunnel back here and
+///     we connect them to DestinationAddress:DestinationPort locally. This is the xdebug
+///     case - server binds 127.0.0.1:9003, forwarded back to our 127.0.0.1:9003.
+/// AutoStart brings the rule up in the background when the app launches; every rule also
+/// comes up automatically when a terminal/SFTP session to its host is opened (see
+/// ForwardingService).
+/// </summary>
+public sealed class PortForwardRecord
+{
+    public required string HostId { get; set; }
+    public required string Type { get; set; } // "local" | "remote"
+    public string BindAddress { get; set; } = "127.0.0.1";
+    public required int BindPort { get; set; }
+    public required string DestinationAddress { get; set; }
+    public required int DestinationPort { get; set; }
+    public string? Description { get; set; }
+    public bool AutoStart { get; set; }
+}
+
 /// <summary>A saved, reusable command - copyable into a terminal (see AGENTS.md's Snippets note).</summary>
 public sealed class SnippetRecord
 {

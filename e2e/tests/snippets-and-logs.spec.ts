@@ -21,6 +21,7 @@ test('saves a snippet and copies it to the clipboard', async ({ page, context })
 
   await expect(page.getByText('No saved snippets yet.')).toBeVisible({ timeout: 10_000 })
 
+  await page.click('button:has-text("New snippet")')
   await page.fill('input[placeholder=Name]', 'disk usage')
   await page.fill('textarea[placeholder=Command]', 'df -h')
   await page.click('button:has-text("Save snippet")')
@@ -41,6 +42,7 @@ test('a snippet can be edited in place, and Cancel discards unsaved changes', as
   await gotoSection(page, 'Snippets')
   await ensureVaultUnlocked(page)
 
+  await page.click('button:has-text("New snippet")')
   await page.fill('input[placeholder=Name]', 'edit test snippet')
   await page.fill('textarea[placeholder=Command]', 'echo original')
   await page.click('button:has-text("Save snippet")')

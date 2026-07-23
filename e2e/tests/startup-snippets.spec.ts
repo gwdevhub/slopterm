@@ -27,10 +27,12 @@ test('a host can run its attached startup snippets automatically right after con
   await ensureVaultUnlocked(page)
   const markerA = `startupmarkerA${Date.now()}`
   const markerB = `startupmarkerB${Date.now()}`
+  await page.click('button:has-text("New snippet")')
   await page.fill('input[placeholder=Name]', 'startup snippet A')
   await page.fill('textarea[placeholder=Command]', `echo ${markerA}`)
   await page.click('button:has-text("Save snippet")')
   await expect(page.getByText('startup snippet A')).toBeVisible({ timeout: 10_000 })
+  await page.click('button:has-text("New snippet")')
   await page.fill('input[placeholder=Name]', 'startup snippet B')
   await page.fill('textarea[placeholder=Command]', `echo ${markerB}`)
   await page.click('button:has-text("Save snippet")')

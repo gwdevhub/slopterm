@@ -21,6 +21,7 @@ test('saves a key in the Keychain and reuses it from the shared connection form'
 
   await expect(page.getByText('No saved keys yet.')).toBeVisible({ timeout: 10_000 })
 
+  await page.click('button:has-text("New key")')
   await page.fill('input[placeholder=Name]', 'e2e laptop key')
   await page.fill('#keychain-private-key', FAKE_KEY)
   await page.click('button:has-text("Save key")')
@@ -48,6 +49,7 @@ test('a keychain entry can be edited in place, and Cancel discards unsaved chang
   await gotoSection(page, 'Keychain')
   await ensureVaultUnlocked(page)
 
+  await page.click('button:has-text("New key")')
   await page.fill('input[placeholder=Name]', 'edit test key')
   await page.fill('#keychain-private-key', FAKE_KEY)
   await page.fill('input[placeholder="Passphrase (optional)"]', 'original-passphrase')
