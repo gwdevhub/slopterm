@@ -94,6 +94,15 @@ export function PlusIcon(props: IconProps) {
   )
 }
 
+export function ArrowLeftIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="20" y1="12" x2="4" y2="12" />
+      <polyline points="10,6 4,12 10,18" />
+    </svg>
+  )
+}
+
 export function MenuIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

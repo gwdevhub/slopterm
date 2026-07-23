@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
-import { createKeychainEntry, listKeychainEntries, listSnippets, type SavedKeychainEntry, type SavedSnippet } from '../lib/api'
+import { createKeychainEntry, listHosts, listKeychainEntries, listSnippets, type SavedKeychainEntry, type SavedSnippet } from '../lib/api'
 
 export interface ConnectionFormValues {
   name?: string
@@ -11,6 +11,7 @@ export interface ConnectionFormValues {
   privateKey?: string
   passphrase?: string
   startupSnippetIds?: string[]
+  groupName?: string
 }
 
 interface ConnectionFormProps {
@@ -60,6 +61,8 @@ export function ConnectionForm({
 
   const [snippets, setSnippets] = useState<SavedSnippet[]>([])
   const [startupSnippetIds, setStartupSnippetIds] = useState<string[]>(initialValues?.startupSnippetIds ?? [])
+  const [groupName, setGroupName] = useState(initialValues?.groupName ?? '')
+  const [existingGroupNames, setExistingGroupNames] = useState<string[]>([])
 
   useEffect(() => {
     listKeychainEntries()
@@ -67,13 +70,19 @@ export function ConnectionForm({
       .catch(() => setKeychainEntries([]))
   }, [])
 
-  // Only the "new host" form (includeName) saves a host at all, so only it needs this -
-  // Quick Connect has nothing to attach a startup snippet to.
+  // Only the "new host"/"edit host" form (includeName) saves a host at all, so only it
+  // needs these - Quick Connect has nothing to attach a startup snippet or group to.
   useEffect(() => {
     if (!includeName) return
     listSnippets()
       .then(setSnippets)
       .catch(() => setSnippets([]))
+    listHosts()
+      .then((hosts) => {
+        const names = new Set(hosts.map((h) => h.host.parentGroupId).filter((name): name is string => !!name))
+        setExistingGroupNames([...names])
+      })
+      .catch(() => setExistingGroupNames([]))
   }, [includeName])
 
   function toggleStartupSnippet(id: string) {
@@ -119,6 +128,7 @@ export function ConnectionForm({
       privateKey: authMethod === 'privateKey' ? privateKey : undefined,
       passphrase: authMethod === 'privateKey' ? passphrase : undefined,
       startupSnippetIds: includeName ? startupSnippetIds : undefined,
+      groupName: includeName ? groupName.trim() || undefined : undefined,
     })
   }
 
@@ -128,6 +138,25 @@ export function ConnectionForm({
         <div>
           <label className={labelClasses} htmlFor="name">Name</label>
           <input id="name" className={inputClasses} value={name} onChange={(e) => setName(e.target.value)} required />
+        </div>
+      )}
+
+      {includeName && (
+        <div>
+          <label className={labelClasses} htmlFor="group">Group (optional)</label>
+          <input
+            id="group"
+            className={inputClasses}
+            list="existing-group-names"
+            value={groupName}
+            onChange={(e) => setGroupName(e.target.value)}
+            placeholder="e.g. Production servers"
+          />
+          <datalist id="existing-group-names">
+            {existingGroupNames.map((n) => (
+              <option key={n} value={n} />
+            ))}
+          </datalist>
         </div>
       )}
 
