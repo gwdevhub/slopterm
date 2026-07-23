@@ -183,6 +183,18 @@ export function SftpTabIcon(props: IconProps) {
   )
 }
 
+// A chat bubble with a small four-point spark - the toggle glyph for the in-terminal AI
+// agent bar. Outline only, like every other icon here; the caller sizes/colors it via
+// className.
+export function AiAgentIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 5.5 C4 4.7 4.7 4 5.5 4 H18.5 C19.3 4 20 4.7 20 5.5 V14.5 C20 15.3 19.3 16 18.5 16 H10 L6 19.5 V16 H5.5 C4.7 16 4 15.3 4 14.5 Z" />
+      <path d="M13 7 L13.9 9.1 L16 10 L13.9 10.9 L13 13 L12.1 10.9 L10 10 L12.1 9.1 Z" />
+    </svg>
+  )
+}
+
 // Window-control glyphs for the custom (chromeless) title bar - thin lines so they read
 // like native Windows caption buttons rather than the app's chunkier nav icons.
 const thin = { ...base, strokeWidth: 1.3 }

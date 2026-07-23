@@ -1,3 +1,5 @@
+using Slopterm.Server.Ai;
+
 namespace Slopterm.Server.Vault;
 
 /// <summary>vault.json - never contains secrets, just what's needed to derive/verify the key.</summary>
@@ -183,6 +185,22 @@ public sealed class GithubTokenRecord
 }
 
 /// <summary>
+/// One AI agent conversation transcript (ai-chats/{id}.json). A host can have MANY of
+/// these - the bar lists them per host and any can be reopened; connecting resumes the
+/// most recent. Vault-encrypted like every other record - transcripts quote terminal
+/// output, which can contain anything the session showed. Only the display transcript is
+/// stored; the model-facing history is rebuilt from it on load. HostKey/Title are nullable
+/// because records written before multi-chat existed (id = hash of the host key, no
+/// metadata) are still adopted - see AgentConversation.EnsureLoaded.
+/// </summary>
+public sealed class AiChatRecord
+{
+    public string? HostKey { get; set; } // "user@host:port", lowercase - which host's list this belongs to
+    public string? Title { get; set; }   // first user message, truncated - the list label
+    public required List<ChatMessage> Messages { get; set; }
+}
+
+/// <summary>
 /// settings.json - plaintext, never encrypted, lives alongside vault.json. Must be
 /// readable/writable regardless of whether a vault exists yet or is unlocked, since it's
 /// what decides whether to prompt for a master password at all (see AGENTS.md's Settings
@@ -200,4 +218,13 @@ public sealed class AppSettings
     // running behind its tray icon (see AppWindowManager's window-closing handler). Only
     // has an effect where that native window/tray model exists (currently Windows).
     public bool CloseToTray { get; set; }
+
+    // The in-terminal AI agent talks to a local OpenAI-compatible server (Ollama's default
+    // port out of the box). Plaintext settings, not vault secrets: a loopback URL and a model
+    // name are no more sensitive than the rest of settings.json, and there's no key at all in
+    // the local-first setup. Initializers are the effective defaults for a settings.json
+    // written before these fields existed.
+    public string AiBaseUrl { get; set; } = "http://127.0.0.1:11434/v1";
+
+    public string AiModel { get; set; } = "gemma4:12b";
 }

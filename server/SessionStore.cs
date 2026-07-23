@@ -27,4 +27,25 @@ public sealed class SessionStore<T> where T : class, IDisposable
 
         return null;
     }
+
+    /// <summary>
+    /// The quit path: disposing every session unblocks the blocking shell-read pumps holding
+    /// the terminal WebSocket handlers open, so shutdown never waits on a live connection.
+    /// Best-effort per session - one connection failing to tear down cleanly must not keep
+    /// the rest (or the process) alive.
+    /// </summary>
+    public void DisposeAll()
+    {
+        foreach (var id in _sessions.Keys)
+        {
+            try
+            {
+                Remove(id);
+            }
+            catch
+            {
+                // best-effort teardown on the way out
+            }
+        }
+    }
 }

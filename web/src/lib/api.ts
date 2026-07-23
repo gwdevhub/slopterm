@@ -76,6 +76,14 @@ export function terminalSocketUrl(sessionId: string): string {
   return `${protocol}//${window.location.host}/ws/terminal/${sessionId}`
 }
 
+// The AI-agent bottom bar's streaming channel - a sibling of terminalSocketUrl using the
+// exact same same-origin construction (so the auth cookie rides the handshake), pointed at
+// /ws/agent/{sessionId} instead. See AgentBar.tsx and the pinned agent WS contract.
+export function agentSocketUrl(sessionId: string): string {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}/ws/agent/${sessionId}`
+}
+
 export interface VaultStatus {
   exists: boolean
   unlocked: boolean
@@ -482,6 +490,105 @@ export async function setGithubToken(token: string | null): Promise<GithubTokenS
   await throwOnError(res)
   return res.json()
 }
+
+// --- AI agent ---------------------------------------------------------------------------
+// The agent talks to a local OpenAI-compatible server (Ollama by default) - a base URL and
+// model name in plaintext settings, no key or account anywhere.
+
+export interface AiSettings {
+  baseUrl: string
+  model: string
+}
+
+export async function getAiSettings(): Promise<AiSettings> {
+  const res = await fetch('/api/settings/ai')
+  await throwOnError(res)
+  return res.json()
+}
+
+// Empty strings reset either field to its default (local Ollama / its default model).
+export async function setAiSettings(settings: AiSettings): Promise<AiSettings> {
+  const res = await fetch('/api/settings/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+// Live probe: is the configured AI server up, is the configured model actually pulled, and
+// which models are available to switch to? Drives the agent bar's status dot + model picker
+// and the Settings readout. `models` is empty when the server is unreachable.
+export interface AiStatus {
+  reachable: boolean
+  modelAvailable: boolean
+  baseUrl: string
+  model: string
+  models: string[]
+}
+
+export async function getAiStatus(): Promise<AiStatus> {
+  const res = await fetch('/api/ai/status')
+  await throwOnError(res)
+  return res.json()
+}
+
+// --- Agent WebSocket wire shapes --------------------------------------------------------
+// One JSON object per text frame, camelCase, no subprotocol (see agentSocketUrl). These
+// mirror the pinned agent WS contract verbatim.
+
+// The three permission tiers: chat = answers only (no shell access), suggest = may TYPE a
+// command for the user to confirm with Enter, auto = may execute, but only after a
+// per-command AI safety check (unsafe commands fall back to suggest behavior).
+export type AgentMode = 'chat' | 'suggest' | 'auto'
+
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  // Typed loosely: persisted transcripts can carry mode values from older builds.
+  mode: string
+  // Inline tool-activity chips shown under an assistant bubble; always [] for user messages.
+  activities: { tool: string; summary: string }[]
+}
+
+// One entry in the per-host saved-conversations list. `active` marks the conversation the
+// bar is currently showing/continuing.
+export interface ChatSummary {
+  id: string
+  title: string
+  updatedAt: string
+  messageCount: number
+  active: boolean
+}
+
+// Server -> client frames. Discriminated on `type` so the AgentBar reducer can switch
+// exhaustively.
+export type AgentServerEvent =
+  | { type: 'history'; messages: ChatMessage[] }
+  | { type: 'chats'; chats: ChatSummary[] }
+  | { type: 'turn_start'; id: string; mode: string }
+  | { type: 'text_delta'; id: string; text: string }
+  | { type: 'tool_activity'; id: string; tool: string; summary: string }
+  | {
+      type: 'turn_done'
+      id: string
+      stopReason: 'end_turn' | 'stopped' | 'refusal' | 'error'
+      error?: string
+    }
+  | { type: 'error'; message: string }
+
+// Client -> server frames. open_chat/new_chat/delete_chat manage the per-host saved
+// conversations (new_chat keeps the outgoing one in the list; clear deletes it).
+export type AgentClientMessage =
+  | { type: 'send'; mode: AgentMode; text: string }
+  | { type: 'stop' }
+  | { type: 'clear' }
+  | { type: 'list_chats' }
+  | { type: 'open_chat'; id: string }
+  | { type: 'new_chat' }
+  | { type: 'delete_chat'; id: string }
 
 export interface UpdateCheckResult {
   supported: boolean

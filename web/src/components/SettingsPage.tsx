@@ -8,6 +8,7 @@ import {
   setRequireMasterPassword,
 } from '../lib/api'
 import { ConfirmDialog } from './ConfirmDialog'
+import { AiSettingsSection } from './AiSettingsSection'
 import { UpdateSection } from './UpdateSection'
 
 const inputClasses =
@@ -227,6 +228,8 @@ export function SettingsPage() {
         </div>
         {closeToTrayError && <p className="text-sm text-red-400">{closeToTrayError}</p>}
       </div>
+
+      <AiSettingsSection />
 
       <UpdateSection />
 

@@ -1,15 +1,18 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.FileProviders;
 using Slopterm.Server;
+using Slopterm.Server.Ai;
 using Slopterm.Server.Native;
 using Slopterm.Server.Vault;
 
@@ -49,6 +52,13 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Loopback-only: never reachable from other machines by default.
 builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, port));
+
+// Quit must never sit behind live terminal/agent WebSockets - their handlers only return
+// when the session ends, and the host's graceful stop waits for in-flight requests, so the
+// default timeout reads as "the app won't close while an SSH session is open". Quit tears
+// sessions down explicitly (see Quit below) and links ApplicationStopping into the WS
+// handlers' tokens; this short timeout is only the backstop that force-aborts stragglers.
+builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(2));
 
 var app = builder.Build();
 
@@ -531,6 +541,46 @@ app.MapPost("/api/settings/github-token", (SetGithubTokenRequest request) =>
     catch (InvalidOperationException ex)
     {
         return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+// The in-terminal AI agent's endpoint/model config - a plain settings.json pair (no secrets,
+// no unlock needed; the local-first default is Ollama's port).
+app.MapGet("/api/settings/ai", () =>
+{
+    var settings = vault.GetSettings();
+    return Results.Ok(new { baseUrl = settings.AiBaseUrl, model = settings.AiModel });
+});
+
+app.MapPost("/api/settings/ai", (SetAiSettingsRequest request) =>
+{
+    // Empty fields reset to the defaults; a pasted URL gets its trailing slash normalized away
+    // so "{base}/chat/completions" concatenation stays clean.
+    var defaults = new AppSettings();
+    var baseUrl = string.IsNullOrWhiteSpace(request.BaseUrl) ? defaults.AiBaseUrl : request.BaseUrl.Trim().TrimEnd('/');
+    var model = string.IsNullOrWhiteSpace(request.Model) ? defaults.AiModel : request.Model.Trim();
+    vault.SetAiSettings(baseUrl, model);
+    return Results.Ok(new { baseUrl, model });
+});
+
+// Live reachability probe: is the local AI server up, is the configured model actually
+// pulled, and what models are available to switch to? Drives the status dot, the model
+// picker in the agent bar, and the Settings readout.
+app.MapGet("/api/ai/status", async () =>
+{
+    var settings = vault.GetSettings();
+    try
+    {
+        var models = await OpenAiChatClient.ListModelsAsync(settings.AiBaseUrl, CancellationToken.None);
+        // Ollama ids carry a tag ("gemma4:12b"); treat a missing tag as ":latest" both ways so
+        // "qwen3" matches "qwen3:latest" without the user having to spell it exactly.
+        static string Norm(string m) => m.Contains(':') ? m : $"{m}:latest";
+        var modelAvailable = models.Any(m => string.Equals(Norm(m), Norm(settings.AiModel), StringComparison.OrdinalIgnoreCase));
+        return Results.Ok(new { reachable = true, modelAvailable, baseUrl = settings.AiBaseUrl, model = settings.AiModel, models });
+    }
+    catch
+    {
+        return Results.Ok(new { reachable = false, modelAvailable = false, baseUrl = settings.AiBaseUrl, model = settings.AiModel, models = Array.Empty<string>() });
     }
 });
 
@@ -1050,7 +1100,9 @@ app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId
     }
 
     using var socket = await context.WebSockets.AcceptWebSocketAsync();
-    using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+    // ApplicationStopping is linked in so a quit unblocks this handler immediately instead of
+    // the graceful stop waiting on it (it would otherwise only return when the session ends).
+    using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, app.Lifetime.ApplicationStopping);
 
     var toSocket = session.PumpToWebSocketAsync(socket, cts.Token);
     var fromSocket = session.PumpFromWebSocketAsync(socket, cts.Token);
@@ -1059,13 +1111,347 @@ app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId
 
     if (socket.State == WebSocketState.Open)
     {
-        await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "session ended", CancellationToken.None);
+        try
+        {
+            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "session ended", CancellationToken.None);
+        }
+        catch (WebSocketException)
+        {
+            // A client that vanished mid-close (e.g. the app window was closed as part of a
+            // quit) can't complete the close handshake - nothing to do, we're tearing down.
+        }
     }
 
     var removed = sessions.Remove(sessionId);
     if (removed is not null)
     {
         vault.AppendLog(new LogEntryRecord { Event = "disconnected", Host = removed.Host, Port = removed.Port, Username = removed.Username });
+    }
+});
+
+// The in-terminal AI agent's single full-duplex streaming channel. Text frames, one JSON object
+// per frame, camelCase via AgentJson.Web. Same loopback/token/origin gating as every other route
+// (the global middleware above). Unlike the PTY WS, closing this does NOT remove the SSH session -
+// the conversation lives on the still-alive TerminalSession and replays via `history` on reconnect.
+app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =>
+{
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    var session = sessions.Get(sessionId);
+    if (session is null)
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    // Deliberately NOT `using` - socket/cts are disposed manually in the finally, AFTER the
+    // in-flight turn task has completed, so a still-running turn never emits onto a disposed socket.
+    // ApplicationStopping is linked in for the same reason as the terminal WS: a quit must
+    // unblock the receive loop immediately rather than the graceful stop waiting on it.
+    var socket = await context.WebSockets.AcceptWebSocketAsync();
+    var cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, app.Lifetime.ApplicationStopping);
+    var sendLock = new SemaphoreSlim(1, 1);
+    // User messages queue instead of erroring while a turn runs; the pump below is the ONLY
+    // place turns are started, draining this in order. Stop/clear empty it.
+    var queue = new ConcurrentQueue<(string Mode, string Text)>();
+    var signal = new SemaphoreSlim(0);
+    // Cancels only the "waiting for the user's Enter" watch - a new user message, stop, or
+    // clear must all end it (deliberately never disposed mid-flight: the receive loop may
+    // race a Cancel against the pump replacing it, and an undisposed CTS is just GC work).
+    CancellationTokenSource? watchCts = null;
+
+    // Tolerates a closing/closed/disposed socket - never throws upward, so a stray late emit from
+    // a cancelled turn is a silent no-op.
+    async Task Emit(object evt)
+    {
+        if (socket.State != WebSocketState.Open)
+        {
+            return;
+        }
+
+        await sendLock.WaitAsync();
+        try
+        {
+            if (socket.State != WebSocketState.Open)
+            {
+                return;
+            }
+
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(evt, AgentJson.Web);
+            await socket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, cts.Token);
+        }
+        catch (WebSocketException) { }
+        catch (ObjectDisposedException) { }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            sendLock.Release();
+        }
+    }
+
+    // True once the terminal shows a newline after the typed suggestion - the suggestion
+    // itself is typed WITHOUT one, so the first newline past that offset is the user's Enter
+    // (or them running something else; either way the model reads what actually happened).
+    // Then waits briefly for the output to settle. False on cancel or a 15-minute timeout.
+    async Task<bool> WaitForUserRunAsync(TerminalSession target, long offset, CancellationToken token)
+    {
+        var deadline = Environment.TickCount64 + 15 * 60_000;
+        while (Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(300, token);
+            if (target.Scrollback.SnapshotSince(offset).Contains((byte)'\n'))
+            {
+                // Let the command's output settle (quiet for 750ms, capped at 10s).
+                var last = target.Scrollback.TotalWritten;
+                var lastChange = Environment.TickCount64;
+                var cap = Environment.TickCount64 + 10_000;
+                while (Environment.TickCount64 < cap)
+                {
+                    await Task.Delay(250, token);
+                    var current = target.Scrollback.TotalWritten;
+                    if (current != last)
+                    {
+                        last = current;
+                        lastChange = Environment.TickCount64;
+                    }
+                    else if (Environment.TickCount64 - lastChange >= 750)
+                    {
+                        break;
+                    }
+                }
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // The pump: the single consumer that starts every turn. Each wake drains, in order:
+    // queued user messages first (a new message always wins over waiting on a suggestion),
+    // then - if the last turn typed a suggestion - watches for the user's Enter and runs an
+    // automatic continuation turn. Repeats until there is nothing left to do, then sleeps
+    // until the next signal. Serializing everything here is what makes message queueing,
+    // the continuation loop, and stop/clear compose without races.
+    var lastMode = "chat";
+    var pumpTask = Task.Run(async () =>
+    {
+        try
+        {
+            while (true)
+            {
+                await signal.WaitAsync(cts.Token);
+                while (true)
+                {
+                    if (queue.TryDequeue(out var message))
+                    {
+                        if (!session.Agent.TryBeginTurn(out var turnToken))
+                        {
+                            continue; // defensive - the pump is the only turn starter
+                        }
+
+                        lastMode = message.Mode;
+                        try
+                        {
+                            await session.Agent.RunTurnAsync(vault, message.Mode, message.Text, Emit, turnToken);
+                        }
+                        finally
+                        {
+                            session.Agent.EndTurn();
+                        }
+
+                        continue;
+                    }
+
+                    if (session.Agent.TryTakePendingSuggestion(out var offset, out var suggested))
+                    {
+                        var wcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+                        watchCts = wcts;
+                        var ran = false;
+                        try
+                        {
+                            ran = await WaitForUserRunAsync(session, offset, wcts.Token);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // watch interrupted (new message / stop / clear) - fall through;
+                            // the loop re-checks the queue next.
+                        }
+
+                        if (ran && session.Agent.TryBeginTurn(out var continuationToken))
+                        {
+                            try
+                            {
+                                await session.Agent.RunTurnAsync(vault, lastMode,
+                                    $"(I pressed Enter and the terminal ran: {suggested}. Read the terminal output, report the "
+                                    + "result, and continue with the next single step. If the task is complete, say so and stop suggesting.)",
+                                    Emit, continuationToken, isContinuation: true);
+                            }
+                            finally
+                            {
+                                session.Agent.EndTurn();
+                            }
+                        }
+
+                        continue;
+                    }
+
+                    break; // nothing queued, nothing pending - sleep until the next signal
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // connection closing
+        }
+    });
+
+    try
+    {
+        // Pull this host's persisted conversation in (once) before replaying it, so a fresh
+        // session to the same host resumes where the last one left off - across restarts too.
+        session.Agent.EnsureLoaded(vault);
+        await Emit(new { type = "history", messages = session.Agent.Snapshot() });
+
+        var buffer = new byte[8192];
+        while (socket.State == WebSocketState.Open && !cts.IsCancellationRequested)
+        {
+            using var frame = new MemoryStream();
+            WebSocketReceiveResult received;
+            do
+            {
+                received = await socket.ReceiveAsync(buffer, cts.Token);
+                if (received.MessageType == WebSocketMessageType.Close)
+                {
+                    break;
+                }
+
+                frame.Write(buffer, 0, received.Count);
+            }
+            while (!received.EndOfMessage);
+
+            if (received.MessageType == WebSocketMessageType.Close)
+            {
+                break;
+            }
+
+            if (frame.Length == 0)
+            {
+                continue;
+            }
+
+            AgentClientMessage? msg;
+            try
+            {
+                msg = JsonSerializer.Deserialize<AgentClientMessage>(Encoding.UTF8.GetString(frame.ToArray()), AgentJson.Web);
+            }
+            catch (JsonException)
+            {
+                await Emit(new { type = "error", message = "Malformed frame." });
+                continue;
+            }
+
+            switch (msg?.Type)
+            {
+                case "send":
+                    // Never rejected: messages queue in order and the pump drains them one
+                    // turn at a time. A new message also supersedes any watch still waiting
+                    // on a previous suggestion's Enter.
+                    queue.Enqueue((msg.Mode ?? "chat", msg.Text ?? ""));
+                    watchCts?.Cancel();
+                    signal.Release();
+                    break;
+                case "stop":
+                    queue.Clear(); // stop means stop - queued messages are dropped too
+                    watchCts?.Cancel();
+                    session.Agent.CancelCurrent();
+                    break;
+                case "clear":
+                    queue.Clear();
+                    watchCts?.Cancel();
+                    session.Agent.Clear(vault); // also deletes the persisted record
+                    await Emit(new { type = "history", messages = Array.Empty<ChatMessage>() });
+                    break;
+                case "list_chats":
+                    await Emit(new { type = "chats", chats = session.Agent.ListChats(vault) });
+                    break;
+                case "open_chat":
+                    // Switching conversations supersedes everything in flight, like clear.
+                    queue.Clear();
+                    watchCts?.Cancel();
+                    if (session.Agent.OpenChat(vault, msg.Id ?? ""))
+                    {
+                        await Emit(new { type = "history", messages = session.Agent.Snapshot() });
+                    }
+
+                    await Emit(new { type = "chats", chats = session.Agent.ListChats(vault) });
+                    break;
+                case "new_chat":
+                    // Unlike clear, the outgoing conversation stays in the saved list.
+                    queue.Clear();
+                    watchCts?.Cancel();
+                    session.Agent.NewChat();
+                    await Emit(new { type = "history", messages = Array.Empty<ChatMessage>() });
+                    await Emit(new { type = "chats", chats = session.Agent.ListChats(vault) });
+                    break;
+                case "delete_chat":
+                    if (!string.IsNullOrEmpty(msg.Id))
+                    {
+                        if (session.Agent.DeleteChat(vault, msg.Id))
+                        {
+                            // Deleted the active conversation - same reset as clear.
+                            queue.Clear();
+                            watchCts?.Cancel();
+                            await Emit(new { type = "history", messages = Array.Empty<ChatMessage>() });
+                        }
+
+                        await Emit(new { type = "chats", chats = session.Agent.ListChats(vault) });
+                    }
+
+                    break;
+            }
+        }
+    }
+    catch (OperationCanceledException) { }
+    catch (WebSocketException) { }
+    finally
+    {
+        // Wind the pump down, WAIT for it, THEN dispose socket/cts - the turn's CTS is
+        // standalone (not linked to this connection), so a dropped socket doesn't auto-cancel
+        // it; CancelCurrent does, and awaiting the pump guarantees no emit races the disposal
+        // below.
+        cts.Cancel();
+        session.Agent.CancelCurrent();
+        try
+        {
+            await pumpTask;
+        }
+        catch
+        {
+            // observed
+        }
+
+        if (socket.State == WebSocketState.Open)
+        {
+            try
+            {
+                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "agent closed", CancellationToken.None);
+            }
+            catch
+            {
+                // best-effort close
+            }
+        }
+
+        socket.Dispose();
+        cts.Dispose();
+        watchCts?.Dispose();
+        sendLock.Dispose();
+        signal.Dispose();
     }
 });
 
@@ -1095,6 +1481,15 @@ void Quit()
     // so the breadcrumb is what tells the two apart after the fact.
     CrashLogger.LogPhase("shutdown requested (window closed or tray Quit)");
     AppWindowManager.CloseAllFallbackBrowserWindows();
+
+    // Tear down live sessions BEFORE stopping the host: their WS handlers only return once
+    // the blocking shell-read pump unblocks, and the graceful stop below waits for exactly
+    // those handlers - without this, quitting with an SSH session open stalls until the
+    // session happens to end. Disposal makes the shell reads throw ObjectDisposedException
+    // immediately; ApplicationStopping (linked into the WS receive loops) and the 2s
+    // ShutdownTimeout backstop cover everything else.
+    sessions.DisposeAll();
+    sftpSessions.DisposeAll();
     app.Lifetime.StopApplication();
 }
 

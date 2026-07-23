@@ -499,6 +499,113 @@ spirit of Termius, targeting Linux, macOS and Windows.
   with a git-backed sync backend (push/pull the encrypted blob to a private repo or gist)
   before considering a hosted sync service.
 
+## In-terminal AI agent (`server/Ai/`, `AgentBar.tsx`, `AiSettingsSection.tsx`)
+
+- **An optional bottom bar in every connected SSH tab hosts an AI agent backed by a local
+  OpenAI-compatible model server (Ollama by default)** - free, key-less, and private: the
+  terminal scrollback it reads never leaves the machine. It was first built on the Anthropic
+  SDK/API, then deliberately rewritten fully local - per-call API billing is unfeasible for
+  an open-source project, and users bring their own hardware instead of credentials. The
+  endpoint/model live in plaintext `AppSettings` (`AiBaseUrl` default
+  `http://127.0.0.1:11434/v1`, `AiModel`) - a loopback URL and model name aren't secrets,
+  and no key exists in this design at all. `OpenAiChatClient.cs` is a hand-rolled
+  HttpClient + SSE chat-completions client (streaming + tool calls) rather than a vendor
+  SDK - the dependency rule again; the whole feature adds zero NuGet packages.
+- **Model picker:** `GET /api/ai/status` probes `{base}/models` live and returns
+  `reachable`/`modelAvailable`/`models[]` - the bar's status dot, its model dropdown, and
+  the Settings readout all derive from this one probe, so the UI can't disagree with what a
+  turn would actually do. Switching persists via `POST /api/settings/ai` and settings are
+  re-read per turn, so it applies to the next send with no reconnect. Ollama itself handles
+  model residency (verified on a 10GB card: requesting model B evicts idle model A; the two
+  never coexist when VRAM can't fit both).
+- **Terminal context** comes from `TerminalScrollback` (a 256KB ring of raw PTY bytes per
+  session), captured inside `PumpToWebSocketAsync` before the socket send - independent of
+  WS backpressure, but note capture *rides that pump*, so output only accumulates while a
+  terminal WS is attached (always true for a live tab; a purely API-driven session sees an
+  empty scrollback - this bit a headless test, not the app). `AnsiText.Strip` renders it
+  model-readable and is deliberately lenient: truncated escapes/partial UTF-8 at ring wrap
+  boundaries must never throw mid-turn.
+- **The agent WebSocket (`/ws/agent/{sessionId}`)** is the single streaming channel:
+  server→client `history`/`turn_start`/`text_delta`/`tool_activity`/`turn_done`/`error`,
+  client→server `send`/`stop`/`clear`. It is manually serialized - every frame MUST go
+  through the one shared `AgentJson.Web` options or field casing silently breaks (REST gets
+  camelCase from the framework automatically; this channel doesn't). Unlike the terminal
+  WS, closing it does NOT tear the session down - the conversation lives on the
+  `TerminalSession` and replays via `history` on reconnect. The handler is a
+  **single-consumer pump**: user messages queue in order instead of erroring while a turn
+  runs (there is no "turn already running" rejection anymore), a new message interrupts any
+  waiting-for-Enter watch, and stop/clear drop the queue along with the current turn.
+  Serializing everything through the pump is what lets queueing, the continuation loop, and
+  stop/clear compose without races.
+- **Three permission modes**, selected per message in the bar: `chat` gets NO tools at all -
+  the recent terminal tail is inlined into its prompt instead, so it works even with models
+  whose Ollama template lacks tool support, and it is structurally incapable of typing.
+  `suggest` gets `suggest_command`, which TYPES the command into the PTY without a newline -
+  the user presses Enter (or edits/discards); it can never execute anything. `auto` gets
+  `run_command` (types + Enter + returns output), but every command first passes a **safety
+  gate**: a second model call (same local model, shown the command AND the recent terminal
+  tail so context-dependent input like answering a visible prompt is judged sensibly)
+  verdicts SAFE/UNSAFE; unsafe commands are only typed as suggestions. The gate **fails
+  closed** on any error, and its verdict parse is deliberately tolerant - a strict
+  "starts with SAFE" check fail-closed even a plain `uname` because models wrap the verdict
+  in markdown (`**SAFE**`); the parser takes the first decisive word, with "not safe"
+  counting as unsafe. `press_keys` (auto only) covers pagers/prompts and is hard-limited to
+  ≤8 chars with no spaces - small models otherwise send whole commands through the raw-keys
+  tool and then wonder why nothing ran (no Enter). Treat the gate as a convenience, not a
+  security boundary - it's a small local model's judgment call; the real control is that
+  every keystroke lands visibly in a terminal the user is watching.
+- **Typed-input hygiene** (the "comments leaking into the terminal" class of bugs):
+  `SanitizeCommand` strips markdown fences/backticks and `$ ` prompt artifacts, drops
+  comment lines (salvaging the common one-command-plus-comments shape), and REJECTS
+  multi-line scripts or comment-only payloads with a corrective error the model can act on -
+  verified live: a provoked multi-line commented script was rejected twice, then the model
+  self-corrected to a single `&&`-chained line. Separately, **only one typed suggestion may
+  be pending at a time**: while one awaits the user's Enter, every typing tool is blocked
+  for the rest of the turn. That guard is correctness, not tidiness - a safe `run_command`
+  firing then would press Enter onto the prompt line where the suggestion sits, executing
+  the two concatenated.
+- **The suggest/auto continuation loop:** suggestions are typed with newlines stripped, so
+  the first `\n` past the typed-at scrollback offset IS the user's Enter (or them running
+  their own edit - either way the model reads what actually happened). The pump watches for
+  it (15-minute cap), lets output settle, then runs an automatic continuation turn - a
+  synthetic prompt the model sees but the transcript doesn't - repeating while each turn
+  leaves a new suggestion, until the model declares the task done or the user intervenes.
+  Verified end-to-end: a two-step task ran suggest → Enter → read/report/suggest → Enter →
+  verified/complete, with both commands genuinely executing in the PTY.
+- **Small-model babysitting, all deterministic rather than prompt-hopeful:** a turn that
+  ends with tool activity but no chat text gets one forced no-tools summary round (models
+  act, then go silent); a suggest turn whose answer contains a code span but typed nothing
+  gets one buffered retry round telling it to call the tool (a bare "DONE" reply is
+  discarded without reaching the UI); and the tool-call echo into model history carries only
+  that round's text - echoing the accumulated text made the model restate itself (observed
+  as doubled final answers).
+- **Persistent history, many conversations per host:** each conversation is its own
+  vault-encrypted record under `ai-chats/` (random id; `HostKey` = `user@host:port` and a
+  `Title` derived from the first user message live inside the ciphertext) - encrypted
+  because transcripts quote terminal output, which can contain anything a session showed.
+  Connecting resumes the MOST RECENT conversation for that host - across app restarts - and
+  the bar's "Chats" list shows all of them (newest first) to reopen, plus "New chat"
+  (starts fresh, keeps the outgoing one in the list) and per-entry delete; "Clear chat"
+  deletes the CURRENT record outright. Records written before multi-chat existed (id =
+  `sha256(hostKey)` truncated, no metadata) are still recognized and adopted. Only the
+  display transcript persists (capped at 200 messages, saved best-effort after each turn,
+  never for an empty conversation); the model-facing history is rebuilt from its text turns
+  on load, which is all "continue where we left off" needs. Opening/creating/deleting a
+  chat supersedes anything in flight exactly like clear (generation bump - the cancelled
+  turn emits no turn_done, and the history frame doubles as the client's "running is over"
+  signal). All vault methods are best-effort like `AppendLog`: a locked vault means chats
+  don't persist/restore/list, never an error in the agent path.
+- **UI constraints it must keep respecting:** the collapsed strip is fixed-height,
+  transition-free, and present at first paint so wrapping `TerminalView` in a flex column
+  never adds an extra `fit()` during `terminal-resize.spec.ts`'s measured window; the
+  expanded panel SHRINKS the terminal (never overlays - fit() stays parent-driven) and is
+  drag-resizable via the handle on its top edge (clamped 160px to 80% of the window);
+  the transcript opts back into text selection AND the native context menu via
+  `select-text` + the `data-selectable-text` marker (the issue #61 global
+  `user-select: none` rule, and `useSuppressBrowserContextMenu`, both honor it); and its
+  accessible names were chosen against the e2e exact-match lookups ("Save AI settings",
+  "Clear chat", heading "AI agent", no new nav entries).
+
 ## Distribution constraints
 
 - End users must **not** need the .NET runtime pre-installed. Publish **self-contained,
@@ -708,6 +815,18 @@ spirit of Termius, targeting Linux, macOS and Windows.
   trigger that fallback in the first place (falls straight to the untracked
   default-browser case instead, same as documented above).
 
+- **Quitting never waits on live SSH sessions.** Kestrel's graceful stop waits for in-flight
+  request handlers, and the terminal/agent WebSocket handlers only return when their session
+  ends - the terminal WS in particular sits behind a blocking `ShellStream.Read` pump that
+  only unblocks on data or disposal. Left alone, that's a circular wait: quit waits on the
+  handlers, the handlers wait on the session ("the app won't close while an SSH session is
+  open", reported exactly so). Three layers fix it: `Quit()` disposes every SSH/SFTP session
+  first (`SessionStore.DisposeAll` - the disposal makes the shell reads throw and the
+  handlers return), both WS handlers link `ApplicationStopping` into their receive tokens so
+  they unblock the moment quit starts, and `HostOptions.ShutdownTimeout` is 2s as the
+  backstop that force-aborts anything unforeseen. Verified end-to-end: WM_CLOSE with a live
+  SSH session plus both WebSockets open exits the process in 0.5s.
+
 ## Native app window (Photino)
 
 - **`server/Native/AppWindowManager.cs`** enforces "only ever one slopterm window":
@@ -757,6 +876,15 @@ spirit of Termius, targeting Linux, macOS and Windows.
       `wc:close` runs the exact same `CloseToTray` logic as the native close (Alt+F4 still
       routes through `RegisterWindowClosingHandler`), so the title-bar X quits by default.
       `SavePosition` skips a maximized window so the next cold start doesn't open giant.
+    - **Outbound `SendWebMessage` is gated on `_webviewReady`** (set by the first message
+      received FROM the webview - receipt proves it exists, and the window is never
+      destroyed after that). Photino's native `SendWebMessage` dereferences the webview with
+      no null check, and the window's own Maximized/Restored events can fire DURING window
+      creation, before WebView2 is initialized - the ungated `wc:restored` push there
+      crashed the whole process with an uncatchable native 0xC0000005 (observed on a plain
+      `dotnet run`: `OnRestored -> SendWebMessage` was the last thing in the fatal stack).
+      Nothing is lost before the gate opens: the title bar requests the current state via
+      `wc:ready` when it mounts, and replying to a received message is inherently safe.
     - `TitleBar` only renders inside Photino (`isDesktopApp` = `window.external.sendMessage`
       exists); a plain browser (dev, phone, direct URL) has no title bar and the sidebar
       keeps its own collapse toggle and Settings. Verified end-to-end by driving the real

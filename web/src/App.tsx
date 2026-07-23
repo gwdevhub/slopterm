@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Sidebar, type NavSection } from './components/Sidebar'
 import { TabBar, type SessionTab } from './components/TabBar'
 import { TerminalView } from './components/TerminalView'
+import { AgentBar } from './components/AgentBar'
 import { SftpView } from './components/SftpView'
 import { ReconnectingPane } from './components/ReconnectingPane'
 import { SectionContent } from './components/SectionContent'
@@ -71,7 +72,10 @@ function useSuppressBrowserContextMenu() {
   useEffect(() => {
     function onContextMenu(event: MouseEvent) {
       const target = event.target as HTMLElement | null
-      if (target?.closest('input, textarea, [contenteditable="true"]')) return
+      // data-selectable-text marks read-only surfaces where selecting/copying text is the
+      // point (e.g. the AI agent transcript) - they get the browser's own menu back so
+      // right-click -> Copy works, same as real text-entry fields.
+      if (target?.closest('input, textarea, [contenteditable="true"], [data-selectable-text]')) return
       event.preventDefault()
     }
     window.addEventListener('contextmenu', onContextMenu)
@@ -387,13 +391,23 @@ function App() {
             <div key={tab.id} className={`absolute inset-0 ${activeTabId === tab.id ? 'block' : 'hidden'}`}>
               {tab.status === 'connected' && tab.sessionId ? (
                 tab.kind === 'ssh' ? (
-                  <TerminalView
-                    sessionId={tab.sessionId}
-                    isActive={activeTabId === tab.id}
-                    onSessionClosed={() => handleTerminalSessionClosed(tab.id)}
-                    request={tab.request}
-                    startupCommands={tab.startupCommands}
-                  />
+                  // Flex column so the AgentBar SHRINKS the terminal instead of overlaying
+                  // it - keeps xterm fit() parent-driven (its ResizeObserver auto-refits
+                  // when the bar expands/collapses). The bar's collapsed strip is a
+                  // fixed-height shrink-0 element present at first paint with no transition,
+                  // so it does not induce an extra fit()/redraw at connect time.
+                  <div className="flex h-full min-h-0 flex-col">
+                    <div className="min-h-0 flex-1">
+                      <TerminalView
+                        sessionId={tab.sessionId}
+                        isActive={activeTabId === tab.id}
+                        onSessionClosed={() => handleTerminalSessionClosed(tab.id)}
+                        request={tab.request}
+                        startupCommands={tab.startupCommands}
+                      />
+                    </div>
+                    <AgentBar sessionId={tab.sessionId} />
+                  </div>
                 ) : (
                   <SftpView sessionId={tab.sessionId} homeDirectory={tab.homeDirectory ?? '/'} />
                 )

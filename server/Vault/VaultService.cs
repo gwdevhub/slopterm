@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Slopterm.Server.Ai;
 
 namespace Slopterm.Server.Vault;
 
@@ -404,6 +405,109 @@ public sealed class VaultService
         }
 
         SaveRecord("secrets", GithubTokenRecordId, new GithubTokenRecord { Token = token });
+    }
+
+    private const string AiChatsFolder = "ai-chats";
+
+    /// <summary>
+    /// All persisted AI conversations (every host's - the caller filters by HostKey). All
+    /// four AI-chat methods are best-effort by design (like AppendLog): a locked vault just
+    /// means chats don't persist/restore/list, never an error in the agent path.
+    /// </summary>
+    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, AiChatRecord Record)> ListAiChats()
+    {
+        if (!IsUnlocked)
+        {
+            return [];
+        }
+
+        try
+        {
+            return ListRecords<AiChatRecord>(AiChatsFolder);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>One persisted conversation, or null if locked/missing/corrupt - never throws.</summary>
+    public AiChatRecord? GetAiChat(string id)
+    {
+        if (!IsUnlocked)
+        {
+            return null;
+        }
+
+        try
+        {
+            var path = Path.Combine(_vaultDir, AiChatsFolder, $"{id}.json");
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
+            if (envelope is null)
+            {
+                return null;
+            }
+
+            var json = VaultCrypto.Decrypt(_key!, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
+            return JsonSerializer.Deserialize<AiChatRecord>(json);
+        }
+        catch
+        {
+            return null; // a corrupt/unreadable record reads as "no saved chat"
+        }
+    }
+
+    public void SaveAiChat(string id, AiChatRecord record)
+    {
+        if (!IsUnlocked)
+        {
+            return;
+        }
+
+        try
+        {
+            SaveRecord(AiChatsFolder, id, record);
+        }
+        catch
+        {
+            // best-effort - a failed save must never break the agent turn that triggered it
+        }
+    }
+
+    public void DeleteAiChat(string id)
+    {
+        try
+        {
+            DeleteRecord(AiChatsFolder, id);
+        }
+        catch
+        {
+            // best-effort
+        }
+    }
+
+    /// <summary>
+    /// Persists the AI agent's endpoint/model. A plain settings.json write like SetCloseToTray -
+    /// a loopback URL and a model name aren't secrets, and needing no unlock means the agent is
+    /// configurable even with a locked vault.
+    /// </summary>
+    public void SetAiSettings(string baseUrl, string model)
+    {
+        var settings = GetSettings();
+        if (baseUrl == settings.AiBaseUrl && model == settings.AiModel)
+        {
+            return;
+        }
+
+        settings.AiBaseUrl = baseUrl;
+        settings.AiModel = model;
+        Directory.CreateDirectory(_vaultDir);
+        File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
     }
 
     private const string OpenTabsRecordId = "open-tabs";
