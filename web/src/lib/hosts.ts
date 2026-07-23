@@ -19,6 +19,7 @@ export function resolveConnectRequest(host: SavedHost): ConnectRequest | undefin
     passphrase: credential.kind === 'privateKey' ? credential.passphrase : undefined,
     columns: 80,
     rows: 24,
+    hostId: host.id,
   }
 }
 

@@ -19,9 +19,12 @@ spirit of Termius, targeting Linux, macOS and Windows.
 - **App shell (implemented, `web/src/App.tsx` + `Sidebar`/`HostGrid`/`HostModal`/
   `HostsSection`/`SectionContent`):** the Termius-reference layout (issues #8/#10), now
   restructured so the sidebar is always visible instead of living inside a "new
-  connection" view. `Sidebar.tsx` renders Hosts/Keychain/Snippets/Logs/
+  connection" view. `Sidebar.tsx` renders Hosts/Keychain/Snippets/Port Forwarding/Logs/
   Settings, all functional - there is no "Quick Connect" nav item (ad hoc connecting is a
-  modal triggered from the Hosts screen instead, see below). Known Hosts is still removed outright
+  modal triggered from the Hosts screen instead, see below). Port Forwarding was re-added
+  as a real feature (nav entry + icon + `SectionContent` case + a working
+  `ForwardingService` backend - see the Port Forwarding section below), the way the "add
+  it back properly, not a placeholder" rule required. Known Hosts is still removed outright
   (not hidden) rather than kept as a "coming soon" placeholder - it has no implementation
   and no near-term plan; add it back the same properly-built way if that changes. On
   desktop/tablet it's a
@@ -172,7 +175,7 @@ spirit of Termius, targeting Linux, macOS and Windows.
     `useEffect` dependency). Verified directly against a real SSH/SFTP server: dragged a
     real file each direction, confirmed the transferred file's content matched byte-for-
     byte on both sides, not just that a same-named entry appeared in the listing.
-- **Backend:** .NET 10 with C# 14 + SSH.NET (`Renci.SshNet`) — owns all SSH/SFTP I/O,
+- **Backend:** .NET 10 with C# 14 + SSH.NET (`Renci.SshNet`) — owns all SSH/SFTP/port-forwarding I/O,
   serves the built React bundle plus a WebSocket PTY stream over a local ASP.NET Core
   (Kestrel) HTTP server.
 - **No bundled *browser*.** The backend binds `127.0.0.1` and is always reachable from
@@ -446,6 +449,40 @@ spirit of Termius, targeting Linux, macOS and Windows.
   `listKeychainEntries()` already returns them in full to this same authenticated frontend
   (`ConnectionForm`'s own "use a saved key" dropdown already relied on that); Cancel
   discards without calling `updateKeychainEntry`.
+- **Port forwarding (`server/ForwardingService.cs`, `PortForwardingSection.tsx`,
+  `port-forwards/{id}.json`):** SSH local/remote forwards tunnelled through a saved host,
+  in the shape Termius offers. A `PortForwardRecord` (vault-stored, references a `HostId`)
+  is uniform for both directions to match SSH.NET's `ForwardedPortLocal`/`ForwardedPortRemote`
+  (bind addr/port → destination addr/port): `local` binds on this machine and the server
+  connects out to the destination; `remote` has the server bind and tunnels back to a
+  destination on this machine (the xdebug case - server binds 127.0.0.1:9003, forwarded
+  back to the local IDE on 127.0.0.1:9003).
+  - **`ForwardingService` owns one dedicated background `SshClient` per host** (separate
+    from any terminal/SFTP tab, so a forward outlives its tab and can run with no tab at
+    all), with every rule on that host a `ForwardedPort` on it. A per-host monitor thread
+    reconnects (capped backoff) if the connection drops, so a background forward stays up
+    unattended - that's the "keep a background connection" requirement. Everything is
+    best-effort: a failed bind/connect surfaces in `GetStatus` (per-rule
+    active/connecting/error), never as a throw that could take the app down.
+  - **Two automatic triggers, as required:** rules with `AutoStart` come up in the
+    background at launch (`StartAutoForwards`, no-op if the vault is still locked - a
+    master-password vault starts them on first connect/unlock instead); and connecting a
+    terminal/SFTP session to a host brings up all of that host's forwards
+    (`StartRulesForHost`, called from the connect endpoints via the new
+    `ConnectRequest.HostId`, set by `resolveConnectRequest` for saved hosts only).
+    `HostConnect.Resolve` is the server-side mirror of the frontend's `resolveConnectRequest`,
+    needed because forwarding builds its own connections (from a host id / at launch) rather
+    than being handed a `ConnectRequest`.
+  - Endpoints: `/api/vault/port-forwards` CRUD for the rules, plus
+    `/api/forwarding/status` and `/api/forwarding/rules/{id}/start|stop` for live control.
+    `forwarding.Dispose()` on shutdown tears every background connection down cleanly.
+  - **Verified end-to-end against a real sshd** (throwaway `openssh-server` container, with
+    `AllowTcpForwarding yes` - the linuxserver image ships it *off*, which is a property of
+    the server being tunnelled through, not of this code): a LOCAL forward carried a TCP
+    connection through to the container's own sshd (got its SSH banner), and a REMOTE
+    forward tunnelled data from inside the container back to a local listener - then again
+    through the whole real UI over CDP (create host → add forward in the section → Start →
+    goes Active → the tunnel carries traffic).
 - **Sync is a hard requirement**, not a stretch goal. Design is zero-knowledge: only the
   AES-GCM ciphertext ever leaves the device, the master key/password never does. Start
   with a git-backed sync backend (push/pull the encrypted blob to a private repo or gist)

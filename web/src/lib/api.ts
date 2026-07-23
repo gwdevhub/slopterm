@@ -8,6 +8,9 @@ export interface ConnectRequest {
   passphrase?: string
   columns: number
   rows: number
+  // Set when connecting to a saved host so the backend can auto-start that host's port
+  // forwards (see ForwardingService). Absent for Quick Connect / Recent.
+  hostId?: string
 }
 
 export interface ConnectResponse {
@@ -171,6 +174,76 @@ export async function importHostShare(token: string): Promise<{ id: string }> {
   })
   await throwOnError(res)
   return res.json()
+}
+
+export interface PortForwardRecord {
+  hostId: string
+  type: 'local' | 'remote'
+  bindAddress: string
+  bindPort: number
+  destinationAddress: string
+  destinationPort: number
+  description?: string
+  autoStart: boolean
+}
+
+export interface SavedPortForward {
+  id: string
+  updatedAt: string
+  forward: PortForwardRecord
+}
+
+// Live state of a rule: 'active' (up), 'connecting' (host connecting / port not up yet), or
+// 'error'. Rules not present here are inactive/stopped.
+export interface ForwardStatus {
+  ruleId: string
+  hostId: string
+  state: 'active' | 'connecting' | 'error'
+  error?: string | null
+}
+
+export async function listPortForwards(): Promise<SavedPortForward[]> {
+  const res = await fetch('/api/vault/port-forwards')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function createPortForward(forward: PortForwardRecord): Promise<{ id: string }> {
+  const res = await fetch('/api/vault/port-forwards', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(forward),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function updatePortForward(id: string, forward: PortForwardRecord): Promise<void> {
+  const res = await fetch(`/api/vault/port-forwards/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(forward),
+  })
+  await throwOnError(res)
+}
+
+export async function deletePortForward(id: string): Promise<void> {
+  await fetch(`/api/vault/port-forwards/${id}`, { method: 'DELETE' })
+}
+
+export async function getForwardingStatus(): Promise<ForwardStatus[]> {
+  const res = await fetch('/api/forwarding/status')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function startForward(id: string): Promise<void> {
+  const res = await fetch(`/api/forwarding/rules/${id}/start`, { method: 'POST' })
+  await throwOnError(res)
+}
+
+export async function stopForward(id: string): Promise<void> {
+  await fetch(`/api/forwarding/rules/${id}/stop`, { method: 'POST' })
 }
 
 export interface SnippetRecord {

@@ -61,6 +61,7 @@ var vault = new VaultService();
 // If settings (persisted from a previous run) say a master password isn't required, this
 // transparently unlocks the vault right now - the frontend never sees an unlock prompt.
 vault.EnsureUnlockedIfPasswordNotRequired();
+var forwarding = new ForwardingService(vault);
 
 // Best-effort cleanup of a previous update's backup - see UpdateService.ApplyAsync. Not
 // fatal if this fails (e.g. the old process briefly still holds it on Windows); it'll just
@@ -163,6 +164,12 @@ app.MapPost("/api/ssh/connect", (ConnectRequest request) =>
             Port = request.Port,
             Username = request.Username,
         });
+        // Bring up this host's port forwards automatically now that we're connected to it.
+        if (!string.IsNullOrEmpty(request.HostId))
+        {
+            forwarding.StartRulesForHost(request.HostId);
+        }
+
         return Results.Ok(new { sessionId = session.Id });
     }
     catch (Exception ex)
@@ -185,6 +192,11 @@ app.MapPost("/api/sftp/connect", (ConnectRequest request) =>
     {
         var session = SftpSession.Connect(request);
         sftpSessions.Add(session.Id, session);
+        if (!string.IsNullOrEmpty(request.HostId))
+        {
+            forwarding.StartRulesForHost(request.HostId);
+        }
+
         return Results.Ok(new { sessionId = session.Id, homeDirectory = session.HomeDirectory });
     }
     catch (Exception ex)
@@ -851,6 +863,83 @@ app.MapDelete("/api/vault/keychain/{id}", (string id) =>
     }
 });
 
+// --- Port forwarding: the rule records (persisted config) plus live control/status. ---
+
+app.MapGet("/api/vault/port-forwards", () =>
+{
+    try
+    {
+        var rules = vault.ListPortForwards().Select(r => new { id = r.Id, updatedAt = r.UpdatedAt, forward = r.Record });
+        return Results.Ok(rules);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPost("/api/vault/port-forwards", (PortForwardRecord request) =>
+{
+    try
+    {
+        var id = vault.SavePortForward(null, request);
+        return Results.Ok(new { id });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPut("/api/vault/port-forwards/{id}", (string id, PortForwardRecord request) =>
+{
+    try
+    {
+        // Edits take effect on the next start, so stop any live instance of this rule first.
+        forwarding.StopRule(id);
+        vault.SavePortForward(id, request);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapDelete("/api/vault/port-forwards/{id}", (string id) =>
+{
+    try
+    {
+        forwarding.StopRule(id);
+        return vault.DeletePortForward(id) ? Results.NoContent() : Results.NotFound();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapGet("/api/forwarding/status", () => Results.Ok(forwarding.GetStatus()));
+
+app.MapPost("/api/forwarding/rules/{id}/start", (string id) =>
+{
+    try
+    {
+        forwarding.StartRule(id);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/forwarding/rules/{id}/stop", (string id) =>
+{
+    forwarding.StopRule(id);
+    return Results.NoContent();
+});
+
 app.MapGet("/api/vault/logs", () =>
 {
     try
@@ -957,6 +1046,10 @@ app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId
 
 app.Start();
 
+// Bring up background port forwards marked auto-start. Best-effort: no-op if the vault is
+// still locked (a master-password vault starts its forwards on first connect/unlock instead).
+forwarding.StartAutoForwards();
+
 var addressesFeature = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
 var boundPort = new Uri(addressesFeature?.Addresses.First() ?? "http://127.0.0.1:0").Port;
 var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
@@ -1007,6 +1100,7 @@ else
 }
 
 await app.WaitForShutdownAsync();
+forwarding.Dispose(); // tears down every background forwarding connection cleanly
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
     trayIcon?.Dispose();

@@ -37,6 +37,17 @@ export function KeychainIcon(props: IconProps) {
   )
 }
 
+export function ForwardingIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="4" y1="8" x2="20" y2="8" />
+      <polyline points="16,4 20,8 16,12" />
+      <line x1="20" y1="16" x2="4" y2="16" />
+      <polyline points="8,12 4,16 8,20" />
+    </svg>
+  )
+}
+
 export function SnippetsIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>
