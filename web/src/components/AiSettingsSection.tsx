@@ -1,49 +1,36 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import {
-  getAnthropicKeyStatus,
-  getCredentialStatus,
-  setAnthropicKey,
-  type CredentialStatus,
-} from '../lib/api'
+import { getAiSettings, getAiStatus, setAiSettings, type AiStatus } from '../lib/api'
 
 // Duplicated verbatim (as UpdateSection does) rather than shared, so this card stays a
-// self-contained clone of the GitHub-token field pattern.
+// self-contained clone of the existing settings-field pattern.
 const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
 
-// Human-readable readout of which credential the AI agent would actually use right now -
-// derived from the SAME probe the backend gates a turn on, so it can never disagree with
-// what the agent actually does.
-const SOURCE_LABEL: Record<CredentialStatus['source'], string> = {
-  vault: 'Using: API key (Settings vault)',
-  'env-api-key': 'Using: environment variable ANTHROPIC_API_KEY',
-  'env-auth-token': 'Using: environment variable ANTHROPIC_AUTH_TOKEN',
-  'ant-profile': 'Using: Claude account (ant auth login)',
-  none: 'Not configured',
-}
-
-// Mirrors the GitHub-token field (UpdateSection.tsx) but with DISTINCT accessible names
-// (heading "AI agent", buttons "Save key"/"Clear key") so the e2e specs' exact-match
-// lookups for the Updates section's Save/Clear buttons stay unambiguous.
+// Settings card for the in-terminal AI agent: a local OpenAI-compatible endpoint (Ollama by
+// default) plus the model to use. Distinct accessible names ("AI agent" heading, "Save AI
+// settings" button) keep the e2e specs' exact-match lookups for other sections unambiguous.
 export function AiSettingsSection() {
-  const [hasKey, setHasKey] = useState<boolean | null>(null)
-  const [keyInput, setKeyInput] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [model, setModel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [credential, setCredential] = useState<CredentialStatus | null>(null)
+  const [status, setStatus] = useState<AiStatus | null>(null)
 
   useEffect(() => {
-    getAnthropicKeyStatus()
-      .then((s) => setHasKey(s.hasKey))
-      .catch(() => setHasKey(false))
-    void refreshCredential()
+    getAiSettings()
+      .then((s) => {
+        setBaseUrl(s.baseUrl)
+        setModel(s.model)
+      })
+      .catch(() => {})
+    void refreshStatus()
   }, [])
 
-  async function refreshCredential() {
+  async function refreshStatus() {
     try {
-      setCredential(await getCredentialStatus())
+      setStatus(await getAiStatus())
     } catch {
-      setCredential(null)
+      setStatus(null)
     }
   }
 
@@ -52,76 +39,71 @@ export function AiSettingsSection() {
     setBusy(true)
     setError(null)
     try {
-      const result = await setAnthropicKey(keyInput || null)
-      setHasKey(result.hasKey)
-      setKeyInput('')
-      await refreshCredential()
+      const saved = await setAiSettings({ baseUrl, model })
+      setBaseUrl(saved.baseUrl)
+      setModel(saved.model)
+      await refreshStatus()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save key')
+      setError(err instanceof Error ? err.message : 'Failed to save AI settings')
     } finally {
       setBusy(false)
     }
   }
 
-  async function handleClear() {
-    setBusy(true)
-    setError(null)
-    try {
-      const result = await setAnthropicKey(null)
-      setHasKey(result.hasKey)
-      await refreshCredential()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to clear key')
-    } finally {
-      setBusy(false)
-    }
-  }
+  const statusLine =
+    status == null
+      ? 'Status unknown'
+      : !status.reachable
+        ? `Not reachable at ${status.baseUrl} - is Ollama running?`
+        : status.modelAvailable
+          ? `Connected - model "${status.model}" is available`
+          : `Connected, but model "${status.model}" isn't pulled (run: ollama pull ${status.model})`
+
+  const statusColor =
+    status?.reachable && status.modelAvailable ? 'text-emerald-400' : status?.reachable ? 'text-amber-400' : 'text-slate-400'
 
   return (
     <div className="flex flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-4">
       <h3 className="font-medium text-slate-100">AI agent</h3>
       <p className="text-xs text-slate-500">
-        The in-terminal AI agent prefers your Claude account. Signing in with{' '}
-        <code className="text-slate-400">ant auth login</code>, or setting the{' '}
-        <code className="text-slate-400">ANTHROPIC_API_KEY</code> /{' '}
-        <code className="text-slate-400">ANTHROPIC_AUTH_TOKEN</code> environment variables, works with no key here -
-        an API key below is an optional explicit override.
-        {hasKey === true && ' A key is currently set.'}
-        {hasKey === false && ' No key is set yet.'}
+        The in-terminal AI agent runs against a local model server - free and private, your terminal
+        output never leaves this machine. Install <span className="text-slate-400">Ollama</span>, pull a
+        model, and point the fields below at it. Any OpenAI-compatible endpoint works.
       </p>
 
-      <p className="text-sm text-slate-400">{SOURCE_LABEL[credential?.source ?? 'none']}</p>
+      <p className={`text-sm ${statusColor}`}>{statusLine}</p>
 
       <form onSubmit={handleSave} className="flex flex-col gap-2">
-        <label htmlFor="anthropic-key" className="text-sm font-medium text-slate-300">
-          Anthropic API key
+        <label htmlFor="ai-base-url" className="text-sm font-medium text-slate-300">
+          Server URL
+        </label>
+        <input
+          id="ai-base-url"
+          type="text"
+          className={inputClasses}
+          placeholder="http://127.0.0.1:11434/v1"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+        />
+        <label htmlFor="ai-model" className="text-sm font-medium text-slate-300">
+          Model
         </label>
         <div className="flex gap-2">
           <input
-            id="anthropic-key"
-            type="password"
+            id="ai-model"
+            type="text"
             className={inputClasses}
-            placeholder={hasKey ? '••••••••' : 'sk-ant-…'}
-            value={keyInput}
-            onChange={(e) => setKeyInput(e.target.value)}
+            placeholder="gemma4:12b"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
           />
           <button
             type="submit"
             disabled={busy}
             className="shrink-0 rounded bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 disabled:opacity-50"
           >
-            Save key
+            Save AI settings
           </button>
-          {hasKey && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleClear}
-              className="shrink-0 rounded bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 disabled:opacity-50"
-            >
-              Clear key
-            </button>
-          )}
         </div>
         {error && <p className="text-sm text-red-400">{error}</p>}
       </form>

@@ -82,7 +82,10 @@ public sealed class TerminalSession : IDisposable
                 }
 
                 // Capture into the agent scrollback here (before the socket send) so it's
-                // independent of WebSocket backpressure and works even with no browser attached.
+                // independent of WebSocket backpressure. Capture rides this pump, so output
+                // only accumulates while a terminal WS is attached - true for every live tab
+                // (TerminalView connects immediately and reconnects), but a session driven
+                // purely over the API with no terminal WS sees an empty scrollback.
                 Scrollback.Append(buffer.AsSpan(0, read));
 
                 await socket.SendAsync(

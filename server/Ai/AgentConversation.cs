@@ -1,29 +1,100 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Anthropic;
-using Anthropic.Models.Messages;
 using Slopterm.Server.Vault;
 
 namespace Slopterm.Server.Ai;
 
 /// <summary>
-/// Per-SSH-session AI conversation state and the agentic loop. Constructed with (and owned by)
-/// the <see cref="TerminalSession"/>; dies with it. Holds NO reference to the vault - the vault
-/// is passed per-turn so a locked/unlocked transition is always observed fresh. One
-/// <c>_stateLock</c> guards ALL of <c>_history</c>, <c>_transcript</c>, <c>_busy</c>,
-/// <c>_generation</c> and <c>_currentCts</c>.
+/// Per-SSH-session AI conversation state and the agentic loop, backed by a local
+/// OpenAI-compatible server (Ollama by default - see AppSettings.AiBaseUrl/AiModel).
+/// Constructed with (and owned by) the <see cref="TerminalSession"/>. The transcript is
+/// persisted vault-encrypted per host (user@host:port), so reconnecting to the same host -
+/// even after an app restart - resumes the conversation. One <c>_stateLock</c> guards ALL of
+/// <c>_history</c>, <c>_transcript</c>, <c>_busy</c>, <c>_generation</c>, <c>_loaded</c> and
+/// <c>_currentCts</c>.
+///
+/// Three permission modes:
+///  - "chat": answers only; no tools at all (recent terminal output is inlined into the
+///    prompt instead, so it also works with models lacking tool support).
+///  - "suggest": may TYPE a command into the terminal (no newline) for the user to confirm
+///    with Enter; never executes anything itself.
+///  - "auto": may execute - but every command/keystroke first passes a safety check (a
+///    second model call that sees the recent terminal context); anything flagged unsafe is
+///    only typed as a suggestion, like "suggest" mode. Fails closed if the check errors.
 /// </summary>
 public sealed class AgentConversation : IDisposable
 {
+    // Transcripts are capped when persisted so a long-lived host chat can't grow unbounded.
+    private const int MaxPersistedMessages = 200;
+
     private readonly TerminalSession _session;
+    private readonly string _chatRecordId;
     private readonly object _stateLock = new();
-    private readonly List<MessageParam> _history = [];   // model turns (always well-formed, ends with an assistant msg or empty)
+    private readonly List<AiChatMessage> _history = []; // model turns (always ends with an assistant msg or empty)
     private readonly List<ChatMessage> _transcript = []; // display turns
+    private bool _loaded;                                // persisted transcript pulled in yet?
     private bool _busy;
     private int _generation;                             // bumped by Clear() so an in-flight turn skips its commit
     private CancellationTokenSource? _currentCts;        // per-turn, standalone (not linked to the connection)
+    // A command typed into the terminal but not executed (suggest mode, or an auto-mode
+    // safety flag), with the scrollback offset it was typed at. The WS handler watches from
+    // that offset for the user's Enter and then starts a continuation turn automatically.
+    private (long Offset, string Command)? _pendingSuggestion;
 
-    public AgentConversation(TerminalSession session) => _session = session;
+    public AgentConversation(TerminalSession session)
+    {
+        _session = session;
+        // Stable per-host record id: same host+port+user = same conversation, whatever
+        // session/tab it's viewed from. Hashed so the vault filename stays path-safe.
+        var key = $"{session.Username}@{session.Host}:{session.Port}".ToLowerInvariant();
+        _chatRecordId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..32].ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Pulls the persisted transcript for this host into memory (once). Model history is
+    /// rebuilt from the transcript's plain text turns - tool-call plumbing isn't persisted,
+    /// the conversational content is what "continue where we left off" needs. Best-effort: a
+    /// locked vault just means nothing loads now; not marking <c>_loaded</c> lets a later
+    /// call (post-unlock reconnect) retry.
+    /// </summary>
+    public void EnsureLoaded(VaultService vault)
+    {
+        lock (_stateLock)
+        {
+            if (_loaded || !vault.IsUnlocked)
+            {
+                return;
+            }
+
+            var saved = vault.GetAiChat(_chatRecordId);
+            if (saved is { Count: > 0 } && _transcript.Count == 0)
+            {
+                _transcript.AddRange(saved);
+                foreach (var message in saved)
+                {
+                    if (string.IsNullOrEmpty(message.Text))
+                    {
+                        continue;
+                    }
+
+                    _history.Add(new AiChatMessage
+                    {
+                        Role = message.Role == "user" ? "user" : "assistant",
+                        Content = message.Text,
+                    });
+                }
+
+                // The model history invariant: ends with an assistant message or is empty.
+                while (_history.Count > 0 && _history[^1].Role != "assistant")
+                {
+                    _history.RemoveAt(_history.Count - 1);
+                }
+            }
+
+            _loaded = true;
+        }
+    }
 
     /// <summary>
     /// Shallow copy is safe: an assistant message is only added to <c>_transcript</c> AFTER it
@@ -79,17 +150,20 @@ public sealed class AgentConversation : IDisposable
     }
 
     /// <summary>
-    /// Wipes both transcript and model history and cancels any in-flight turn. Bumping the
-    /// generation first makes the running turn skip its commit and emit no turn_done (the empty
-    /// history frame the caller sends already reset the client).
+    /// Wipes both transcript and model history (in memory AND the persisted record) and
+    /// cancels any in-flight turn. Bumping the generation first makes the running turn skip
+    /// its commit and emit no turn_done (the empty history frame the caller sends already
+    /// reset the client).
     /// </summary>
-    public void Clear()
+    public void Clear(VaultService vault)
     {
         lock (_stateLock)
         {
             _generation++;
             _transcript.Clear();
             _history.Clear();
+            _pendingSuggestion = null;
+            _loaded = true; // an explicit clear must not resurrect the old persisted chat
             try
             {
                 _currentCts?.Cancel();
@@ -98,197 +172,224 @@ public sealed class AgentConversation : IDisposable
             {
             }
         }
+
+        vault.DeleteAiChat(_chatRecordId);
     }
 
     public void Dispose() => CancelCurrent();
 
-    public async Task RunTurnAsync(VaultService vault, string mode, string userText, Func<object, Task> emit, CancellationToken ct)
+    /// <summary>
+    /// The typed-but-not-run suggestion from the last turn, if any - read-and-clear, so each
+    /// suggestion is watched exactly once.
+    /// </summary>
+    public bool TryTakePendingSuggestion(out long offset, out string command)
     {
+        lock (_stateLock)
+        {
+            if (_pendingSuggestion is { } pending)
+            {
+                _pendingSuggestion = null;
+                offset = pending.Offset;
+                command = pending.Command;
+                return true;
+            }
+
+            offset = 0;
+            command = "";
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="isContinuation"/> marks an automatic follow-up turn (the user ran a
+    /// suggested command): the synthetic prompt goes to the model but not into the visible
+    /// transcript - the user never typed it.
+    /// </summary>
+    public async Task RunTurnAsync(VaultService vault, string mode, string userText, Func<object, Task> emit, CancellationToken ct, bool isContinuation = false)
+    {
+        EnsureLoaded(vault);
+        var settings = vault.GetSettings();
         var assistantId = Guid.NewGuid().ToString("N");
         var assistant = new ChatMessage { Id = assistantId, Role = "assistant", Mode = mode };
-
-        var userParam = new MessageParam
-        {
-            Role = Role.User,
-            Content = new List<ContentBlockParam> { new TextBlockParam { Text = userText } },
-        };
+        var userMessage = new AiChatMessage { Role = "user", Content = userText };
 
         int gen;
-        List<MessageParam> baseHistory;
+        List<AiChatMessage> baseHistory;
         lock (_stateLock)
         {
             gen = _generation;
-            _transcript.Add(new ChatMessage
+            _pendingSuggestion = null; // each turn re-establishes its own suggestion, if any
+            if (!isContinuation)
             {
-                Id = Guid.NewGuid().ToString("N"),
-                Role = "user",
-                Text = userText,
-                Mode = mode,
-            });
+                _transcript.Add(new ChatMessage
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Role = "user",
+                    Text = userText,
+                    Mode = mode,
+                });
+            }
+
             baseHistory = [.. _history];
         }
 
-        var localHistory = new List<MessageParam>(baseHistory) { userParam };
+        var localHistory = new List<AiChatMessage>(baseHistory) { userMessage };
+        // Request-only plumbing (the suggest-mode nudge below) - stripped before commit so it
+        // never pollutes the persisted conversation.
+        var nudgePlumbing = new List<AiChatMessage>();
 
-        // BEFORE any credential resolution / client build, so the missing-credentials path still
-        // produces a turn_start.
+        // Emitted before the request is attempted, so an unreachable server still produces the
+        // turn_start -> turn_done(error) pair the frontend expects.
         await emit(new { type = "turn_start", id = assistantId, mode });
 
         var stopReason = "end_turn";
         string? error = null;
         try
         {
-            // Credential gate + client build live INSIDE the try, so a missing key or a build
-            // throw maps to stopReason "error" and still hits the finally (turn_done).
-            var (_, ready) = AnthropicCredentials.ProbeSource(vault);
-            if (!ready)
+            // Chat mode sends no tools at all (works with models that lack tool support) and
+            // instead inlines the recent terminal output into the system prompt fresh each
+            // request - it never enters the committed history.
+            var tools = mode switch
             {
-                throw new InvalidOperationException(
-                    "No Claude credentials. Add an API key in Settings or run \"ant auth login\".");
-            }
+                "suggest" => SuggestTools,
+                "auto" => AutoTools,
+                _ => null,
+            };
 
-            var client = AnthropicCredentials.BuildClient(vault);
-            var tools = mode == "agent" ? AgentTools : ChatTools;
+            var suggestNudged = false;
+            var bufferNextRound = false;
 
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
 
-                var createParams = new MessageCreateParams
+                var request = new List<AiChatMessage>
                 {
-                    Model = Model.ClaudeOpus4_8,
-                    MaxTokens = 16000,
-                    Thinking = new ThinkingConfigAdaptive(),
-                    OutputConfig = new OutputConfig { Effort = Effort.High },
-                    System = SystemPrompt(),
-                    Messages = localHistory,
-                    Tools = tools,
+                    new() { Role = "system", Content = SystemPrompt(mode) },
                 };
+                request.AddRange(localHistory);
 
-                var blocks = new List<StreamBlock>();
-                var byIndex = new Dictionary<long, StreamBlock>();
-                var streamStopRaw = "end_turn";
+                // The nudged round is buffered instead of streamed live, so a bare "DONE"
+                // (nothing to type) can be discarded without ever reaching the UI. roundText
+                // tracks THIS round's text either way - the tool-call echo below must carry
+                // only the current round, or the model sees its accumulated earlier sentences
+                // in history and restates them (observed as a doubled final answer).
+                var bufferThisRound = bufferNextRound;
+                bufferNextRound = false;
+                var roundText = new StringBuilder();
 
-                await foreach (var ev in client.Messages.CreateStreaming(createParams, ct))
+                var result = await OpenAiChatClient.StreamAsync(
+                    settings.AiBaseUrl, settings.AiModel, request, tools,
+                    async text =>
+                    {
+                        roundText.Append(text);
+                        if (bufferThisRound)
+                        {
+                            return;
+                        }
+
+                        assistant.Text += text;
+                        await emit(new { type = "text_delta", id = assistantId, text });
+                    },
+                    ct);
+
+                if (bufferThisRound)
                 {
-                    if (ev.TryPickContentBlockStart(out var startEv))
+                    var buffered = roundText.ToString().Trim();
+                    if (buffered.Length > 0 && !buffered.Equals("DONE", StringComparison.OrdinalIgnoreCase))
                     {
-                        blocks.Add(byIndex[startEv.Index] = StartBlock(startEv.ContentBlock));
-                    }
-                    else if (ev.TryPickContentBlockDelta(out var deltaEv))
-                    {
-                        byIndex.TryGetValue(deltaEv.Index, out var block);
-                        var delta = deltaEv.Delta;
-                        if (delta.TryPickText(out var textDelta))
-                        {
-                            assistant.Text += textDelta.Text;
-                            await emit(new { type = "text_delta", id = assistantId, text = textDelta.Text });
-                            if (block is not null)
-                            {
-                                block.Text.Append(textDelta.Text);
-                            }
-                        }
-                        else if (delta.TryPickInputJson(out var jsonDelta))
-                        {
-                            block?.Json.Append(jsonDelta.PartialJson);
-                        }
-                        else if (delta.TryPickThinking(out var thinkingDelta))
-                        {
-                            block?.Text.Append(thinkingDelta.Thinking);
-                        }
-                        else if (delta.TryPickSignature(out var signatureDelta))
-                        {
-                            if (block is not null)
-                            {
-                                block.Signature = signatureDelta.Signature ?? block.Signature;
-                            }
-                        }
-                    }
-                    else if (ev.TryPickDelta(out var messageDelta))
-                    {
-                        var stopReasonEnum = messageDelta.Delta.StopReason;
-                        if (stopReasonEnum is not null)
-                        {
-                            string? raw = stopReasonEnum; // ApiEnum -> raw wire string
-                            if (!string.IsNullOrEmpty(raw))
-                            {
-                                streamStopRaw = raw;
-                            }
-                        }
+                        var addition = (assistant.Text.Length > 0 ? "\n\n" : "") + buffered;
+                        assistant.Text += addition;
+                        await emit(new { type = "text_delta", id = assistantId, text = addition });
                     }
                 }
 
-                // Rebuild this streamed turn as param blocks and append it to the model history.
-                // Thinking blocks are kept here because the API requires them when a tool_use turn
-                // is echoed back with thinking enabled; they are stripped again before the turn is
-                // committed as future context (see the finally).
-                var assistantContent = new List<ContentBlockParam>();
-                var toolCalls = new List<ToolCall>();
-                foreach (var block in blocks)
+                if (result.ToolCalls.Count == 0)
                 {
-                    switch (block.Kind)
+                    // Small models sometimes narrate the command in chat instead of calling
+                    // suggest_command - but the point of suggest mode is the command landing
+                    // in the terminal. One deterministic retry: if the answer contains a code
+                    // span and nothing was typed yet, tell the model to call the tool (or say
+                    // DONE, which the buffering above swallows).
+                    if (mode == "suggest" && !suggestNudged
+                        && !assistant.Activities.Any(a => a.Tool == "suggest_command")
+                        && assistant.Text.Contains('`'))
                     {
-                        case StreamBlockKind.Thinking:
-                            if (!string.IsNullOrEmpty(block.Signature))
-                            {
-                                assistantContent.Add(new ThinkingBlockParam
-                                {
-                                    Thinking = block.Text.ToString(),
-                                    Signature = block.Signature,
-                                });
-                            }
-
-                            break;
-                        case StreamBlockKind.RedactedThinking:
-                            assistantContent.Add(new RedactedThinkingBlockParam { Data = block.Data });
-                            break;
-                        case StreamBlockKind.Text:
-                            if (block.Text.Length > 0)
-                            {
-                                assistantContent.Add(new TextBlockParam { Text = block.Text.ToString() });
-                            }
-
-                            break;
-                        case StreamBlockKind.ToolUse:
-                            var input = ParseInput(block.Json.ToString());
-                            toolCalls.Add(new ToolCall(block.ToolId, block.ToolName, input));
-                            assistantContent.Add(new ToolUseBlockParam
-                            {
-                                ID = block.ToolId,
-                                Name = block.ToolName,
-                                Input = input,
-                            });
-                            break;
-                    }
-                }
-
-                if (assistantContent.Count > 0)
-                {
-                    localHistory.Add(new MessageParam { Role = Role.Assistant, Content = assistantContent });
-                }
-
-                if (streamStopRaw == "tool_use" && toolCalls.Count > 0)
-                {
-                    var results = new List<ContentBlockParam>();
-                    foreach (var call in toolCalls)
-                    {
-                        var (summary, result) = await ExecuteToolAsync(mode, call, ct);
-                        assistant.Activities.Add(new ChatActivity { Tool = call.Name, Summary = summary });
-                        await emit(new { type = "tool_activity", id = assistantId, tool = call.Name, summary });
-                        results.Add(new ToolResultBlockParam { ToolUseID = call.Id, Content = result });
+                        suggestNudged = true;
+                        bufferNextRound = true;
+                        var narrated = new AiChatMessage { Role = "assistant", Content = assistant.Text };
+                        var nudge = new AiChatMessage
+                        {
+                            Role = "user",
+                            Content = "If your reply proposes a shell command, call the suggest_command tool with that exact "
+                                + "command now so it is typed into my terminal ready to run. If there is nothing to type, "
+                                + "reply with just: DONE",
+                        };
+                        nudgePlumbing.Add(narrated);
+                        nudgePlumbing.Add(nudge);
+                        localHistory.Add(narrated);
+                        localHistory.Add(nudge);
+                        continue;
                     }
 
-                    localHistory.Add(new MessageParam { Role = Role.User, Content = results }); // all results, one message
-                    continue;
+                    break;
                 }
 
-                stopReason = streamStopRaw == "refusal" ? "refusal" : "end_turn";
-                break;
+                // Echo the assistant's tool-call turn, execute each call, and append the
+                // matching tool results - the OpenAI dialect requires one role:"tool" message
+                // per tool_call id, directly after the assistant message that made the calls.
+                var echoText = roundText.ToString().Trim();
+                localHistory.Add(new AiChatMessage
+                {
+                    Role = "assistant",
+                    Content = echoText.Length > 0 ? echoText : null,
+                    ToolCalls = result.ToolCalls,
+                });
+
+                foreach (var call in result.ToolCalls)
+                {
+                    var input = ParseArguments(call.Function.Arguments);
+                    var (summary, output) = await ExecuteToolAsync(settings, mode, call.Function.Name, input, ct);
+                    assistant.Activities.Add(new ChatActivity { Tool = call.Function.Name, Summary = summary });
+                    await emit(new { type = "tool_activity", id = assistantId, tool = call.Function.Name, summary });
+                    localHistory.Add(new AiChatMessage { Role = "tool", ToolCallId = call.Id, Content = output });
+                }
+            }
+
+            // Small local models sometimes stop right after their tool calls without ever
+            // answering in chat. Guarantee an answer: one final no-tools request that forces
+            // a summary. The nudge message is request-local - never committed to history.
+            if (string.IsNullOrWhiteSpace(assistant.Text) && assistant.Activities.Count > 0)
+            {
+                var followUp = new List<AiChatMessage>
+                {
+                    new() { Role = "system", Content = SystemPrompt(mode) },
+                };
+                followUp.AddRange(localHistory);
+                followUp.Add(new AiChatMessage
+                {
+                    Role = "user",
+                    Content = "Based on the tool results above, tell me in one or two sentences what happened and answer my original question. Do not call any tools.",
+                });
+
+                await OpenAiChatClient.StreamAsync(
+                    settings.AiBaseUrl, settings.AiModel, followUp, tools: null,
+                    async text =>
+                    {
+                        assistant.Text += text;
+                        await emit(new { type = "text_delta", id = assistantId, text });
+                    },
+                    ct);
             }
         }
         catch (OperationCanceledException)
         {
             stopReason = "stopped";
+        }
+        catch (HttpRequestException)
+        {
+            stopReason = "error";
+            error = $"Can't reach the local AI server at {settings.AiBaseUrl}. Is Ollama running? Start it (or install it from ollama.com), or fix the address in Settings.";
         }
         catch (Exception ex)
         {
@@ -303,31 +404,32 @@ public sealed class AgentConversation : IDisposable
                 cleared = gen != _generation;
                 if (!cleared)
                 {
-                    List<MessageParam> commit;
-                    if (stopReason is "end_turn" or "refusal")
+                    List<AiChatMessage> commit;
+                    if (stopReason == "end_turn")
                     {
-                        // Clean, well-formed conversation (every tool_use has its result).
-                        commit = StripThinking(localHistory);
+                        // Clean, well-formed conversation: the final assistant text isn't in
+                        // localHistory yet (only tool-call turns are appended mid-loop), and
+                        // nudge plumbing is request-only - stripped so it never persists.
+                        commit = localHistory.Where(m => !nudgePlumbing.Contains(m)).ToList();
+                        if (!string.IsNullOrEmpty(assistant.Text))
+                        {
+                            commit.Add(new AiChatMessage { Role = "assistant", Content = assistant.Text });
+                        }
                     }
                     else
                     {
                         // stopped / error: keep the user turn + any streamed assistant TEXT only,
-                        // never a dangling tool_use (which would 400 the next request).
-                        commit = [.. baseHistory, userParam];
+                        // never a dangling tool-call turn without its results.
+                        commit = [.. baseHistory, userMessage];
                         if (!string.IsNullOrEmpty(assistant.Text))
                         {
-                            commit.Add(new MessageParam
-                            {
-                                Role = Role.Assistant,
-                                Content = new List<ContentBlockParam> { new TextBlockParam { Text = assistant.Text } },
-                            });
+                            commit.Add(new AiChatMessage { Role = "assistant", Content = assistant.Text });
                         }
                     }
 
-                    // Model history must always end with an assistant message (the API rejects a
-                    // trailing user turn / consecutive user turns). If this turn produced no
-                    // assistant content at all, drop it and keep the prior clean history.
-                    if (EndsWithUser(commit))
+                    // Model history must always end with an assistant message. If this turn
+                    // produced no assistant content at all, drop it and keep the prior history.
+                    if (commit.Count > 0 && commit[^1].Role != "assistant")
                     {
                         commit = [.. baseHistory];
                     }
@@ -340,37 +442,27 @@ public sealed class AgentConversation : IDisposable
 
             if (!cleared)
             {
+                Persist(vault);
                 await emit(new { type = "turn_done", id = assistantId, stopReason, error });
             }
         }
     }
 
-    private static StreamBlock StartBlock(RawContentBlockStartEventContentBlock contentBlock)
+    /// <summary>Best-effort save of the display transcript (capped) - no-op if the vault is locked.</summary>
+    private void Persist(VaultService vault)
     {
-        if (contentBlock.TryPickToolUse(out var toolUse))
+        List<ChatMessage> snapshot;
+        lock (_stateLock)
         {
-            return new StreamBlock { Kind = StreamBlockKind.ToolUse, ToolId = toolUse.ID ?? "", ToolName = toolUse.Name ?? "" };
+            snapshot = _transcript.Count <= MaxPersistedMessages
+                ? _transcript.ToList()
+                : _transcript[^MaxPersistedMessages..];
         }
 
-        if (contentBlock.TryPickThinking(out _))
-        {
-            return new StreamBlock { Kind = StreamBlockKind.Thinking };
-        }
-
-        if (contentBlock.TryPickRedactedThinking(out var redacted))
-        {
-            return new StreamBlock { Kind = StreamBlockKind.RedactedThinking, Data = redacted.Data ?? "" };
-        }
-
-        if (contentBlock.TryPickText(out _))
-        {
-            return new StreamBlock { Kind = StreamBlockKind.Text };
-        }
-
-        return new StreamBlock { Kind = StreamBlockKind.Other };
+        vault.SaveAiChat(_chatRecordId, snapshot);
     }
 
-    private static IReadOnlyDictionary<string, JsonElement> ParseInput(string json)
+    private static IReadOnlyDictionary<string, JsonElement> ParseArguments(string json)
     {
         if (string.IsNullOrWhiteSpace(json))
         {
@@ -387,60 +479,17 @@ public sealed class AgentConversation : IDisposable
         }
     }
 
-    /// <summary>
-    /// Removes thinking / redacted-thinking blocks from a to-be-committed history. They are only
-    /// required WITHIN a turn's tool-use loop (kept in localHistory there); as future context they
-    /// are unnecessary and dropping them avoids any cross-turn positioning constraints plus bloat.
-    /// </summary>
-    private static List<MessageParam> StripThinking(List<MessageParam> history)
-    {
-        var result = new List<MessageParam>(history.Count);
-        foreach (var message in history)
-        {
-            if (!message.Content.TryPickContentBlockParams(out var contentBlocks))
-            {
-                result.Add(message);
-                continue;
-            }
-
-            var kept = new List<ContentBlockParam>();
-            foreach (var block in contentBlocks)
-            {
-                if (block.TryPickThinking(out _) || block.TryPickRedactedThinking(out _))
-                {
-                    continue;
-                }
-
-                kept.Add(block);
-            }
-
-            result.Add(new MessageParam { Role = message.Role, Content = kept });
-        }
-
-        return result;
-    }
-
-    private static bool EndsWithUser(List<MessageParam> history)
-    {
-        if (history.Count == 0)
-        {
-            return false;
-        }
-
-        Role role = history[^1].Role; // ApiEnum -> Role
-        return role == Role.User;
-    }
-
     // --- Tools ---------------------------------------------------------------------------------
 
-    private async Task<(string Summary, string Result)> ExecuteToolAsync(string mode, ToolCall call, CancellationToken ct)
+    private async Task<(string Summary, string Result)> ExecuteToolAsync(
+        AppSettings settings, string mode, string name, IReadOnlyDictionary<string, JsonElement> input, CancellationToken ct)
     {
-        switch (call.Name)
+        switch (name)
         {
             case "read_terminal":
             {
                 var maxLines = 120;
-                if (call.Input.TryGetValue("maxLines", out var value) && value.ValueKind == JsonValueKind.Number)
+                if (input.TryGetValue("maxLines", out var value) && value.ValueKind == JsonValueKind.Number)
                 {
                     maxLines = value.GetInt32();
                 }
@@ -449,14 +498,76 @@ public sealed class AgentConversation : IDisposable
                 return ("read recent output", LastLines(text, maxLines));
             }
 
-            case "run_command":
+            case "suggest_command":
             {
-                if (mode != "agent")
+                if (mode != "suggest")
                 {
-                    return ("blocked run_command (chat mode)", "Error: run_command is only available in agent mode.");
+                    return ("blocked suggest_command", "Error: suggest_command is only available in suggest mode. In auto mode use run_command - the safety check handles anything risky.");
                 }
 
-                var command = GetString(call.Input, "command") ?? "";
+                if (HasPendingSuggestion())
+                {
+                    return ("blocked suggest_command (one already pending)", PendingBlockMessage);
+                }
+
+                var command = SanitizeCommand(GetString(input, "command") ?? "", out var sanitizeError);
+                if (command is null)
+                {
+                    return ("rejected suggestion (not a single command)", $"Error: {sanitizeError}");
+                }
+
+                var typedAt = _session.Scrollback.TotalWritten;
+                _session.WriteToShell(command);
+                lock (_stateLock)
+                {
+                    _pendingSuggestion = (typedAt, command);
+                }
+
+                return ($"suggested: {OneLine(command, 80)}",
+                    "The command was typed into the terminal but NOT executed - the user must press Enter to run it "
+                    + "(or edit/discard it). Do not assume it ran. Answer the user in chat now; if they run it you "
+                    + "will automatically be asked to continue.");
+            }
+
+            case "run_command":
+            {
+                if (mode != "auto")
+                {
+                    return ("blocked run_command", "Error: run_command is only available in auto mode. Use suggest_command instead.");
+                }
+
+                if (HasPendingSuggestion())
+                {
+                    // Critical guard, not just tidiness: running now would send Enter onto
+                    // the prompt line where the pending suggestion sits - executing the
+                    // suggestion concatenated with this command.
+                    return ("blocked run_command (suggestion pending)", PendingBlockMessage);
+                }
+
+                var command = SanitizeCommand(GetString(input, "command") ?? "", out var runSanitizeError);
+                if (command is null)
+                {
+                    return ("rejected command (not a single command)", $"Error: {runSanitizeError}");
+                }
+
+                var (safe, reason) = await VerifyActionSafeAsync(settings, command, ct);
+                if (!safe)
+                {
+                    var typed = OneLine(command, int.MaxValue);
+                    var flaggedAt = _session.Scrollback.TotalWritten;
+                    _session.WriteToShell(typed);
+                    lock (_stateLock)
+                    {
+                        _pendingSuggestion = (flaggedAt, typed);
+                    }
+
+                    return ($"suggested (safety check): {OneLine(typed, 80)}",
+                        $"The safety check declined to run this automatically ({reason}). The command was typed into "
+                        + "the terminal instead - the user can press Enter to run it or discard it. Tell the user what "
+                        + "you suggested and why it was flagged, then answer their question; if they run it you will "
+                        + "automatically be asked to continue.");
+                }
+
                 var before = _session.Scrollback.TotalWritten;
                 _session.WriteToShell(command + "\r");
                 await ReadUntilIdleAsync(ct);
@@ -464,30 +575,62 @@ public sealed class AgentConversation : IDisposable
                 return ($"ran: {OneLine(command, 80)}", output);
             }
 
-            case "type_text":
+            case "press_keys":
             {
-                if (mode != "agent")
+                if (mode != "auto")
                 {
-                    return ("blocked type_text (chat mode)", "Error: type_text is only available in agent mode.");
+                    return ("blocked press_keys", "Error: press_keys is only available in auto mode.");
                 }
 
-                var text = GetString(call.Input, "text") ?? "";
+                if (HasPendingSuggestion())
+                {
+                    return ("blocked press_keys (suggestion pending)", PendingBlockMessage);
+                }
+
+                var keys = GetString(input, "keys") ?? "";
+                // Hard guard against the observed misuse: small models reach for the raw
+                // keystroke tool to send whole shell commands, which then just sit unexecuted
+                // (no Enter) while the model wonders why nothing happened. Anything that
+                // looks like a command gets redirected to run_command, which does press Enter.
+                if (keys.Contains(' ') || keys.Length > 8)
+                {
+                    return ("blocked press_keys (looks like a command)",
+                        "Error: press_keys is ONLY for short interactive keystrokes (like y, n, q, a number, or space "
+                        + "for a pager). That input looks like a shell command - call run_command with it instead; "
+                        + "run_command presses Enter and returns the output.");
+                }
+
+                var (safe, reason) = await VerifyActionSafeAsync(settings, keys, ct);
+                if (!safe)
+                {
+                    var flaggedAt = _session.Scrollback.TotalWritten;
+                    _session.WriteToShell(keys);
+                    lock (_stateLock)
+                    {
+                        _pendingSuggestion = (flaggedAt, keys);
+                    }
+
+                    return ($"suggested keystrokes (safety check): {OneLine(keys, 80)}",
+                        $"The safety check declined to send this automatically ({reason}). It was typed without a "
+                        + "newline for the user to confirm. Tell the user, then answer their question.");
+                }
+
                 var before = _session.Scrollback.TotalWritten;
-                _session.WriteToShell(text); // no newline - for prompts / pagers
+                _session.WriteToShell(keys); // no newline appended - for prompts / pagers
                 await Task.Delay(400, ct);
                 var output = AnsiText.Strip(_session.Scrollback.SnapshotSince(before));
-                return ($"typed: {OneLine(text, 80)}", output);
+                return ($"pressed keys: {OneLine(keys, 80)}", output);
             }
 
             case "wait":
             {
-                if (mode != "agent")
+                if (mode == "chat")
                 {
-                    return ("blocked wait (chat mode)", "Error: wait is only available in agent mode.");
+                    return ("blocked wait (chat mode)", "Error: wait is not available in chat mode.");
                 }
 
                 var seconds = 3;
-                if (call.Input.TryGetValue("seconds", out var value) && value.ValueKind == JsonValueKind.Number)
+                if (input.TryGetValue("seconds", out var value) && value.ValueKind == JsonValueKind.Number)
                 {
                     seconds = value.GetInt32();
                 }
@@ -500,8 +643,120 @@ public sealed class AgentConversation : IDisposable
             }
 
             default:
-                return ($"unknown tool: {call.Name}", $"Error: unknown tool '{call.Name}'.");
+                return ($"unknown tool: {name}", $"Error: unknown tool '{name}'.");
         }
+    }
+
+    /// <summary>
+    /// The "auto" mode gate: a second model call (same local model) judges whether the input
+    /// may be sent to the shell without user confirmation. It sees the recent terminal tail so
+    /// context-dependent keystrokes (like answering a visible prompt) can be judged sensibly.
+    /// Fails CLOSED: any error, or an answer that doesn't clearly start with SAFE, means unsafe.
+    /// </summary>
+    private async Task<(bool Safe, string Reason)> VerifyActionSafeAsync(AppSettings settings, string action, CancellationToken ct)
+    {
+        try
+        {
+            var tail = LastLines(AnsiText.Strip(_session.Scrollback.SnapshotTail(4 * 1024)), 15);
+            var messages = new List<AiChatMessage>
+            {
+                new()
+                {
+                    Role = "system",
+                    Content =
+                        "You are a strict safety gate for an AI agent operating a remote SSH shell. Decide whether the "
+                        + "input below may be sent to the shell AUTOMATICALLY, without user confirmation.\n"
+                        + "UNSAFE (must be confirmed by the user): deleting or overwriting files/data, package "
+                        + "installs/removals/upgrades, service or system restarts/shutdowns, permission/ownership "
+                        + "changes, user/account changes, network or firewall configuration, writes to system paths or "
+                        + "config files, kill signals, piping downloads into a shell, anything irreversible or "
+                        + "resource-destructive, or confirming a prompt that would do any of the above.\n"
+                        + "SAFE: read-only inspection (listing, viewing, searching, status/process/disk queries), "
+                        + "navigation, pagers, and keystrokes that merely continue a clearly safe operation visible in "
+                        + "the terminal.\n"
+                        + "Your reply MUST begin with the single bare word SAFE or UNSAFE - no formatting, no markdown, "
+                        + "nothing before it - optionally followed by a short reason.",
+                },
+                new()
+                {
+                    Role = "user",
+                    Content = $"Recent terminal output:\n---\n{tail}\n---\n\nInput about to be sent to the shell:\n{action}",
+                },
+            };
+
+            var verdict = new StringBuilder();
+            await OpenAiChatClient.StreamAsync(
+                settings.AiBaseUrl, settings.AiModel, messages, tools: null,
+                text =>
+                {
+                    verdict.Append(text);
+                    return Task.CompletedTask;
+                },
+                ct);
+
+            var answer = verdict.ToString().Trim();
+            if (IsSafeVerdict(answer))
+            {
+                return (true, "");
+            }
+
+            var reason = answer.Length > 0 ? OneLine(answer, 160) : "no verdict";
+            return (false, reason);
+        }
+        catch (OperationCanceledException)
+        {
+            throw; // a Stop must cancel the whole turn, not read as an unsafe verdict
+        }
+        catch (Exception ex)
+        {
+            return (false, $"safety check unavailable: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Tolerant verdict parse: models wrap the requested one-word verdict in markdown or
+    /// preamble ("**SAFE**", "Verdict: SAFE"), and a strict prefix match fail-closed every
+    /// one of those to unsafe (observed with gemma flagging a plain uname). The first
+    /// decisive word wins; "not safe" phrasing counts as unsafe; no decisive word at all
+    /// stays fail-closed.
+    /// </summary>
+    private static bool IsSafeVerdict(string answer)
+    {
+        var word = new StringBuilder();
+        string previous = "";
+        foreach (var c in answer)
+        {
+            if (char.IsLetter(c))
+            {
+                word.Append(char.ToUpperInvariant(c));
+                continue;
+            }
+
+            if (word.Length > 0)
+            {
+                var current = word.ToString();
+                word.Clear();
+                if (current == "UNSAFE")
+                {
+                    return false;
+                }
+
+                if (current == "SAFE")
+                {
+                    return previous != "NOT";
+                }
+
+                previous = current;
+            }
+        }
+
+        var last = word.ToString();
+        if (last == "UNSAFE")
+        {
+            return false;
+        }
+
+        return last == "SAFE" && previous != "NOT";
     }
 
     /// <summary>
@@ -546,6 +801,85 @@ public sealed class AgentConversation : IDisposable
     private static string? GetString(IReadOnlyDictionary<string, JsonElement> input, string key)
         => input.TryGetValue(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
+    /// <summary>
+    /// Cleans a model-proposed command into something that can actually be typed at a shell
+    /// prompt, or rejects it with a corrective error for the model. Small models paste
+    /// markdown fences, "$ " prompt artifacts, # comments, and whole multi-line scripts -
+    /// flattening those onto one PTY line is exactly the "comments leaking into the
+    /// terminal" garbage this guards against. Salvages the common single-command-plus-
+    /// comment shape; rejects anything with more than one runnable line.
+    /// </summary>
+    private static string? SanitizeCommand(string raw, out string error)
+    {
+        error = "";
+        var text = raw.Trim();
+
+        // Wrapping markdown fence (``` or ```sh ... ```).
+        if (text.StartsWith("```", StringComparison.Ordinal))
+        {
+            var firstNewline = text.IndexOf('\n');
+            text = firstNewline >= 0 ? text[(firstNewline + 1)..] : text[3..];
+            var closing = text.LastIndexOf("```", StringComparison.Ordinal);
+            if (closing >= 0)
+            {
+                text = text[..closing];
+            }
+
+            text = text.Trim();
+        }
+
+        text = text.Trim('`').Trim();
+
+        var runnable = new List<string>();
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 || line.StartsWith('#'))
+            {
+                continue; // empty or comment (a root-prompt "# cmd" paste isn't typeable either)
+            }
+
+            if (line.StartsWith("$ ", StringComparison.Ordinal))
+            {
+                line = line[2..].Trim(); // pasted prompt artifact
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+            }
+
+            runnable.Add(line);
+        }
+
+        if (runnable.Count == 0)
+        {
+            error = "That contained no runnable command (only comments or empty lines). Send exactly one single-line shell command.";
+            return null;
+        }
+
+        if (runnable.Count > 1)
+        {
+            error = "That was a multi-line script. Send exactly ONE single-line command per call (chain with && or ; if you must), then wait for its result before the next one.";
+            return null;
+        }
+
+        return runnable[0];
+    }
+
+    /// <summary>A typed suggestion is already sitting at the prompt - nothing else may be typed until the user acts.</summary>
+    private bool HasPendingSuggestion()
+    {
+        lock (_stateLock)
+        {
+            return _pendingSuggestion is not null;
+        }
+    }
+
+    private const string PendingBlockMessage =
+        "Error: a suggested command is already typed in the terminal awaiting the user's Enter. Do NOT type anything "
+        + "else - it would corrupt the pending command line. Answer the user in chat and stop; you will be asked to "
+        + "continue automatically once the user acts.";
+
     private static string OneLine(string text, int max)
     {
         var flat = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
@@ -563,106 +897,161 @@ public sealed class AgentConversation : IDisposable
         return lines.Length <= maxLines ? text : string.Join('\n', lines[^maxLines..]);
     }
 
-    private string SystemPrompt() =>
-        $"""
-        You are an AI assistant embedded in a live SSH terminal session connected to {_session.Username}@{_session.Host}:{_session.Port}.
-        You can read the recent terminal output with the read_terminal tool.
-        In agent mode you can also run commands (run_command), type text without a trailing newline (type_text, for prompts and pagers), and pause for output to settle (wait). Everything you send appears in the user's real terminal, which they are watching live - they see every keystroke land.
-        Be concise. Prefer reading recent output or waiting to observe results before continuing. Confirm the user's intent before running destructive or irreversible commands. Never invent command output - use read_terminal to see what actually happened.
-        """;
-
-    private static readonly IReadOnlyList<ToolUnion> ChatTools = BuildTools(agent: false);
-    private static readonly IReadOnlyList<ToolUnion> AgentTools = BuildTools(agent: true);
-
-    private static IReadOnlyList<ToolUnion> BuildTools(bool agent)
+    private string SystemPrompt(string mode)
     {
-        var readTerminal = new Tool
-        {
-            Name = "read_terminal",
-            Description = "Read the most recent output from the SSH terminal session (ANSI escapes stripped).",
-            InputSchema = new InputSchema
-            {
-                Properties = new Dictionary<string, JsonElement>
-                {
-                    ["maxLines"] = JsonSerializer.SerializeToElement(
-                        new { type = "integer", description = "Maximum number of trailing lines to return (default 120)." }),
-                },
-                Required = [],
-            },
-        };
+        var header =
+            $"""
+            You are an AI assistant embedded in a live SSH terminal session connected to {_session.Username}@{_session.Host}:{_session.Port}.
+            """;
 
-        if (!agent)
+        // Small local models tend to act and then go silent - every mode hammers on "always
+        // answer in chat" (and RunTurnAsync additionally forces a summary if a turn ends with
+        // tool activity but no text).
+        const string answerRule =
+            "ALWAYS finish your turn by answering the user in the chat. After any tool use, state what happened and "
+            + "answer their question in plain language. Never end a turn without a chat reply. Never invent command "
+            + "output - only report what the terminal actually shows.";
+
+        switch (mode)
         {
-            return new List<ToolUnion> { readTerminal };
+            case "suggest":
+                return
+                    $"""
+                    {header}
+                    You cannot execute anything yourself. You can read the recent terminal output (read_terminal), pause for output to settle (wait), and propose a command with the suggest_command tool - it types the command into the terminal WITHOUT executing it; the user reviews it and presses Enter themselves.
+                    Whenever the user wants something done or wants a command, you MUST call suggest_command with the exact command - never only write a command in your chat text, because the user expects it typed into the terminal ready to run. Suggest ONE command at a time and explain in chat what it does and why. When the user runs your suggestion, you are automatically asked to continue: read the result, report it, and suggest the next single command - until the task is complete, then say so clearly and stop suggesting. {answerRule}
+                    """;
+
+            case "auto":
+                return
+                    $"""
+                    {header}
+                    You can read the recent terminal output (read_terminal), run commands (run_command - it types the command, presses Enter, and returns the output), press a few raw keys for interactive prompts and pagers (press_keys - y/n/q/space only, never a command), and pause for output to settle (wait). Everything you send appears in the user's real terminal, which they are watching live.
+                    To run ANY shell command, USE run_command and nothing else - do not ask permission and do not merely describe it. A safety check runs automatically on everything you send: safe, read-only actions execute immediately; anything potentially destructive is only TYPED into the terminal as a suggestion the user must confirm with Enter - when that happens, say so in chat and wait for the user instead of retrying.
+                    Prefer reading recent output or waiting to observe results before continuing. {answerRule}
+                    """;
+
+            default:
+            {
+                // Chat mode: no tools, so hand the model the recent output directly. Small
+                // local models get a bounded tail to stay inside modest context windows.
+                var tail = LastLines(AnsiText.Strip(_session.Scrollback.SnapshotTail(8 * 1024)), 80);
+                return
+                    $"""
+                    {header}
+                    Answer the user's questions about this session. You cannot type into the terminal or run anything.
+                    Be concise. {answerRule}
+
+                    Recent terminal output (most recent last):
+                    ---
+                    {tail}
+                    ---
+                    """;
+            }
         }
-
-        var runCommand = new Tool
-        {
-            Name = "run_command",
-            Description = "Type a command into the terminal, run it (appends a newline), and return the output it produced.",
-            InputSchema = new InputSchema
-            {
-                Properties = new Dictionary<string, JsonElement>
-                {
-                    ["command"] = JsonSerializer.SerializeToElement(
-                        new { type = "string", description = "The shell command to run. No trailing newline needed." }),
-                },
-                Required = ["command"],
-            },
-        };
-
-        var typeText = new Tool
-        {
-            Name = "type_text",
-            Description = "Type raw text into the terminal WITHOUT a trailing newline - for answering prompts or driving pagers.",
-            InputSchema = new InputSchema
-            {
-                Properties = new Dictionary<string, JsonElement>
-                {
-                    ["text"] = JsonSerializer.SerializeToElement(
-                        new { type = "string", description = "The exact text to type (e.g. \"y\", or a control sequence)." }),
-                },
-                Required = ["text"],
-            },
-        };
-
-        var wait = new Tool
-        {
-            Name = "wait",
-            Description = "Pause for a number of seconds to let a long-running command make progress, then return any new output.",
-            InputSchema = new InputSchema
-            {
-                Properties = new Dictionary<string, JsonElement>
-                {
-                    ["seconds"] = JsonSerializer.SerializeToElement(
-                        new { type = "integer", description = "How many seconds to wait (1-60)." }),
-                },
-                Required = ["seconds"],
-            },
-        };
-
-        return new List<ToolUnion> { readTerminal, runCommand, typeText, wait };
     }
 
-    private enum StreamBlockKind
+    // OpenAI-dialect function definitions. Chat mode sends none (works with models whose
+    // Ollama template lacks tool support); suggest gets read/wait/suggest; auto adds
+    // execution (safety-gated in ExecuteToolAsync).
+    private static readonly object ReadTerminalTool = new
     {
-        Text,
-        ToolUse,
-        Thinking,
-        RedactedThinking,
-        Other,
-    }
+        type = "function",
+        function = new
+        {
+            name = "read_terminal",
+            description = "Read the most recent output from the SSH terminal session (ANSI escapes stripped).",
+            parameters = new
+            {
+                type = "object",
+                properties = new
+                {
+                    maxLines = new { type = "integer", description = "Maximum number of trailing lines to return (default 120)." },
+                },
+            },
+        },
+    };
 
-    private sealed class StreamBlock
+    private static readonly object WaitTool = new
     {
-        public StreamBlockKind Kind { get; init; }
-        public StringBuilder Text { get; } = new();
-        public StringBuilder Json { get; } = new();
-        public string ToolId { get; init; } = "";
-        public string ToolName { get; init; } = "";
-        public string Signature { get; set; } = "";
-        public string Data { get; init; } = "";
-    }
+        type = "function",
+        function = new
+        {
+            name = "wait",
+            description = "Pause for a number of seconds to let a long-running command make progress, then return any new output.",
+            parameters = new
+            {
+                type = "object",
+                properties = new
+                {
+                    seconds = new { type = "integer", description = "How many seconds to wait (1-60)." },
+                },
+            },
+        },
+    };
 
-    private sealed record ToolCall(string Id, string Name, IReadOnlyDictionary<string, JsonElement> Input);
+    private static readonly object SuggestCommandTool = new
+    {
+        type = "function",
+        function = new
+        {
+            name = "suggest_command",
+            description = "Type a shell command into the terminal WITHOUT executing it. The user reviews it and presses Enter to run it (or discards it). Use this to propose the next command.",
+            parameters = new
+            {
+                type = "object",
+                properties = new
+                {
+                    command = new { type = "string", description = "The shell command to propose. Single line; no trailing newline." },
+                },
+                required = new[] { "command" },
+            },
+        },
+    };
+
+    private static readonly object RunCommandTool = new
+    {
+        type = "function",
+        function = new
+        {
+            name = "run_command",
+            description = "Run a shell command in the terminal and return the output it produced. A safety check runs first: commands it flags as potentially destructive are only typed into the terminal for the user to confirm instead of executing.",
+            parameters = new
+            {
+                type = "object",
+                properties = new
+                {
+                    command = new { type = "string", description = "The shell command to run. No trailing newline needed." },
+                },
+                required = new[] { "command" },
+            },
+        },
+    };
+
+    private static readonly object PressKeysTool = new
+    {
+        type = "function",
+        function = new
+        {
+            name = "press_keys",
+            description = "Press a few raw keys in the terminal WITHOUT Enter - ONLY for interactive prompts and pagers (e.g. y, n, q, a number, space). NEVER for shell commands: use run_command for those (it presses Enter and returns the output). Also passes the safety check first.",
+            parameters = new
+            {
+                type = "object",
+                properties = new
+                {
+                    keys = new { type = "string", description = "The exact keystrokes to press (max a few characters, e.g. \"y\" or \"q\")." },
+                },
+                required = new[] { "keys" },
+            },
+        },
+    };
+
+    private static readonly object SuggestTools = new[] { ReadTerminalTool, WaitTool, SuggestCommandTool };
+
+    // No suggest_command in auto mode on purpose: run_command's safety gate already turns
+    // unsafe commands into typed suggestions, and offering the suggest tool too makes small
+    // models take the timid path for everything (observed with gemma: it suggested even a
+    // plain uname instead of running it).
+    private static readonly object AutoTools = new[] { ReadTerminalTool, WaitTool, RunCommandTool, PressKeysTool };
 }

@@ -72,7 +72,10 @@ function useSuppressBrowserContextMenu() {
   useEffect(() => {
     function onContextMenu(event: MouseEvent) {
       const target = event.target as HTMLElement | null
-      if (target?.closest('input, textarea, [contenteditable="true"]')) return
+      // data-selectable-text marks read-only surfaces where selecting/copying text is the
+      // point (e.g. the AI agent transcript) - they get the browser's own menu back so
+      // right-click -> Copy works, same as real text-entry fields.
+      if (target?.closest('input, textarea, [contenteditable="true"], [data-selectable-text]')) return
       event.preventDefault()
     }
     window.addEventListener('contextmenu', onContextMenu)

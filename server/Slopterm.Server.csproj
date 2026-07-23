@@ -41,7 +41,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Anthropic" Version="12.37.0" />
     <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
     <!-- 3.2.3's Linux native build links webkit2gtk 4.0 specifically, which modern
          distros (this one included) no longer ship at all - only 4.0.16+ links 4.1. -->

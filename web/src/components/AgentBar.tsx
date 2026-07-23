@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   agentSocketUrl,
-  getCredentialStatus,
+  getAiStatus,
+  setAiSettings,
   type AgentClientMessage,
+  type AgentMode,
   type AgentServerEvent,
+  type AiStatus,
   type ChatMessage,
-  type CredentialStatus,
 } from '../lib/api'
 import { AiAgentIcon } from './icons'
 
@@ -19,11 +21,12 @@ const inputClasses =
 // its existing ResizeObserver. See the pinned agent WS contract for the wire protocol.
 export function AgentBar({ sessionId }: { sessionId: string }) {
   const [expanded, setExpanded] = useState(false)
-  const [mode, setMode] = useState<'chat' | 'agent'>('chat')
+  const [mode, setMode] = useState<AgentMode>('chat')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [running, setRunning] = useState(false)
-  const [credential, setCredential] = useState<CredentialStatus | null>(null)
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
+  const [switchingModel, setSwitchingModel] = useState(false)
   const [socketReady, setSocketReady] = useState(false)
   const [disconnected, setDisconnected] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -33,19 +36,22 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
   // effect on every render.
   const socketRef = useRef<WebSocket | null>(null)
   const transcriptRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  // null = the default size (45vh capped at 420px); a number once the user drag-resizes.
+  const [panelHeight, setPanelHeight] = useState<number | null>(null)
 
-  // Refresh the credential readout on mount and whenever the bar is (re-)expanded, so a key
-  // just saved in Settings is reflected without a reload. Best-effort - a missing/erroring
-  // endpoint just leaves the status dot neutral, never throws. Only the dot's color changes,
-  // never the collapsed strip's height.
+  // Refresh the server/model readout on mount and whenever the bar is (re-)expanded, so a
+  // change saved in Settings (or a freshly pulled model) is reflected without a reload.
+  // Best-effort - a missing/erroring endpoint just leaves the status dot neutral, never
+  // throws. Only the dot's color changes, never the collapsed strip's height.
   useEffect(() => {
     let cancelled = false
-    getCredentialStatus()
-      .then((c) => {
-        if (!cancelled) setCredential(c)
+    getAiStatus()
+      .then((s) => {
+        if (!cancelled) setAiStatus(s)
       })
       .catch(() => {
-        if (!cancelled) setCredential(null)
+        if (!cancelled) setAiStatus(null)
       })
     return () => {
       cancelled = true
@@ -143,7 +149,9 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
   function send() {
     const text = input.trim()
     const socket = socketRef.current
-    if (!text || running || !socket || socket.readyState !== WebSocket.OPEN) return
+    // Sending while a turn runs is allowed - the backend queues messages and processes
+    // them in order (a queued message also interrupts waiting-for-Enter on a suggestion).
+    if (!text || !socket || socket.readyState !== WebSocket.OPEN) return
     // Render the user bubble optimistically - the server records it and returns it in later
     // history snapshots, which only arrive on connect/clear, so this never double-renders.
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', text, mode, activities: [] }
@@ -181,8 +189,59 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     }
   }
 
-  const dotColor = credential == null ? 'bg-slate-500' : credential.ready ? 'bg-emerald-500' : 'bg-amber-500'
-  const sendDisabled = running || !input.trim() || !socketReady
+  // Drag the handle at the panel's top edge to resize it: pointer capture keeps the drag
+  // alive outside the handle, and the height is clamped so neither the panel nor the
+  // terminal above it can be squeezed away. The terminal refits itself via its existing
+  // debounced ResizeObserver as the flex column reflows - no extra wiring needed.
+  function startResize(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const handle = e.currentTarget
+    handle.setPointerCapture(e.pointerId)
+    const startY = e.clientY
+    const startHeight = panelRef.current?.getBoundingClientRect().height ?? 0
+    const onMove = (ev: PointerEvent) => {
+      // Dragging up (clientY shrinks) grows the panel.
+      const proposed = Math.round(startHeight + (startY - ev.clientY))
+      const max = Math.round(window.innerHeight * 0.8)
+      setPanelHeight(Math.min(Math.max(proposed, 160), max))
+    }
+    const stop = () => {
+      handle.removeEventListener('pointermove', onMove)
+      handle.removeEventListener('pointerup', stop)
+      handle.removeEventListener('pointercancel', stop)
+    }
+    handle.addEventListener('pointermove', onMove)
+    handle.addEventListener('pointerup', stop)
+    handle.addEventListener('pointercancel', stop)
+  }
+
+  // Persists the pick via the same settings endpoint the Settings page uses; the backend
+  // re-reads settings per turn, so the next send uses the new model with no reconnect.
+  // The refresh afterwards re-syncs the picker (and dot/banner) with what actually saved,
+  // which also handles a failed save by snapping the select back.
+  async function switchModel(model: string) {
+    if (!aiStatus) return
+    setSwitchingModel(true)
+    try {
+      await setAiSettings({ baseUrl: aiStatus.baseUrl, model })
+    } catch {
+      // fall through - the refresh below re-syncs the picker with reality
+    }
+    try {
+      setAiStatus(await getAiStatus())
+    } catch {
+      setAiStatus(null)
+    }
+    setSwitchingModel(false)
+  }
+
+  const ready = aiStatus?.reachable === true && aiStatus.modelAvailable
+  const dotColor = aiStatus == null ? 'bg-slate-500' : ready ? 'bg-emerald-500' : 'bg-amber-500'
+  // Everything the server has pulled, plus the configured model if it isn't among them
+  // (e.g. not pulled yet) so the select always shows the real current setting.
+  const modelOptions =
+    aiStatus == null ? [] : aiStatus.models.includes(aiStatus.model) ? aiStatus.models : [aiStatus.model, ...aiStatus.models]
+  const sendDisabled = !input.trim() || !socketReady
 
   return (
     <div className="shrink-0 border-t border-slate-800 bg-slate-900 text-slate-200">
@@ -203,26 +262,48 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
           className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`}
           aria-hidden="true"
           title={
-            credential == null
-              ? 'Checking AI credentials…'
-              : credential.ready
-                ? 'AI credentials ready'
-                : 'No AI credentials configured'
+            aiStatus == null
+              ? 'Checking AI server…'
+              : ready
+                ? `AI ready (${aiStatus.model})`
+                : aiStatus.reachable
+                  ? `Model "${aiStatus.model}" not pulled`
+                  : 'AI server not reachable'
           }
         />
         {running && <span className="text-xs text-slate-500">Working…</span>}
       </div>
 
       {expanded && (
-        <div className="flex h-[45vh] max-h-[420px] min-h-0 w-full flex-col border-t border-slate-800">
+        <div
+          ref={panelRef}
+          className={`flex min-h-0 w-full flex-col border-t border-slate-800 ${panelHeight == null ? 'h-[45vh] max-h-[420px]' : ''}`}
+          style={panelHeight == null ? undefined : { height: panelHeight }}
+        >
+          {/* Drag-to-resize handle on the panel's top edge. */}
+          <div
+            role="separator"
+            aria-label="Resize AI agent panel"
+            onPointerDown={startResize}
+            className="group flex h-2 w-full shrink-0 cursor-ns-resize touch-none items-center justify-center"
+          >
+            <div className="h-0.5 w-10 rounded bg-slate-700 group-hover:bg-slate-500" />
+          </div>
           {/* Header row */}
           <div className="flex shrink-0 items-center gap-2 px-2 py-1.5">
             <div className="flex overflow-hidden rounded border border-slate-700">
-              {(['chat', 'agent'] as const).map((m) => (
+              {(['chat', 'suggest', 'auto'] as const).map((m) => (
                 <button
                   key={m}
                   type="button"
                   onClick={() => setMode(m)}
+                  title={
+                    m === 'chat'
+                      ? 'Answers only - never touches the shell'
+                      : m === 'suggest'
+                        ? 'Types commands for you to confirm with Enter'
+                        : 'Runs safety-checked commands; unsafe ones become suggestions'
+                  }
                   className={`px-3 py-1 text-xs font-medium capitalize ${
                     mode === m ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-slate-300 hover:bg-slate-800'
                   }`}
@@ -231,6 +312,21 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
                 </button>
               ))}
             </div>
+            {modelOptions.length > 0 && (
+              <select
+                aria-label="AI model"
+                value={aiStatus?.model}
+                disabled={running || switchingModel}
+                onChange={(e) => void switchModel(e.target.value)}
+                className="min-w-0 max-w-[45%] rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-300 focus:border-slate-400 focus:outline-none disabled:opacity-50"
+              >
+                {modelOptions.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            )}
             <div className="ml-auto flex items-center gap-1">
               <button
                 type="button"
@@ -250,10 +346,20 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
             </div>
           </div>
 
-          {credential && !credential.ready && (
+          {aiStatus && !ready && (
             <div className="mx-2 mb-1 shrink-0 rounded border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
-              No Claude credentials found. Add an API key in Settings under "AI agent", or sign in with{' '}
-              <code className="text-amber-200">ant auth login</code>.
+              {aiStatus.reachable ? (
+                <>
+                  Model "{aiStatus.model}" isn't available on the AI server - pull it with{' '}
+                  <code className="text-amber-200">ollama pull {aiStatus.model}</code> or pick another model in
+                  Settings under "AI agent".
+                </>
+              ) : (
+                <>
+                  Can't reach the local AI server at <code className="text-amber-200">{aiStatus.baseUrl}</code>.
+                  Start Ollama (or fix the address in Settings under "AI agent").
+                </>
+              )}
             </div>
           )}
 
@@ -273,13 +379,21 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
             </div>
           )}
 
-          {/* Transcript */}
-          <div ref={transcriptRef} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-2 py-2">
+          {/* Transcript. select-text + data-selectable-text opt this read-only surface back
+              into browser text selection (the app-wide default is user-select: none, issue
+              #61) and into the native context menu, so answers can be selected and copied. */}
+          <div
+            ref={transcriptRef}
+            data-selectable-text
+            className="flex min-h-0 flex-1 select-text flex-col gap-2 overflow-y-auto px-2 py-2"
+          >
             {messages.length === 0 ? (
               <p className="m-auto max-w-xs text-center text-xs text-slate-500">
-                {mode === 'agent'
-                  ? 'Give the agent a goal - it can read this session and run commands you’ll see happen in the terminal.'
-                  : 'Ask about what’s happening in this SSH session. Chat mode reads the terminal but never types into it.'}
+                {mode === 'auto'
+                  ? 'Give the agent a goal - safe commands run automatically, anything risky is only typed for you to confirm with Enter.'
+                  : mode === 'suggest'
+                    ? 'Ask for help - the agent types suggested commands into the terminal, and you press Enter to run them.'
+                    : 'Ask about what’s happening in this SSH session. Chat mode reads the terminal but never types into it.'}
               </p>
             ) : (
               messages.map((m) => <MessageBubble key={m.id} message={m} />)
@@ -294,7 +408,7 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
               className={inputClasses}
               rows={2}
               value={input}
-              placeholder={mode === 'agent' ? 'Describe a goal…' : 'Ask a question…'}
+              placeholder={mode === 'auto' ? 'Describe a goal…' : mode === 'suggest' ? 'Ask for a command…' : 'Ask a question…'}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
             />

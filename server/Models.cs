@@ -51,10 +51,11 @@ public sealed class SetGithubTokenRequest
     public string? Token { get; set; }
 }
 
-public sealed class SetAnthropicKeyRequest
+public sealed class SetAiSettingsRequest
 {
-    // Null/empty clears it.
-    public string? Key { get; set; }
+    // Null/empty on either field means "reset to the default" (local Ollama / its default model).
+    public string? BaseUrl { get; set; }
+    public string? Model { get; set; }
 }
 
 public sealed class UpdateApplyRequest

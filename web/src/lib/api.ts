@@ -457,41 +457,44 @@ export async function setGithubToken(token: string | null): Promise<GithubTokenS
 }
 
 // --- AI agent ---------------------------------------------------------------------------
-// The Anthropic API key follows the exact same status/setter shape as the GitHub token:
-// the key itself is never returned, only whether one is stored. It's the explicit fallback
-// override - the backend prefers the user's Claude account / env-var credentials (see
-// CredentialStatus below) when no key is stored here.
+// The agent talks to a local OpenAI-compatible server (Ollama by default) - a base URL and
+// model name in plaintext settings, no key or account anywhere.
 
-export interface AnthropicKeyStatus {
-  hasKey: boolean
+export interface AiSettings {
+  baseUrl: string
+  model: string
 }
 
-export async function getAnthropicKeyStatus(): Promise<AnthropicKeyStatus> {
-  const res = await fetch('/api/settings/anthropic-key')
+export async function getAiSettings(): Promise<AiSettings> {
+  const res = await fetch('/api/settings/ai')
   await throwOnError(res)
   return res.json()
 }
 
-export async function setAnthropicKey(key: string | null): Promise<AnthropicKeyStatus> {
-  const res = await fetch('/api/settings/anthropic-key', {
+// Empty strings reset either field to its default (local Ollama / its default model).
+export async function setAiSettings(settings: AiSettings): Promise<AiSettings> {
+  const res = await fetch('/api/settings/ai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ key }),
+    body: JSON.stringify(settings),
   })
   await throwOnError(res)
   return res.json()
 }
 
-// Which credential the backend would actually use for an agent turn right now. This is the
-// same probe the server gates a turn on, so this readout can never disagree with the real
-// turn behavior. `ready === (source !== 'none')`. Never carries any secret.
-export interface CredentialStatus {
-  source: 'vault' | 'env-api-key' | 'env-auth-token' | 'ant-profile' | 'none'
-  ready: boolean
+// Live probe: is the configured AI server up, is the configured model actually pulled, and
+// which models are available to switch to? Drives the agent bar's status dot + model picker
+// and the Settings readout. `models` is empty when the server is unreachable.
+export interface AiStatus {
+  reachable: boolean
+  modelAvailable: boolean
+  baseUrl: string
+  model: string
+  models: string[]
 }
 
-export async function getCredentialStatus(): Promise<CredentialStatus> {
-  const res = await fetch('/api/ai/credential-status')
+export async function getAiStatus(): Promise<AiStatus> {
+  const res = await fetch('/api/ai/status')
   await throwOnError(res)
   return res.json()
 }
@@ -500,11 +503,17 @@ export async function getCredentialStatus(): Promise<CredentialStatus> {
 // One JSON object per text frame, camelCase, no subprotocol (see agentSocketUrl). These
 // mirror the pinned agent WS contract verbatim.
 
+// The three permission tiers: chat = answers only (no shell access), suggest = may TYPE a
+// command for the user to confirm with Enter, auto = may execute, but only after a
+// per-command AI safety check (unsafe commands fall back to suggest behavior).
+export type AgentMode = 'chat' | 'suggest' | 'auto'
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   text: string
-  mode: 'chat' | 'agent'
+  // Typed loosely: persisted transcripts can carry mode values from older builds.
+  mode: string
   // Inline tool-activity chips shown under an assistant bubble; always [] for user messages.
   activities: { tool: string; summary: string }[]
 }
@@ -513,14 +522,9 @@ export interface ChatMessage {
 // exhaustively.
 export type AgentServerEvent =
   | { type: 'history'; messages: ChatMessage[] }
-  | { type: 'turn_start'; id: string; mode: 'chat' | 'agent' }
+  | { type: 'turn_start'; id: string; mode: string }
   | { type: 'text_delta'; id: string; text: string }
-  | {
-      type: 'tool_activity'
-      id: string
-      tool: 'read_terminal' | 'run_command' | 'type_text' | 'wait'
-      summary: string
-    }
+  | { type: 'tool_activity'; id: string; tool: string; summary: string }
   | {
       type: 'turn_done'
       id: string
@@ -531,7 +535,7 @@ export type AgentServerEvent =
 
 // Client -> server frames.
 export type AgentClientMessage =
-  | { type: 'send'; mode: 'chat' | 'agent'; text: string }
+  | { type: 'send'; mode: AgentMode; text: string }
   | { type: 'stop' }
   | { type: 'clear' }
 

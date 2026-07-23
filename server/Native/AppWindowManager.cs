@@ -55,6 +55,17 @@ public static class AppWindowManager
     private static Func<bool>? _closeToTray;
     private static Action? _onQuit;
 
+    // True once the webview has posted its first message (wc:ready). Photino's native
+    // SendWebMessage dereferences the webview without a null check, and the window's own
+    // Maximized/Restored events can fire DURING window creation - before WebView2 exists -
+    // which crashes the whole process with an uncatchable 0xC0000005 (observed on startup:
+    // OnRestored -> SendWebMessage(wc:restored) -> access violation). A message received
+    // FROM the webview is proof it exists, and it exists for the rest of the process's
+    // lifetime after that (the window is never destroyed - see the class doc comment), so
+    // outbound state pushes are gated on this. Nothing is lost before then: the title bar
+    // asks for the current state via wc:ready when it mounts.
+    private static volatile bool _webviewReady;
+
     /// <summary>
     /// Wires up what closing the window does: minimize it to the tray (keeping the app
     /// running) when <paramref name="closeToTray"/> reports true, or quit outright (the
@@ -220,6 +231,7 @@ public static class AppWindowManager
             window.RegisterWebMessageReceivedHandler((sender, message) =>
             {
                 var w = (PhotinoWindow)sender!;
+                _webviewReady = true; // any message from the webview proves it exists
                 switch (message)
                 {
                     case "wc:min":
@@ -240,9 +252,24 @@ public static class AppWindowManager
             });
 
             // Keep that glyph in sync when the state changes by any other means too
-            // (double-click drag-to-top, Win+Up, aero snap), not just our own button.
-            window.RegisterMaximizedHandler((sender, _) => ((PhotinoWindow)sender!).SendWebMessage("wc:maximized"));
-            window.RegisterRestoredHandler((sender, _) => ((PhotinoWindow)sender!).SendWebMessage("wc:restored"));
+            // (double-click drag-to-top, Win+Up, aero snap), not just our own button. Gated
+            // on _webviewReady: these events also fire during window creation, before the
+            // webview exists, and an ungated SendWebMessage there is a native process crash
+            // (see _webviewReady's comment).
+            window.RegisterMaximizedHandler((sender, _) =>
+            {
+                if (_webviewReady)
+                {
+                    ((PhotinoWindow)sender!).SendWebMessage("wc:maximized");
+                }
+            });
+            window.RegisterRestoredHandler((sender, _) =>
+            {
+                if (_webviewReady)
+                {
+                    ((PhotinoWindow)sender!).SendWebMessage("wc:restored");
+                }
+            });
 
             // Always cancel the native close (return true) so Photino never destroys the
             // window - see the class doc comment for why that's a hard requirement.

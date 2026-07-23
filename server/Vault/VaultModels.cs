@@ -1,3 +1,5 @@
+using Slopterm.Server.Ai;
+
 namespace Slopterm.Server.Vault;
 
 /// <summary>vault.json - never contains secrets, just what's needed to derive/verify the key.</summary>
@@ -183,14 +185,14 @@ public sealed class GithubTokenRecord
 }
 
 /// <summary>
-/// An Anthropic API key, used by the in-terminal AI agent as the explicit override/fallback when
-/// the SDK's zero-config credential resolution (ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN env vars,
-/// or an "ant auth login" profile) isn't what the user wants. Stored encrypted like any other
-/// secret, exactly like <see cref="GithubTokenRecord"/>.
+/// One host's AI agent conversation transcript (ai-chats/{id}.json, id = hash of
+/// user@host:port). Vault-encrypted like every other record - transcripts quote terminal
+/// output, which can contain anything the session showed. Only the display transcript is
+/// stored; the model-facing history is rebuilt from it on load.
 /// </summary>
-public sealed class AnthropicKeyRecord
+public sealed class AiChatRecord
 {
-    public required string Key { get; set; }
+    public required List<ChatMessage> Messages { get; set; }
 }
 
 /// <summary>
@@ -211,4 +213,13 @@ public sealed class AppSettings
     // running behind its tray icon (see AppWindowManager's window-closing handler). Only
     // has an effect where that native window/tray model exists (currently Windows).
     public bool CloseToTray { get; set; }
+
+    // The in-terminal AI agent talks to a local OpenAI-compatible server (Ollama's default
+    // port out of the box). Plaintext settings, not vault secrets: a loopback URL and a model
+    // name are no more sensitive than the rest of settings.json, and there's no key at all in
+    // the local-first setup. Initializers are the effective defaults for a settings.json
+    // written before these fields existed.
+    public string AiBaseUrl { get; set; } = "http://127.0.0.1:11434/v1";
+
+    public string AiModel { get; set; } = "gemma4:12b";
 }
