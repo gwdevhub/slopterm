@@ -384,6 +384,22 @@ spirit of Termius, targeting Linux, macOS and Windows.
   `navigator.clipboard` works) and shows a transient toast; a `ShareTokenModal` is the
   manual-copy fallback only if the clipboard API is blocked. A malformed/foreign token is a
   plain 400 from the import endpoint, not a 500 - it's user-pasted input.
+- **Host groups/folders (issue #14, `HostRecord.ParentGroupId`, `GroupCard.tsx`):** a saved
+  host can carry a free-text group name (`ConnectionForm`'s "Group" field, shown for
+  both the "new host" and "edit host" flows) - a `<datalist>` sourced from other hosts'
+  existing group names offers autocomplete so a typo doesn't silently create a
+  near-duplicate group. There's no separate `Group` record/CRUD - a group is purely
+  "hosts that share the same string in this field," computed client-side (`HostGrid.tsx`)
+  rather than a first-class entity with its own lifecycle; deleting/editing every member
+  out of a group just makes it stop existing, nothing to clean up. On the top-level grid,
+  hosts sharing a group name collapse into a single `GroupCard` (folder icon + name +
+  member count) *only once a second host actually joins it* - a lone host with a group
+  assigned still renders as its own normal card, since a "folder" of one isn't a useful
+  collapse. Clicking a `GroupCard` drills into just that group's members (`HostGrid`'s own
+  `expandedGroup` state, with an "All hosts" back link); typing into the search box
+  flattens every group back into individual results regardless of expansion state, since
+  once the user is actively searching for something specific, requiring them to first
+  open the right folder defeats the point.
 - **Native-feel chrome (no browser tells):** two deliberate touches so the WebView2 window
   doesn't read as a web page. (1) `web/src/index.css` styles thin, indigo-tinted scrollbars
   app-wide (`::-webkit-scrollbar` + `scrollbar-width/color`) instead of the chunky default

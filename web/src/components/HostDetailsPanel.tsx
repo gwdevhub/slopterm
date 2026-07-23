@@ -46,6 +46,7 @@ function hostToFormValues(host: SavedHost): ConnectionFormValues {
     privateKey: isKey ? (credential?.secret ?? '') : '',
     passphrase: credential?.passphrase ?? '',
     startupSnippetIds: host.host.startupSnippetIds ?? [],
+    groupName: host.host.parentGroupId ?? undefined,
   }
 }
 
@@ -66,6 +67,7 @@ function formValuesToHost(values: ConnectionFormValues): Parameters<typeof creat
     port: values.port,
     credentials: [credential],
     startupSnippetIds: values.startupSnippetIds ?? [],
+    parentGroupId: values.groupName,
   }
 }
 
@@ -194,6 +196,13 @@ export function HostDetailsPanel({
         <p className="text-xs tracking-wide text-slate-500 uppercase">General</p>
         <p className="text-slate-100">{host.host.name}</p>
       </div>
+
+      {host.host.parentGroupId && (
+        <div>
+          <p className="text-xs tracking-wide text-slate-500 uppercase">Group</p>
+          <p className="text-slate-100">{host.host.parentGroupId}</p>
+        </div>
+      )}
 
       <div>
         <p className="text-xs tracking-wide text-slate-500 uppercase">Credentials</p>
