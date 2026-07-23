@@ -64,8 +64,11 @@ public sealed class TerminalSession : IDisposable
 
                 if (read <= 0)
                 {
-                    await Task.Delay(25, cancellationToken);
-                    continue;
+                    // Stream.Read returning zero means EOF. For a shell this is the
+                    // normal result of `exit` (or the remote side otherwise closing
+                    // the channel), so let the WebSocket endpoint finish and notify
+                    // the browser instead of polling the already-closed stream forever.
+                    break;
                 }
 
                 await socket.SendAsync(

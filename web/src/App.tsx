@@ -282,6 +282,13 @@ function App() {
     removeTab(id)
   }
 
+  function handleTerminalSessionClosed(id: string) {
+    // The backend already removed the SSH session before closing its WebSocket. Remove
+    // only the local tab here; issuing another disconnect request is unnecessary.
+    setPendingCloseTabId((current) => (current === id ? null : current))
+    removeTab(id)
+  }
+
   // A tab that isn't connected yet has no live session to lose, so closing it skips the
   // "close this session?" confirmation entirely - that dialog exists to prevent
   // accidentally dropping a real connection, which doesn't apply here.
@@ -316,7 +323,11 @@ function App() {
             <div key={tab.id} className={`absolute inset-0 ${activeTabId === tab.id ? 'block' : 'hidden'}`}>
               {tab.status === 'connected' && tab.sessionId ? (
                 tab.kind === 'ssh' ? (
-                  <TerminalView sessionId={tab.sessionId} isActive={activeTabId === tab.id} />
+                  <TerminalView
+                    sessionId={tab.sessionId}
+                    isActive={activeTabId === tab.id}
+                    onSessionClosed={() => handleTerminalSessionClosed(tab.id)}
+                  />
                 ) : (
                   <SftpView sessionId={tab.sessionId} homeDirectory={tab.homeDirectory ?? '/'} />
                 )

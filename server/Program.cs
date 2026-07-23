@@ -735,6 +735,12 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     // "Quit" stops it.
     trayIcon = new WindowsTrayIcon("slopterm", OpenWindow, Quit);
     trayIcon.Start();
+
+    // Create the native window immediately so Windows gives the running application a
+    // taskbar button as well as its tray icon. The window already uses the embedded app
+    // icon (AppWindowManager.SetIconFile), and its close handler minimizes rather than
+    // destroys it, so the taskbar entry remains available for the process lifetime.
+    OpenWindow();
 }
 else
 {

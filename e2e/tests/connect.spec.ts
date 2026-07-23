@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -17,7 +17,7 @@ function terminalText(page: import('@playwright/test').Page) {
   return page.locator('.xterm-rows').innerText()
 }
 
-test('connects over SSH and shows live shell output', async ({ page }) => {
+test('connects over SSH and closes its tab when the remote shell exits', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')
   await ensureVaultUnlocked(page)
@@ -48,7 +48,11 @@ test('connects over SSH and shows live shell output', async ({ page }) => {
     expect(await terminalText(page)).toContain(marker)
   }).toPass({ timeout: 10_000 })
 
-  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
+  await page.keyboard.type('exit')
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('button', { name: `Close ${ctx.sshUsername}@${ctx.sshHost}` })).toHaveCount(0, {
+    timeout: 10_000,
+  })
 
   // Clean up - other spec files assert "No saved hosts yet." against this same shared
   // vault, so anything created here must not leak past this test.

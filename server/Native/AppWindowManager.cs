@@ -54,6 +54,8 @@ public static class AppWindowManager
         Thread thread;
         lock (Lock)
         {
+            WindowsTaskbarIdentity.ConfigureProcess();
+
             if (_window is not null)
             {
                 RestoreAndFocus(_window);
@@ -166,6 +168,9 @@ public static class AppWindowManager
             });
 
             window.Load(new Uri(url));
+            // Photino may apply its own hosted-window identity while Load creates the
+            // webview. Re-apply ours afterwards so the taskbar uses slopterm's icon.
+            ConfigureWindowsTaskbarWindow(window);
 
             lock (Lock)
             {
@@ -263,6 +268,27 @@ public static class AppWindowManager
     [SupportedOSPlatform("windows")]
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(nint hWnd);
+
+    private static void ConfigureWindowsTaskbarWindow(PhotinoWindow window)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            // WindowHandle throws until Photino.Load has initialized the native window,
+            // so this intentionally lives after Load. Taskbar decoration is best-effort
+            // and must never send a healthy window into the browser-fallback path.
+            WindowsTaskbarIdentity.ConfigureWindow(window.WindowHandle);
+        }
+        catch
+        {
+            // The native window remains usable even if Windows rejects its shell
+            // identity; at worst the taskbar temporarily falls back to a generic icon.
+        }
+    }
 
     /// <summary>
     /// Photino throws if the platform's webview runtime isn't installed (WebView2 on

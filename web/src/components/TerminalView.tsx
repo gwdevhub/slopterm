@@ -7,14 +7,20 @@ import { terminalSocketUrl } from '../lib/api'
 interface TerminalViewProps {
   sessionId: string
   isActive: boolean
+  onSessionClosed: () => void
 }
 
 // Renders only the terminal itself - the tab strip (App.tsx/TabBar.tsx) owns the
 // session label and close/disconnect action now that multiple sessions can be open at
 // once (issue #9), so a second "Session xxx / Disconnect" header here would be redundant.
-export function TerminalView({ sessionId, isActive }: TerminalViewProps) {
+export function TerminalView({ sessionId, isActive, onSessionClosed }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  const onSessionClosedRef = useRef(onSessionClosed)
+
+  useEffect(() => {
+    onSessionClosedRef.current = onSessionClosed
+  }, [onSessionClosed])
 
   useEffect(() => {
     const container = containerRef.current
@@ -67,8 +73,11 @@ export function TerminalView({ sessionId, isActive }: TerminalViewProps) {
     socket.addEventListener('message', (event) => {
       term.write(new Uint8Array(event.data as ArrayBuffer))
     })
+    let disposed = false
     socket.addEventListener('close', () => {
-      term.write('\r\n\x1b[31m[connection closed]\x1b[0m\r\n')
+      // Cleanup also closes the socket when React intentionally unmounts this view;
+      // only a close received while the view is live represents the session ending.
+      if (!disposed) onSessionClosedRef.current()
     })
 
     const dataDisposable = term.onData((data) => {
@@ -97,6 +106,7 @@ export function TerminalView({ sessionId, isActive }: TerminalViewProps) {
     resizeObserver.observe(container)
 
     return () => {
+      disposed = true
       clearTimeout(resizeTimeout)
       resizeObserver.disconnect()
       dataDisposable.dispose()
