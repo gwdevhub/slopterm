@@ -57,6 +57,14 @@ public sealed class SftpSession : IDisposable
         await _client.UploadFileAsync(stream, remotePath, ct);
     }
 
+    /// <summary>Uploads raw file bytes (an OS-dragged file, which only exists in the browser
+    /// as bytes - no path on disk) into a remote directory under the given file name.</summary>
+    public async Task UploadBytesAsync(Stream content, string fileName, string remoteDir, CancellationToken ct)
+    {
+        var remotePath = JoinPosixPath(remoteDir, Path.GetFileName(fileName));
+        await _client.UploadFileAsync(content, remotePath, ct);
+    }
+
     /// <summary>Downloads a remote file into a local directory, keeping its original file name.</summary>
     public async Task DownloadFileAsync(string remotePath, string localDir, CancellationToken ct)
     {

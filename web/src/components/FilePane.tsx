@@ -20,6 +20,17 @@ interface FilePaneProps {
   reloadToken: number
   onPathChange: (path: string) => void
   onDropFile: (file: DraggedFile) => void
+  // OS files dragged from the file manager (Explorer/Finder/Nautilus) onto this pane -
+  // distinct from onDropFile's in-app pane-to-pane drag, since these carry real bytes (a
+  // FileList) rather than the app's custom application/x-slopterm-file payload.
+  onDropOsFiles: (files: FileList) => void
+}
+
+// An OS-file drag (from the file manager) surfaces the real File objects in
+// dataTransfer.files and lists "Files" in dataTransfer.types - neither is true for the
+// app's own pane-to-pane drag, which uses a custom MIME type instead.
+function isOsFileDrag(dataTransfer: DataTransfer): boolean {
+  return dataTransfer.types.includes('Files')
 }
 
 function formatSize(bytes: number): string {
@@ -44,7 +55,7 @@ function joinPath(dir: string, name: string): string {
 // Files (not directories - dragging a folder isn't supported yet) are draggable onto the
 // *other* pane to upload/download them; SftpView owns the actual transfer since it's the
 // one thing here that needs to know about both panes at once.
-export function FilePane({ title, side, initialPath, list, reloadToken, onPathChange, onDropFile }: FilePaneProps) {
+export function FilePane({ title, side, initialPath, list, reloadToken, onPathChange, onDropFile, onDropOsFiles }: FilePaneProps) {
   const [path, setPath] = useState<string | undefined>(initialPath)
   const [listing, setListing] = useState<FsListing | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -70,7 +81,8 @@ export function FilePane({ title, side, initialPath, list, reloadToken, onPathCh
   }, [path, reloadToken])
 
   function handleDragOver(event: DragEvent) {
-    if (!event.dataTransfer.types.includes('application/x-slopterm-file')) return
+    // Accept both the app's own pane-to-pane drag and OS files dragged in from outside.
+    if (!event.dataTransfer.types.includes('application/x-slopterm-file') && !isOsFileDrag(event.dataTransfer)) return
     event.preventDefault()
     setDragOver(true)
   }
@@ -78,6 +90,10 @@ export function FilePane({ title, side, initialPath, list, reloadToken, onPathCh
   function handleDrop(event: DragEvent) {
     event.preventDefault()
     setDragOver(false)
+    if (isOsFileDrag(event.dataTransfer)) {
+      if (event.dataTransfer.files.length > 0) onDropOsFiles(event.dataTransfer.files)
+      return
+    }
     const raw = event.dataTransfer.getData('application/x-slopterm-file')
     if (!raw) return
     const file: DraggedFile = JSON.parse(raw)

@@ -59,3 +59,46 @@ test('dragging a file from one SFTP pane onto the other uploads/downloads it', a
     if (existsSync(localFilePath)) unlinkSync(localFilePath)
   }
 })
+
+test('dropping an OS file from the file manager onto the remote pane uploads it', async ({ page }) => {
+  // No file on disk this time - an OS drag carries the file's *bytes* (a real File in
+  // dataTransfer.files), which is the whole point of this path vs. the path-based upload.
+  const osFileName = `e2e-os-drop-${Date.now()}.txt`
+
+  await page.goto(ctx.baseUrl)
+  await gotoSection(page, 'Hosts')
+  await ensureVaultUnlocked(page)
+
+  await page.click('button:has-text("New host")')
+  await page.fill('#name', 'os drop test host')
+  await page.fill('#host', ctx.sshHost)
+  await page.fill('#port', String(ctx.sshPort))
+  await page.fill('#username', ctx.sshUsername)
+  await page.fill('#password', ctx.sshPassword)
+  await page.click('button:has-text("Save host")')
+  await expect(page.getByText('os drop test host')).toBeVisible({ timeout: 10_000 })
+
+  await page.getByRole('button', { name: 'SFTP to os drop test host' }).click()
+
+  const remoteRegion = page.getByRole('region', { name: 'Remote' })
+  // Wait for the remote listing to have loaded (its ".." entry appears once connected).
+  await expect(remoteRegion).toBeVisible({ timeout: 10_000 })
+
+  // Synthesize the OS-file drop: build a DataTransfer holding a real File (so
+  // dataTransfer.files/.types mirror a genuine Explorer/Finder/Nautilus drag) and dispatch
+  // dragover+drop at the remote pane's list, the way FilePane's handlers expect.
+  await remoteRegion.locator('ul').evaluate((list, name) => {
+    const dt = new DataTransfer()
+    dt.items.add(new File(['os dragged bytes'], name, { type: 'text/plain' }))
+    for (const type of ['dragover', 'drop'] as const) {
+      list.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }))
+    }
+  }, osFileName)
+
+  await expect(page.getByText(`Uploaded ${osFileName}`)).toBeVisible({ timeout: 10_000 })
+  await expect(remoteRegion.getByText(osFileName, { exact: true })).toBeVisible({ timeout: 10_000 })
+
+  await closeTab(page, 'os drop test host (SFTP)')
+  await gotoSection(page, 'Hosts')
+  await deleteHost(page, 'os drop test host')
+})
