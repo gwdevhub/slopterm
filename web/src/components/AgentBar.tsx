@@ -277,36 +277,50 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     aiStatus == null ? [] : aiStatus.models.includes(aiStatus.model) ? aiStatus.models : [aiStatus.model, ...aiStatus.models]
   const sendDisabled = !input.trim() || !socketReady
 
+  // Shared between the collapsed strip and the expanded header row - the toggle and the
+  // status dot live in whichever of the two is currently rendered, so the expanded panel
+  // needs no separate strip row (one line of chrome instead of two).
+  const toggleButton = (
+    <button
+      type="button"
+      aria-label="AI agent"
+      onClick={() => setExpanded((v) => !v)}
+      className={`flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-xs font-medium ${
+        expanded ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'text-slate-300 hover:bg-slate-800'
+      }`}
+    >
+      <AiAgentIcon className="h-4 w-4" />
+      AI agent
+    </button>
+  )
+  const statusDot = (
+    <span
+      className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`}
+      aria-hidden="true"
+      title={
+        aiStatus == null
+          ? 'Checking AI server…'
+          : ready
+            ? `AI ready (${aiStatus.model})`
+            : aiStatus.reachable
+              ? `Model "${aiStatus.model}" not pulled`
+              : 'AI server not reachable'
+      }
+    />
+  )
+
   return (
     <div className="shrink-0 border-t border-slate-800 bg-slate-900 text-slate-200">
-      {/* Collapsed strip - fixed height, always present at first paint, no transition. */}
-      <div className="flex h-9 shrink-0 items-center gap-2 px-2">
-        <button
-          type="button"
-          aria-label="AI agent"
-          onClick={() => setExpanded((v) => !v)}
-          className={`flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium ${
-            expanded ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'text-slate-300 hover:bg-slate-800'
-          }`}
-        >
-          <AiAgentIcon className="h-4 w-4" />
-          AI agent
-        </button>
-        <span
-          className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`}
-          aria-hidden="true"
-          title={
-            aiStatus == null
-              ? 'Checking AI server…'
-              : ready
-                ? `AI ready (${aiStatus.model})`
-                : aiStatus.reachable
-                  ? `Model "${aiStatus.model}" not pulled`
-                  : 'AI server not reachable'
-          }
-        />
-        {running && <span className="text-xs text-slate-500">Working…</span>}
-      </div>
+      {/* Collapsed strip - fixed height, no transition, and rendered at first paint (the
+          bar starts collapsed). While expanded it disappears entirely: the toggle + dot
+          move into the panel's header row instead. */}
+      {!expanded && (
+        <div className="flex h-9 shrink-0 items-center gap-2 px-2">
+          {toggleButton}
+          {statusDot}
+          {running && <span className="text-xs text-slate-500">Working…</span>}
+        </div>
+      )}
 
       {expanded && (
         <div
@@ -323,8 +337,11 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
           >
             <div className="h-0.5 w-10 rounded bg-slate-700 group-hover:bg-slate-500" />
           </div>
-          {/* Header row */}
-          <div className="flex shrink-0 items-center gap-2 px-2 py-1.5">
+          {/* Header row - carries the toggle + status dot too (flex-wrap keeps it usable
+              at phone width, where everything won't fit on one line). */}
+          <div className="flex shrink-0 flex-wrap items-center gap-2 px-2 py-1.5">
+            {toggleButton}
+            {statusDot}
             <div className="flex overflow-hidden rounded border border-slate-700">
               {(['chat', 'suggest', 'auto'] as const).map((m) => (
                 <button
