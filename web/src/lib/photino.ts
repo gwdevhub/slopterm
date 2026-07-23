@@ -20,13 +20,21 @@ function photino(): PhotinoExternal | undefined {
 export const isDesktopApp = typeof photino()?.sendMessage === 'function'
 
 // Window-control verbs the title bar posts; the backend switches on the "wc:" prefix.
-// 'drag' hands a title-bar press off to the OS's native window-move loop (see
-// AppWindowManager) - the robust path that doesn't depend on WebView2's experimental
-// draggable-region flag, which some runtime versions silently ignore.
-export type WindowCommand = 'min' | 'max' | 'close' | 'ready' | 'drag'
+export type WindowCommand = 'min' | 'max' | 'close' | 'ready'
 
 export function sendWindowCommand(command: WindowCommand): void {
   photino()?.sendMessage?.(`wc:${command}`)
+}
+
+// Moves the window to follow the pointer while a title-bar drag is in progress. This is the
+// runtime-independent way to move a chromeless window: it doesn't rely on WebView2's
+// experimental draggable-region flag (which CSS -webkit-app-region: drag needs, and which
+// some runtimes silently ignore - reported on Windows 11). The title bar posts the pointer's
+// physical screen coordinates on drag start and each move; the backend (AppWindowManager)
+// records the grab offset on start and repositions the window with SetLocation on each move.
+// Physical (device) pixels, not CSS pixels, so it stays correct under display scaling.
+export function sendWindowDrag(phase: 'start' | 'move', screenX: number, screenY: number): void {
+  photino()?.sendMessage?.(`wc:drag${phase}:${screenX},${screenY}`)
 }
 
 // Registers a handler for backend -> frontend messages (e.g. "wc:maximized"/"wc:restored"

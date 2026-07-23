@@ -858,16 +858,24 @@ spirit of Termius, targeting Linux, macOS and Windows.
       on the real top-level frame (found by the same enumeration the taskbar-identity code
       already uses - `PhotinoWindow.WindowHandle` isn't that frame). Verified: the window
       ends up caption-less but resizable, with working maximize/aero-snap.
-    - **Dragging the bar to move the window needs a WebView2 feature flag, not just the
-      CSS.** `-webkit-app-region: drag` (in `index.css`, with buttons opting out via
-      `no-drag`) is *ignored* by WebView2 unless non-client region support is on - and
-      Photino exposes no setting for it, so `AppWindowManager` switches it on by appending
-      `--enable-features=msWebView2EnableDraggableRegions` to the
-      `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` env var before the webview is created (append,
-      not overwrite, so it composes with anything already there). Without this the title bar
-      renders and the controls work but the window won't move when dragged - the exact
-      symptom that surfaced this. Confirmed the flag reaches WebView2 by inspecting the
-      `msedgewebview2` child process command line.
+    - **Dragging the bar to move the window: CSS `-webkit-app-region: drag` is only a
+      best-effort path; the reliable one is following the pointer.** The CSS drag (in
+      `index.css`, buttons opting out via `no-drag`) is *ignored* by WebView2 unless non-client
+      region support is on - `AppWindowManager` appends
+      `--enable-features=msWebView2EnableDraggableRegions` to
+      `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` to switch it on, but **that flag is experimental
+      and some WebView2 runtime versions silently ignore it** - reproduced on real Windows 11
+      (dragging did nothing there while working fine on another Win11 box, purely a
+      runtime-version difference). So dragging does NOT rely on it: `TitleBar` also handles
+      `pointerdown`/`pointermove`/`pointerup` (with `setPointerCapture`), posting the pointer's
+      physical screen coords via `wc:dragstart`/`wc:dragmove`, and `AppWindowManager` records
+      the grab offset on start and `SetLocation`s the window to follow the pointer on each move
+      (rAF-coalesced to one move per frame; physical pixels via `devicePixelRatio`, so it stays
+      1:1 under display scaling). The two coexist: where the flag works the draggable region
+      swallows the pointer events so the JS path never fires; where it doesn't, the JS path
+      moves the window. A `WM_NCLBUTTONDOWN`/`HTCAPTION` caption handoff was tried first and did
+      *nothing* - the mouse capture is held by the webview's own process, so a `ReleaseCapture`
+      on our thread can't hand the drag off; following the pointer sidesteps that entirely.
     - **Window controls go over Photino's `window.external` message bridge**
       (`lib/photino.ts`): the title bar posts `wc:min`/`wc:max`/`wc:close`/`wc:ready`, the
       backend's `RegisterWebMessageReceivedHandler` acts on them, and it pushes

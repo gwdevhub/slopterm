@@ -232,6 +232,20 @@ public static class AppWindowManager
             {
                 var w = (PhotinoWindow)sender!;
                 _webviewReady = true; // any message from the webview proves it exists
+
+                // Drag messages carry a coordinate payload (wc:dragstart:X,Y / wc:dragmove:X,Y)
+                // so they're matched by prefix, not the exact-string switch below.
+                if (message.StartsWith("wc:dragstart:", StringComparison.Ordinal))
+                {
+                    BeginDrag(w, message["wc:dragstart:".Length..]);
+                    return;
+                }
+                if (message.StartsWith("wc:dragmove:", StringComparison.Ordinal))
+                {
+                    DragMove(w, message["wc:dragmove:".Length..]);
+                    return;
+                }
+
                 switch (message)
                 {
                     case "wc:min":
@@ -242,9 +256,6 @@ public static class AppWindowManager
                         break;
                     case "wc:close":
                         HandleClose(w);
-                        break;
-                    case "wc:drag":
-                        BeginNativeDrag(w);
                         break;
                     case "wc:ready":
                         // Reply so the title bar's maximize/restore glyph starts correct -
@@ -413,46 +424,61 @@ public static class AppWindowManager
         }
     }
 
+    // The offset from the window's top-left to the pointer at the moment a title-bar drag
+    // began, so every subsequent move keeps that same grab point under the cursor. Both in
+    // physical (device) pixels, matching Photino's window coordinates and the physical-pixel
+    // values the frontend posts.
+    private static int _dragGrabOffsetX;
+    private static int _dragGrabOffsetY;
+
     /// <summary>
-    /// Starts moving the window by handing the current mouse-down off to the OS's own caption
-    /// drag loop - the reliable way to move a borderless window, independent of WebView2's
-    /// experimental <c>msWebView2EnableDraggableRegions</c> flag (which some runtime versions
-    /// silently ignore, so CSS <c>-webkit-app-region: drag</c> alone doesn't move the window on
-    /// those - reported on real Windows 11). The title bar posts <c>wc:drag</c> on pointerdown;
-    /// releasing the webview's mouse capture and then telling the top-level window a
-    /// non-client (caption) press happened makes Windows run its normal move loop - snapping,
-    /// multi-monitor and all - until the button is released. Runs on the window's UI thread
-    /// (the web-message handler's thread), which is where these calls must happen.
+    /// Records where on the window the drag was grabbed. This move-the-window-to-follow-the-
+    /// pointer approach is the reliable way to move a chromeless window: unlike CSS
+    /// <c>-webkit-app-region: drag</c> it doesn't depend on WebView2's experimental
+    /// draggable-regions flag (which some runtimes ignore - reported on Windows 11), and
+    /// unlike a <c>WM_NCLBUTTONDOWN</c> caption handoff it doesn't need to steal mouse capture
+    /// from the webview's own process (which is why that approach did nothing here). Runs on
+    /// the window's UI thread (the web-message handler's), which is where SetLocation must be
+    /// called from.
     /// </summary>
-    private static void BeginNativeDrag(PhotinoWindow window)
+    private static void BeginDrag(PhotinoWindow window, string payload)
     {
-        if (!OperatingSystem.IsWindows() || window.WindowHandle == nint.Zero)
+        if (TryParsePoint(payload, out var pointerX, out var pointerY))
+        {
+            _dragGrabOffsetX = pointerX - window.Left;
+            _dragGrabOffsetY = pointerY - window.Top;
+        }
+    }
+
+    /// <summary>Repositions the window so the grab point stays under the pointer (see BeginDrag).</summary>
+    private static void DragMove(PhotinoWindow window, string payload)
+    {
+        if (!TryParsePoint(payload, out var pointerX, out var pointerY))
         {
             return;
         }
 
         try
         {
-            ReleaseCapture();
-            SendMessage(window.WindowHandle, WmNcLButtonDown, HtCaption, nint.Zero);
+            window.SetLocation(new Point(pointerX - _dragGrabOffsetX, pointerY - _dragGrabOffsetY));
         }
         catch
         {
-            // Best-effort - a failed drag handoff just means the window doesn't move this
-            // time, never a reason to take the window (or the app) down.
+            // Best-effort - a dropped move just means the window doesn't track for that frame,
+            // never a reason to take the window (or the app) down.
         }
     }
 
-    private const uint WmNcLButtonDown = 0x00A1;
-    private static readonly nint HtCaption = 2;
-
-    [SupportedOSPlatform("windows")]
-    [DllImport("user32.dll")]
-    private static extern bool ReleaseCapture();
-
-    [SupportedOSPlatform("windows")]
-    [DllImport("user32.dll")]
-    private static extern nint SendMessage(nint hWnd, uint msg, nint wParam, nint lParam);
+    // Parses the "X,Y" integer pair the frontend posts with each drag message.
+    private static bool TryParsePoint(string payload, out int x, out int y)
+    {
+        x = 0;
+        y = 0;
+        var comma = payload.IndexOf(',');
+        return comma > 0
+            && int.TryParse(payload.AsSpan(0, comma), out x)
+            && int.TryParse(payload.AsSpan(comma + 1), out y);
+    }
 
     [SupportedOSPlatform("windows")]
     [DllImport("user32.dll")]

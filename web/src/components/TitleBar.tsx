@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { CloseIcon, MaximizeIcon, MenuIcon, MinimizeIcon, RestoreIcon } from './icons'
 import { ContextMenu } from './ContextMenu'
-import { onWindowMessage, sendWindowCommand } from '../lib/photino'
+import { onWindowMessage, sendWindowCommand, sendWindowDrag } from '../lib/photino'
 import type { NavSection } from './Sidebar'
 
 interface TitleBarProps {
@@ -24,6 +24,17 @@ export function TitleBar({ collapsed, onToggleCollapsed, onSelectSection, update
   const [maximized, setMaximized] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const hamburgerRef = useRef<HTMLButtonElement>(null)
+  // The pointer id of an in-progress title-bar drag (null when not dragging), plus a
+  // requestAnimationFrame coalescer so a fast drag posts at most one window-move per frame
+  // instead of one per pointermove event.
+  const dragPointerRef = useRef<number | null>(null)
+  const pendingMoveRef = useRef<{ x: number; y: number } | null>(null)
+  const rafRef = useRef<number | null>(null)
+
+  // Physical (device) pixels - MouseEvent.screenX/Y are CSS pixels, but the native window's
+  // coordinates are physical, so scale by devicePixelRatio to keep dragging 1:1 under
+  // display scaling (e.g. 150%).
+  const toPhysical = (value: number) => Math.round(value * window.devicePixelRatio)
 
   useEffect(() => {
     onWindowMessage((message) => {
@@ -39,17 +50,47 @@ export function TitleBar({ collapsed, onToggleCollapsed, onSelectSection, update
     if (rect) setMenu({ x: rect.left, y: rect.bottom + 2 })
   }
 
-  // Fallback window drag: the CSS `-webkit-app-region: drag` above only moves the window on
-  // WebView2 runtimes new enough to honor the experimental draggable-regions flag (see
-  // AppWindowManager) - on the ones that ignore it, the bar is a normal DOM region and this
-  // pointerdown fires instead, handing the press to the OS's own caption-drag loop. Where
-  // the flag *does* work, the draggable region swallows the pointer event so this never
-  // runs, so keeping both is safe. Left button only, and not when the press lands on a
-  // control (the buttons opt out of dragging) so their clicks still register.
+  // Window drag by following the pointer: the CSS `-webkit-app-region: drag` on the bar only
+  // moves the window on WebView2 runtimes that honor the experimental draggable-regions flag
+  // (see AppWindowManager); on the ones that ignore it the bar is a normal DOM region and
+  // these handlers fire instead, repositioning the native window to track the pointer. Where
+  // the flag *does* work the draggable region swallows the pointer events so this never runs,
+  // so the two coexist. Left button only, and never when the press starts on a control (the
+  // buttons opt out of dragging) so their clicks still register.
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return
     if ((event.target as HTMLElement).closest('button, .app-no-drag')) return
-    sendWindowCommand('drag')
+    // Capture so pointermove/up keep coming to this element even as the cursor leaves it
+    // (and even as the window moves out from under it).
+    event.currentTarget.setPointerCapture(event.pointerId)
+    dragPointerRef.current = event.pointerId
+    sendWindowDrag('start', toPhysical(event.screenX), toPhysical(event.screenY))
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragPointerRef.current !== event.pointerId) return
+    pendingMoveRef.current = { x: toPhysical(event.screenX), y: toPhysical(event.screenY) }
+    if (rafRef.current === null) {
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null
+        const move = pendingMoveRef.current
+        if (move) sendWindowDrag('move', move.x, move.y)
+      })
+    }
+  }
+
+  function endDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragPointerRef.current !== event.pointerId) return
+    dragPointerRef.current = null
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    } catch {
+      // Capture may already be gone (e.g. pointercancel) - nothing to release.
+    }
   }
 
   const controlButton = 'app-no-drag flex h-8 w-11 items-center justify-center text-slate-400'
@@ -57,6 +98,9 @@ export function TitleBar({ collapsed, onToggleCollapsed, onSelectSection, update
   return (
     <div
       onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
       className="app-drag flex h-8 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900 select-none"
     >
       <div className="flex items-center">
