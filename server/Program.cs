@@ -1009,6 +1009,29 @@ app.MapDelete("/api/ssh/session/{sessionId}", (string sessionId) =>
     return Results.NoContent();
 });
 
+// The browser terminal fits itself to its container, then posts the resulting size here so
+// the remote PTY matches - see TerminalSession.Resize. Separate from the I/O WebSocket on
+// purpose: that channel is a raw byte pump straight into the shell, so a control message
+// would have to be escaped out of the user's own keystrokes; a plain REST call sidesteps that.
+app.MapPost("/api/ssh/{sessionId}/resize", (string sessionId, TerminalResizeRequest request) =>
+{
+    var session = sessions.Get(sessionId);
+    if (session is null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        session.Resize((uint)request.Cols, (uint)request.Rows);
+        return Results.NoContent();
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
 app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId) =>
 {
     if (!context.WebSockets.IsWebSocketRequest)

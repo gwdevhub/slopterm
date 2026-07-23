@@ -29,9 +29,6 @@ public sealed class TerminalSession : IDisposable
         var client = new SshClient(connectionInfo);
         client.Connect();
 
-        // NOTE: SSH.NET's ShellStream has no public API to send a window-change request
-        // after creation, so the terminal size below is fixed for the life of the
-        // session. Live resize is a known follow-up, not an MVP feature.
         var shell = client.CreateShellStream(
             terminalName: "xterm-256color",
             columns: (uint)request.Columns,
@@ -41,6 +38,22 @@ public sealed class TerminalSession : IDisposable
             bufferSize: 4096);
 
         return new TerminalSession(Guid.NewGuid().ToString("N"), client, shell, request.Host, request.Port, request.Username);
+    }
+
+    // Sends a window-change request so the remote PTY (and programs reading COLUMNS/LINES,
+    // e.g. `systemctl status`, pagers, editors) match the browser terminal's real size. The
+    // frontend fits xterm to its container and posts the resulting cols/rows here - both on
+    // first mount (the initial ConnectRequest hard-codes 80x24, before xterm has measured
+    // itself) and on every subsequent window resize. Pixel width/height are 0: character
+    // cells are what matter, and the server derives nothing from the pixel dims.
+    public void Resize(uint columns, uint rows)
+    {
+        if (columns == 0 || rows == 0)
+        {
+            return;
+        }
+
+        _shell.ChangeWindowSize(columns, rows, 0, 0);
     }
 
     public Task PumpToWebSocketAsync(WebSocket socket, CancellationToken cancellationToken)

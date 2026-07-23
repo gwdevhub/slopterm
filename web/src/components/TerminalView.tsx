@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { sshUpload, terminalSocketUrl, type ConnectRequest } from '../lib/api'
+import { resizeTerminal, sshUpload, terminalSocketUrl, type ConnectRequest } from '../lib/api'
 
 interface TerminalViewProps {
   sessionId: string
@@ -103,6 +103,20 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, request, st
     fitAddon.fit()
     termRef.current = term
 
+    // Fit xterm to its container, then push the resulting size to the backend so the remote
+    // PTY (and anything reading COLUMNS/LINES - `systemctl status`, pagers, editors) matches
+    // the real window width instead of the 80x24 the initial ConnectRequest hard-codes.
+    // Deduped so an observer firing with an unchanged size doesn't spam resize requests.
+    let lastCols = 0
+    let lastRows = 0
+    function fitAndSyncSize() {
+      fitAddon.fit()
+      if (term.cols === lastCols && term.rows === lastRows) return
+      lastCols = term.cols
+      lastRows = term.rows
+      void resizeTerminal(sessionId, term.cols, term.rows)
+    }
+
     // OSC 7 (ESC ]7;file://host/path BEL) is the de-facto shell-integration escape a shell
     // emits on each prompt to report its working directory. Parsing it lets paste/drag
     // uploads target the shell's *actual* cwd, following the user's `cd`s invisibly instead
@@ -194,6 +208,10 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, request, st
     socket.addEventListener('open', () => {
       term.focus()
 
+      // The shell channel is ready now, so correct the PTY from the ConnectRequest's initial
+      // 80x24 to the terminal's actual measured size (xterm has laid out by this point).
+      fitAndSyncSize()
+
       // A short guard delay before the first one lets the shell's own banner/prompt print
       // first, so the command text doesn't land in the middle of it; spacing the rest out
       // the same way keeps each one from racing a slow prompt on the previous line.
@@ -226,22 +244,21 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, request, st
       }
     })
 
-    // NOTE: this only resizes the local xterm.js viewport. The backend's
-    // ShellStream has a fixed size for the session (see AGENTS.md); the
-    // server-side PTY does not learn about this resize yet.
+    // Re-fit and push the new size to the backend PTY when the container changes size.
     //
-    // Debounced rather than calling fitAddon.fit() straight from the observer: a real
+    // Debounced rather than calling fitAndSyncSize() straight from the observer: a real
     // drag-resize fires roughly one ResizeObserver notification per frame (confirmed by
     // instrumenting it directly - ~30 notifications over half a second of dragging), and
     // fit() calling term.resize() does a full renderer clear-and-redraw every time it
     // actually changes cols/rows. Applying that on every intermediate frame - including
     // whatever transient sizes happen to fall exactly on a column/row boundary as a
     // scrollbar's reserved gutter comes in and out of the width calculation - is what
-    // reads as flicker; only the settled size after the resize stops actually matters.
+    // reads as flicker; only the settled size after the resize stops actually matters (and
+    // it's that settled size we send the remote, not every intermediate one).
     let resizeTimeout: ReturnType<typeof setTimeout> | undefined
     const resizeObserver = new ResizeObserver(() => {
       clearTimeout(resizeTimeout)
-      resizeTimeout = setTimeout(() => fitAddon.fit(), 75)
+      resizeTimeout = setTimeout(() => fitAndSyncSize(), 75)
     })
     resizeObserver.observe(container)
 
