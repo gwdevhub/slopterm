@@ -131,7 +131,7 @@ export function HostGrid({
         </button>
       )}
 
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
         {groups.map((group) => (
           <GroupCard
             key={group.name}

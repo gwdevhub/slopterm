@@ -37,7 +37,7 @@ export function RecentConnections({ refreshToken, onSsh, onSftp, isConnecting }:
   return (
     <div className="flex flex-col gap-2 p-3 pt-0 sm:p-4 sm:pt-0">
       <h2 className="text-sm font-medium text-slate-300">Recent</h2>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
         {recents.map((recent) => (
           <HostCard
             key={recent.id}
