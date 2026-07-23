@@ -489,6 +489,19 @@ export async function sftpUpload(sessionId: string, localPath: string, remoteDir
   await throwOnError(res)
 }
 
+// Uploads an OS-dragged File (dropped from the file manager onto a pane) - unlike
+// sftpUpload it has only the file's bytes, no server-side path, so it streams the raw bytes
+// to the bytes-upload endpoint with the name and target remote dir as query params.
+export async function sftpUploadBytes(sessionId: string, file: File, remoteDir: string): Promise<void> {
+  const query = `?name=${encodeURIComponent(file.name)}&remoteDir=${encodeURIComponent(remoteDir)}`
+  const res = await fetch(`/api/sftp/${sessionId}/upload-bytes${query}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  })
+  await throwOnError(res)
+}
+
 export async function sftpDownload(sessionId: string, remotePath: string, localDir: string): Promise<void> {
   const res = await fetch(`/api/sftp/${sessionId}/download`, {
     method: 'POST',

@@ -250,6 +250,30 @@ app.MapPost("/api/sftp/{sessionId}/download", async (string sessionId, SftpDownl
     }
 });
 
+// Upload from raw bytes rather than a server-side path: an OS file dragged from the file
+// manager (Explorer/Finder/Nautilus) onto a pane only exists in the browser as bytes, with
+// no path on this machine's disk that the path-based /upload endpoint above could open. The
+// file name and target remote directory ride along as query params; the body is the raw
+// file bytes, same as /api/vault/import.
+app.MapPost("/api/sftp/{sessionId}/upload-bytes", async (string sessionId, string name, string remoteDir, HttpRequest request, CancellationToken ct) =>
+{
+    var session = sftpSessions.Get(sessionId);
+    if (session is null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        await session.UploadBytesAsync(request.Body, name, remoteDir, ct);
+        return Results.NoContent();
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
 app.MapGet("/api/local/list", (string? path) =>
 {
     try
