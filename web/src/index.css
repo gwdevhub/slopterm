@@ -10,6 +10,27 @@ body {
   margin: 0;
 }
 
+/* Native desktop apps don't let an accidental left-click drag smear a text selection across
+   unrelated chrome (title bar, tab strip, nav rail, host cards, dividers) - only a browser
+   does, which reads as "the web leaking through" (issue #61). So selection is off by default
+   for the whole window and re-enabled only on the surfaces where selecting text is the point:
+   real text-entry fields. The terminal is deliberately absent here - xterm.js already ships
+   `.xterm { user-select: none }` and runs its own SelectionService against its buffer (that's
+   why term.getSelection()/Ctrl+C copy work without the browser's native selection), so a
+   global `user-select: none` never touches it. The xterm helper textarea is off-screen IME
+   plumbing, not a user-facing field, so it stays excluded. */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea:not(.xterm-helper-textarea),
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* Custom title bar drag regions (chromeless desktop window). The bar itself is draggable
    to move the window; interactive controls inside it opt back out so they stay clickable.
    No-ops in a normal browser, which draws its own chrome. */
