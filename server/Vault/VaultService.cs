@@ -442,6 +442,11 @@ public sealed class VaultService
     public string SaveKeychainEntry(string? id, KeychainEntryRecord record) => SaveRecord("keychain", id, record);
     public bool DeleteKeychainEntry(string id) => DeleteRecord("keychain", id);
 
+    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, PortForwardRecord Record)> ListPortForwards() =>
+        ListRecords<PortForwardRecord>("port-forwards");
+    public string SavePortForward(string? id, PortForwardRecord record) => SaveRecord("port-forwards", id, record);
+    public bool DeletePortForward(string id) => DeleteRecord("port-forwards", id);
+
     public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, LogEntryRecord Record)> ListLogs() =>
         ListRecords<LogEntryRecord>("logs").OrderByDescending(l => l.UpdatedAt).ToList();
 

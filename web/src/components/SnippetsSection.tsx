@@ -1,15 +1,15 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { createSnippet, deleteSnippet, listSnippets, updateSnippet, type SavedSnippet } from '../lib/api'
 import { VaultGate } from './VaultGate'
+import { CardGrid, EntityCard, cardPrimaryButton, cardSecondaryButton } from './CardGrid'
+import { SnippetsIcon } from './icons'
 
 const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
 
-// Saved, reusable commands. Copies to the clipboard rather than sending directly into a
-// terminal - the nav rail (where this section lives) and an active session tab are
-// mutually exclusive in the current layout (see App.tsx), so there's no active terminal
-// visible to send into while this section is showing. Direct injection is a natural
-// follow-up once/if the app shell and an open session can be shown at the same time.
+// Saved, reusable commands - copied to the clipboard rather than sent directly into a
+// terminal (the nav rail and an active session tab are mutually exclusive in the current
+// layout). Same card-grid layout as the Hosts tab (see CardGrid), with create/edit in a modal.
 export function SnippetsSection() {
   return (
     <VaultGate>
@@ -20,13 +20,10 @@ export function SnippetsSection() {
 
 function SnippetsList() {
   const [snippets, setSnippets] = useState<SavedSnippet[]>([])
-  const [name, setName] = useState('')
-  const [command, setCommand] = useState('')
-  // Set while the form below is editing an existing snippet rather than creating a new
-  // one - the PUT endpoint already existed (same pattern as hosts before someone wired
-  // that one up), this was just missing a frontend caller/UI entirely.
-  const [editingId, setEditingId] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  // Null = no form open; 'new' = create; a snippet = edit it.
+  const [editing, setEditing] = useState<SavedSnippet | 'new' | null>(null)
 
   useEffect(() => {
     refresh()
@@ -36,34 +33,8 @@ function SnippetsList() {
     listSnippets().then(setSnippets)
   }
 
-  function handleEdit(s: SavedSnippet) {
-    setEditingId(s.id)
-    setName(s.snippet.name)
-    setCommand(s.snippet.command)
-  }
-
-  function handleCancelEdit() {
-    setEditingId(null)
-    setName('')
-    setCommand('')
-  }
-
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault()
-    if (editingId) {
-      await updateSnippet(editingId, { name, command })
-    } else {
-      await createSnippet({ name, command })
-    }
-    setEditingId(null)
-    setName('')
-    setCommand('')
-    refresh()
-  }
-
   async function handleDelete(id: string) {
     await deleteSnippet(id)
-    if (editingId === id) handleCancelEdit()
     refresh()
   }
 
@@ -73,70 +44,85 @@ function SnippetsList() {
     setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1500)
   }
 
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? snippets.filter((s) => s.snippet.name.toLowerCase().includes(q) || s.snippet.command.toLowerCase().includes(q))
+    : snippets
+
   return (
-    <div className="mx-auto flex w-full max-w-lg flex-col gap-4 p-4 sm:p-6">
-      <h2 className="text-lg font-semibold text-slate-100">Snippets</h2>
+    <>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <CardGrid
+          query={query}
+          onQueryChange={setQuery}
+          searchPlaceholder="Find a snippet…"
+          newLabel="New snippet"
+          onNew={() => setEditing('new')}
+          isEmpty={filtered.length === 0}
+          emptyText={snippets.length === 0 ? 'No saved snippets yet.' : 'No snippets match your search.'}
+        >
+          {filtered.map((s) => (
+            <EntityCard
+              key={s.id}
+              icon={<SnippetsIcon aria-hidden="true" className="h-5 w-5 text-slate-400" />}
+              title={<span className="truncate font-medium text-slate-100">{s.snippet.name}</span>}
+              subtitle={<span className="font-mono" title={s.snippet.command}>{s.snippet.command}</span>}
+              actions={
+                <>
+                  <button type="button" onClick={() => handleCopy(s.id, s.snippet.command)} className={cardPrimaryButton}>
+                    {copiedId === s.id ? 'Copied!' : 'Copy'}
+                  </button>
+                  <button type="button" onClick={() => setEditing(s)} className={cardSecondaryButton}>
+                    Edit
+                  </button>
+                  <button type="button" onClick={() => handleDelete(s.id)} className={cardSecondaryButton}>
+                    Delete
+                  </button>
+                </>
+              }
+            />
+          ))}
+        </CardGrid>
+      </div>
 
-      <ul className="flex flex-col gap-2">
-        {snippets.map((s) => (
-          <li key={s.id} className="flex items-center justify-between gap-2 rounded border border-slate-700 bg-slate-900 p-3">
-            <div className="min-w-0">
-              <p className="truncate font-medium text-slate-100">{s.snippet.name}</p>
-              <p className="truncate font-mono text-xs text-slate-400" title={s.snippet.command}>
-                {s.snippet.command}
-              </p>
-            </div>
-            <div className="flex shrink-0 gap-2">
-              <button
-                type="button"
-                onClick={() => handleCopy(s.id, s.snippet.command)}
-                className="rounded bg-indigo-600 px-3 py-1 text-sm text-white hover:bg-indigo-500"
-              >
-                {copiedId === s.id ? 'Copied!' : 'Copy'}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleEdit(s)}
-                className="rounded bg-slate-800 px-3 py-1 text-sm text-slate-300 hover:bg-slate-700"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDelete(s.id)}
-                className="rounded bg-slate-800 px-3 py-1 text-sm text-slate-300 hover:bg-slate-700"
-              >
-                Delete
-              </button>
-            </div>
-          </li>
-        ))}
-        {snippets.length === 0 && <p className="text-sm text-slate-500">No saved snippets yet.</p>}
-      </ul>
-
-      <form onSubmit={handleSubmit} className="flex flex-col gap-2 border-t border-slate-800 pt-4">
-        <h3 className="text-sm font-medium text-slate-300">{editingId ? 'Edit snippet' : 'Add a snippet'}</h3>
-        <input className={inputClasses} placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required />
-        <textarea
-          className={`${inputClasses} h-20 font-mono text-xs`}
-          placeholder="Command"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          required
+      {editing && (
+        <SnippetModal
+          snippet={editing === 'new' ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null)
+            refresh()
+          }}
         />
-        <div className="flex gap-2">
-          <button type="submit" className="flex-1 rounded bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500">
-            {editingId ? 'Save changes' : 'Save snippet'}
+      )}
+    </>
+  )
+}
+
+function SnippetModal({ snippet, onClose, onSaved }: { snippet: SavedSnippet | null; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(snippet?.snippet.name ?? '')
+  const [command, setCommand] = useState(snippet?.snippet.command ?? '')
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault()
+    if (snippet) await updateSnippet(snippet.id, { name, command })
+    else await createSnippet({ name, command })
+    onSaved()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <form onSubmit={handleSubmit} className="flex w-full max-w-md flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-5">
+        <h3 className="font-semibold text-slate-100">{snippet ? 'Edit snippet' : 'New snippet'}</h3>
+        <input className={inputClasses} placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+        <textarea className={`${inputClasses} h-24 font-mono text-xs`} placeholder="Command" value={command} onChange={(e) => setCommand(e.target.value)} required />
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700">
+            Cancel
           </button>
-          {editingId && (
-            <button
-              type="button"
-              onClick={handleCancelEdit}
-              className="rounded bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
-            >
-              Cancel
-            </button>
-          )}
+          <button type="submit" className="rounded bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500">
+            {snippet ? 'Save changes' : 'Save snippet'}
+          </button>
         </div>
       </form>
     </div>
