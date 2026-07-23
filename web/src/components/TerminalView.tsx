@@ -1,30 +1,92 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { terminalSocketUrl } from '../lib/api'
+import { sshUpload, terminalSocketUrl, type ConnectRequest } from '../lib/api'
 
 interface TerminalViewProps {
   sessionId: string
   isActive: boolean
   onSessionClosed: () => void
+  // The tab's own connect info - an SSH tab holds only an interactive shell server-side,
+  // not an SFTP channel, so paste/drag-to-upload (below) opens a fresh one-shot SFTP
+  // connection from this same request rather than reusing the shell.
+  request: ConnectRequest
   // Sent to the shell, in order, right after the socket opens (see the host's attached
   // snippets in HostModal/ConnectionForm) - only meaningful the first time a given
   // session id is seen, same as everything else keyed on [sessionId] below.
   startupCommands?: string[]
 }
 
+// Turns a Blob/File dropped or pasted into the terminal into a remote file name: keeps a
+// real dropped file's own name, and generates a timestamped one for a pasted image (which
+// the clipboard exposes with no meaningful name of its own).
+function uploadFileName(item: File): string {
+  if (item.name) return item.name
+  const ext = item.type.split('/')[1] || 'bin'
+  return `pasted-${Date.now()}.${ext}`
+}
+
 // Renders only the terminal itself - the tab strip (App.tsx/TabBar.tsx) owns the
 // session label and close/disconnect action now that multiple sessions can be open at
 // once (issue #9), so a second "Session xxx / Disconnect" header here would be redundant.
-export function TerminalView({ sessionId, isActive, onSessionClosed, startupCommands }: TerminalViewProps) {
+export function TerminalView({ sessionId, isActive, onSessionClosed, request, startupCommands }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const onSessionClosedRef = useRef(onSessionClosed)
+  // Best-effort remote cwd, tracked from OSC 7 (see below) - null until the shell reports
+  // one (it never will if it isn't configured to emit OSC 7), which is the signal to fall
+  // back to prompting for a destination on upload.
+  const remoteCwdRef = useRef<string | null>(null)
+  const requestRef = useRef(request)
+  const [uploadStatus, setUploadStatus] = useState<{ message: string; error?: boolean } | null>(null)
+  const uploadIdRef = useRef(0)
 
   useEffect(() => {
     onSessionClosedRef.current = onSessionClosed
   }, [onSessionClosed])
+
+  useEffect(() => {
+    requestRef.current = request
+  }, [request])
+
+  // Uploads dropped/pasted files into the shell's current directory (tracked via OSC 7),
+  // or a directory the user is prompted for when that's unknown. Deliberately does NOT feed
+  // the bytes into the terminal as input - that's the whole point of intercepting them.
+  async function uploadFiles(files: File[]) {
+    if (files.length === 0) return
+
+    let remoteDir = remoteCwdRef.current
+    if (!remoteDir) {
+      // The shell isn't reporting its cwd (no OSC 7 shell integration) - ask rather than
+      // guess, matching the SFTP flow's "upload into a known directory" contract.
+      remoteDir = window.prompt(
+        "This shell isn't reporting its current directory. Enter a remote directory to upload into:",
+        '.',
+      )
+      if (!remoteDir) return
+    }
+
+    const thisUploadId = ++uploadIdRef.current
+    for (const file of files) {
+      const name = uploadFileName(file)
+      setUploadStatus({ message: `Uploading ${name}…` })
+      try {
+        const { remotePath } = await sshUpload(requestRef.current, remoteDir, name, file)
+        if (uploadIdRef.current === thisUploadId) {
+          setUploadStatus({ message: `Uploaded to ${remotePath}` })
+        }
+      } catch (err) {
+        setUploadStatus({ message: err instanceof Error ? err.message : 'Upload failed', error: true })
+        return
+      }
+    }
+
+    // Only clears the banner if no other upload started in the meantime.
+    setTimeout(() => {
+      if (uploadIdRef.current === thisUploadId) setUploadStatus(null)
+    }, 4000)
+  }
 
   useEffect(() => {
     const container = containerRef.current
@@ -40,6 +102,22 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, startupComm
     term.open(container)
     fitAddon.fit()
     termRef.current = term
+
+    // OSC 7 (ESC ]7;file://host/path BEL) is the de-facto shell-integration escape a shell
+    // emits on each prompt to report its working directory. Parsing it lets paste/drag
+    // uploads target the shell's *actual* cwd, following the user's `cd`s invisibly instead
+    // of guessing. Best-effort: many shells don't emit it unless configured to, so a null
+    // cwd just means we prompt for a destination instead (see uploadFiles). Returning true
+    // marks the sequence handled. The payload is file://<host>/<path>; we only want the path.
+    term.parser.registerOscHandler(7, (data) => {
+      try {
+        const url = new URL(data)
+        if (url.pathname) remoteCwdRef.current = decodeURIComponent(url.pathname)
+      } catch {
+        // Not a file:// URL we understand - leave the last known cwd in place.
+      }
+      return true
+    })
 
     // Ctrl+C is overloaded in every terminal: with a selection active it should copy
     // (and clear the selection, matching what most terminal emulators do), with nothing
@@ -76,6 +154,38 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, startupComm
 
       return true
     })
+
+    // Paste of a non-text clipboard item (e.g. an image from a screenshot tool) uploads it
+    // as a file into the shell's cwd instead of feeding it as literal terminal input. Plain
+    // text paste is left entirely to xterm (we only preventDefault when there's a file), so
+    // it keeps working exactly as before. The listener is on the textarea xterm creates for
+    // input, which is where the browser fires the paste.
+    const onPaste = (event: ClipboardEvent) => {
+      const files = event.clipboardData ? Array.from(event.clipboardData.files) : []
+      if (files.length === 0) return // plain text - let xterm handle it as usual
+      event.preventDefault()
+      event.stopPropagation()
+      void uploadFiles(files)
+    }
+    const textarea = container.querySelector('textarea')
+    textarea?.addEventListener('paste', onPaste)
+
+    // Drag a file from the OS onto the terminal to upload it into the shell's cwd. dragover
+    // must preventDefault or the browser never fires a drop; copy is the right affordance.
+    const onDragOver = (event: DragEvent) => {
+      if (event.dataTransfer?.types.includes('Files')) {
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+      }
+    }
+    const onDrop = (event: DragEvent) => {
+      const files = event.dataTransfer ? Array.from(event.dataTransfer.files) : []
+      if (files.length === 0) return
+      event.preventDefault()
+      void uploadFiles(files)
+    }
+    container.addEventListener('dragover', onDragOver)
+    container.addEventListener('drop', onDrop)
 
     const socket = new WebSocket(terminalSocketUrl(sessionId))
     socket.binaryType = 'arraybuffer'
@@ -140,6 +250,9 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, startupComm
       startupTimeouts.forEach(clearTimeout)
       clearTimeout(resizeTimeout)
       resizeObserver.disconnect()
+      textarea?.removeEventListener('paste', onPaste)
+      container.removeEventListener('dragover', onDragOver)
+      container.removeEventListener('drop', onDrop)
       dataDisposable.dispose()
       socket.close()
       term.dispose()
@@ -148,7 +261,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, startupComm
     // startupCommands is intentionally excluded - it's fixed for the lifetime of a given
     // sessionId (resolved once at tab-creation time, see App.tsx), so re-running this
     // whole effect over a prop-identity change would just tear down and recreate the same
-    // live session for no reason.
+    // live session for no reason. request is likewise stable per tab and read via a ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
@@ -160,8 +273,19 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, startupComm
     }
   }, [isActive])
 
-  // overflow-hidden so this container's own box can never be nudged by xterm's rendered
-  // content (e.g. a fractional cell-size rounding mismatch) - it must stay purely
-  // parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size.
-  return <div ref={containerRef} className="h-full overflow-hidden bg-black p-1 sm:p-2" />
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {uploadStatus && (
+        <p
+          className={`shrink-0 border-b border-slate-800 px-3 py-1.5 text-sm ${uploadStatus.error ? 'bg-red-950/60 text-red-300' : 'bg-slate-900 text-slate-300'}`}
+        >
+          {uploadStatus.message}
+        </p>
+      )}
+      {/* overflow-hidden so this container's own box can never be nudged by xterm's rendered
+          content (e.g. a fractional cell-size rounding mismatch) - it must stay purely
+          parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size. */}
+      <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden bg-black p-1 sm:p-2" />
+    </div>
+  )
 }

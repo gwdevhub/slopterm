@@ -57,6 +57,20 @@ public sealed class SftpSession : IDisposable
         await _client.UploadFileAsync(stream, remotePath, ct);
     }
 
+    /// <summary>
+    /// Writes raw bytes to a remote directory under the given file name, returning the full
+    /// remote path they landed at. Backs the SSH tab's paste/drag-to-upload flow, where the
+    /// bytes come straight from the browser (a pasted image, an OS-dropped file) rather than
+    /// from a local file on disk like <see cref="UploadFileAsync"/>.
+    /// </summary>
+    public async Task<string> WriteBytesAsync(string remoteDir, string fileName, byte[] data, CancellationToken ct)
+    {
+        var remotePath = JoinPosixPath(remoteDir, fileName);
+        using var stream = new MemoryStream(data);
+        await _client.UploadFileAsync(stream, remotePath, ct);
+        return remotePath;
+    }
+
     /// <summary>Uploads raw file bytes (an OS-dragged file, which only exists in the browser
     /// as bytes - no path on disk) into a remote directory under the given file name.</summary>
     public async Task UploadBytesAsync(Stream content, string fileName, string remoteDir, CancellationToken ct)

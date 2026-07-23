@@ -391,6 +391,7 @@ function App() {
                     sessionId={tab.sessionId}
                     isActive={activeTabId === tab.id}
                     onSessionClosed={() => handleTerminalSessionClosed(tab.id)}
+                    request={tab.request}
                     startupCommands={tab.startupCommands}
                   />
                 ) : (

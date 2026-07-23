@@ -80,6 +80,11 @@ var updateService = new UpdateService();
 UpdateProgress updateProgress = new("idle", 0);
 var updateProgressLock = new object();
 
+// The SSH-tab upload endpoint carries its ConnectRequest as a multipart form field rather
+// than a JSON body, so it has to deserialize that field by hand - match the camelCase
+// convention the minimal-API pipeline uses for every other endpoint's JSON body.
+var jsonWebOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
 // Everything below is loopback/token/origin gated - this app has no other auth layer.
 app.Use(async (context, next) =>
 {
@@ -236,6 +241,58 @@ app.MapPost("/api/sftp/{sessionId}/upload", async (string sessionId, SftpUploadR
     {
         await session.UploadFileAsync(request.LocalPath, request.RemoteDir, ct);
         return Results.NoContent();
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+// Writes raw uploaded bytes to a remote directory over a fresh, one-shot SFTP connection.
+// Unlike /api/sftp/{sessionId}/upload, this has no existing sftp session to key off - an
+// SSH tab (see TerminalView) only holds an interactive shell, not an SFTP channel - so it
+// carries its own ConnectRequest and opens/closes a short-lived SftpSession just for this
+// write. Backs the SSH tab's paste-to-upload and drag-from-OS flows. multipart/form-data
+// (not JSON) so the file bytes travel as-is rather than base64-inflated.
+app.MapPost("/api/ssh/upload", async (HttpRequest request, CancellationToken ct) =>
+{
+    if (!request.HasFormContentType)
+    {
+        return Results.BadRequest(new { error = "Expected multipart/form-data." });
+    }
+
+    var form = await request.ReadFormAsync(ct);
+    var connectJson = form["connect"].ToString();
+    var remoteDir = form["remoteDir"].ToString();
+    var file = form.Files["file"];
+    if (string.IsNullOrEmpty(connectJson) || string.IsNullOrEmpty(remoteDir) || file is null)
+    {
+        return Results.BadRequest(new { error = "connect, remoteDir and file are all required." });
+    }
+
+    ConnectRequest? connect;
+    try
+    {
+        connect = JsonSerializer.Deserialize<ConnectRequest>(connectJson, jsonWebOptions);
+    }
+    catch (JsonException)
+    {
+        connect = null;
+    }
+
+    if (connect is null)
+    {
+        return Results.BadRequest(new { error = "Invalid connect payload." });
+    }
+
+    try
+    {
+        using var ms = new MemoryStream();
+        await file.CopyToAsync(ms, ct);
+
+        using var session = SftpSession.Connect(connect);
+        var remotePath = await session.WriteBytesAsync(remoteDir, file.FileName, ms.ToArray(), ct);
+        return Results.Ok(new { remotePath });
     }
     catch (Exception ex)
     {

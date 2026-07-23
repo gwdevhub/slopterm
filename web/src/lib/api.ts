@@ -36,6 +36,30 @@ export async function disconnect(sessionId: string): Promise<void> {
   await fetch(`/api/ssh/session/${sessionId}`, { method: 'DELETE' })
 }
 
+export interface SshUploadResponse {
+  remotePath: string
+}
+
+// Writes raw bytes (a pasted image, an OS-dropped file) into a remote directory of an SSH
+// tab's session - see server /api/ssh/upload. An SSH tab holds only an interactive shell,
+// not an SFTP channel, so the backend opens a fresh one-shot SFTP connection from the same
+// ConnectRequest the tab already carries. multipart/form-data (not JSON) so the bytes go up
+// as-is rather than base64-inflated.
+export async function sshUpload(
+  request: ConnectRequest,
+  remoteDir: string,
+  fileName: string,
+  data: Blob,
+): Promise<SshUploadResponse> {
+  const form = new FormData()
+  form.append('connect', JSON.stringify(request))
+  form.append('remoteDir', remoteDir)
+  form.append('file', data, fileName)
+  const res = await fetch('/api/ssh/upload', { method: 'POST', body: form })
+  await throwOnError(res)
+  return res.json()
+}
+
 export function terminalSocketUrl(sessionId: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}/ws/terminal/${sessionId}`
