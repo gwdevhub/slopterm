@@ -562,6 +562,18 @@ spirit of Termius, targeting Linux, macOS and Windows.
     which a dropped connection means "the app is restarting," not a failure; the backend
     also adds a short `Task.Delay(500)` before actually stopping, as cheap defense in depth
     on top of that, not a substitute for it.
+  - **The relaunch re-read `Environment.ProcessPath` after the swap instead of before it,
+    silently relaunching the backed-up old binary.** `ApplyAsync` renames the running exe
+    out from under itself (old -> `.old`, new binary into the vacated path) before
+    returning; `Environment.ProcessPath` is backed by `/proc/self/exe` on Linux, which
+    follows that rename for the rest of the process's life rather than picking up whatever
+    new file later occupies the original path - confirmed directly (renamed a running
+    process's own exe file, then placed a new file at the original path; `/proc/<pid>/exe`
+    kept reporting the renamed-away path). Fixed by capturing `Environment.ProcessPath`
+    into a local *before* calling `ApplyAsync`, and relaunching with that captured value
+    instead of a fresh property read. Re-verified end-to-end against the real repo/API
+    with this fix in place: the swap still checks out (SHA256 matches the release digest),
+    and the replacement process is launched with the correct, post-swap path.
 - **The per-launch auth token is now persisted** (`LaunchTokenStore.cs`, `launch-token.txt`
   next to `window.json` - same plaintext, per-install, not-part-of-a-vault-backup
   treatment), reused across restarts instead of regenerated every launch. Needed
