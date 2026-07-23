@@ -36,6 +36,30 @@ export async function disconnect(sessionId: string): Promise<void> {
   await fetch(`/api/ssh/session/${sessionId}`, { method: 'DELETE' })
 }
 
+export interface SshUploadResponse {
+  remotePath: string
+}
+
+// Writes raw bytes (a pasted image, an OS-dropped file) into a remote directory of an SSH
+// tab's session - see server /api/ssh/upload. An SSH tab holds only an interactive shell,
+// not an SFTP channel, so the backend opens a fresh one-shot SFTP connection from the same
+// ConnectRequest the tab already carries. multipart/form-data (not JSON) so the bytes go up
+// as-is rather than base64-inflated.
+export async function sshUpload(
+  request: ConnectRequest,
+  remoteDir: string,
+  fileName: string,
+  data: Blob,
+): Promise<SshUploadResponse> {
+  const form = new FormData()
+  form.append('connect', JSON.stringify(request))
+  form.append('remoteDir', remoteDir)
+  form.append('file', data, fileName)
+  const res = await fetch('/api/ssh/upload', { method: 'POST', body: form })
+  await throwOnError(res)
+  return res.json()
+}
+
 export function terminalSocketUrl(sessionId: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}/ws/terminal/${sessionId}`
@@ -671,6 +695,65 @@ export async function sftpDownload(sessionId: string, remotePath: string, localD
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ remotePath, localDir }),
+  })
+  await throwOnError(res)
+}
+
+// Remote file-management ops (backed by SftpSession over the live SFTP connection).
+// newName/name are always leaf names, never full paths, matching the backend's own
+// parent-relative handling.
+export async function sftpRename(sessionId: string, path: string, newName: string): Promise<void> {
+  const res = await fetch(`/api/sftp/${sessionId}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, newName }),
+  })
+  await throwOnError(res)
+}
+
+export async function sftpDelete(sessionId: string, path: string): Promise<void> {
+  const res = await fetch(`/api/sftp/${sessionId}/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  await throwOnError(res)
+}
+
+export async function sftpMkdir(sessionId: string, parentDir: string, name: string): Promise<void> {
+  const res = await fetch(`/api/sftp/${sessionId}/mkdir`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ parentDir, name }),
+  })
+  await throwOnError(res)
+}
+
+// Local file-management ops - same shapes as the remote ones, but they hit the machine
+// running slopterm directly and need no session (gated like /api/local/list).
+export async function localRename(path: string, newName: string): Promise<void> {
+  const res = await fetch('/api/local/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, newName }),
+  })
+  await throwOnError(res)
+}
+
+export async function localDelete(path: string): Promise<void> {
+  const res = await fetch('/api/local/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  await throwOnError(res)
+}
+
+export async function localMkdir(parentDir: string, name: string): Promise<void> {
+  const res = await fetch('/api/local/mkdir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ parentDir, name }),
   })
   await throwOnError(res)
 }

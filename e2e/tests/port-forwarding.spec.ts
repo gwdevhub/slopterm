@@ -34,8 +34,10 @@ test('port forwarding: create a rule through the section and see it listed', asy
 
   await gotoSection(page, 'Port Forwarding')
   // The section has no heading - it's the Hosts-style toolbar + card grid (see CardGrid),
-  // so the "New port forward" button is what confirms it rendered.
-  await expect(page.getByRole('button', { name: 'New port forward' })).toBeVisible()
+  // so the "New port forward" button is what confirms it rendered. Explicit 10s (not the
+  // default 5s) like the suite's other post-navigation waits - the first section render on
+  // a cold start can otherwise just miss the default timeout.
+  await expect(page.getByRole('button', { name: 'New port forward' })).toBeVisible({ timeout: 10_000 })
 
   // Add a local forward through the form (opened from the "New port forward" button).
   await page.getByRole('button', { name: 'New port forward' }).click()

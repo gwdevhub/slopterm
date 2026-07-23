@@ -57,6 +57,20 @@ public sealed class SftpSession : IDisposable
         await _client.UploadFileAsync(stream, remotePath, ct);
     }
 
+    /// <summary>
+    /// Writes raw bytes to a remote directory under the given file name, returning the full
+    /// remote path they landed at. Backs the SSH tab's paste/drag-to-upload flow, where the
+    /// bytes come straight from the browser (a pasted image, an OS-dropped file) rather than
+    /// from a local file on disk like <see cref="UploadFileAsync"/>.
+    /// </summary>
+    public async Task<string> WriteBytesAsync(string remoteDir, string fileName, byte[] data, CancellationToken ct)
+    {
+        var remotePath = JoinPosixPath(remoteDir, fileName);
+        using var stream = new MemoryStream(data);
+        await _client.UploadFileAsync(stream, remotePath, ct);
+        return remotePath;
+    }
+
     /// <summary>Uploads raw file bytes (an OS-dragged file, which only exists in the browser
     /// as bytes - no path on disk) into a remote directory under the given file name.</summary>
     public async Task UploadBytesAsync(Stream content, string fileName, string remoteDir, CancellationToken ct)
@@ -72,6 +86,47 @@ public sealed class SftpSession : IDisposable
         var localPath = Path.Combine(localDir, fileName);
         await using var stream = File.Create(localPath);
         await _client.DownloadFileAsync(remotePath, stream, ct);
+    }
+
+    /// <summary>Renames (or moves within the same parent) a remote file or directory to a new leaf name.</summary>
+    public void Rename(string path, string newName)
+    {
+        var parent = ComputePosixParent(path) ?? "/";
+        _client.RenameFile(path, JoinPosixPath(parent, newName));
+    }
+
+    /// <summary>Deletes a remote file or directory (directories are removed recursively).</summary>
+    public void Delete(string path)
+    {
+        if (_client.GetAttributes(path).IsDirectory)
+        {
+            DeleteDirectoryRecursive(path);
+        }
+        else
+        {
+            _client.DeleteFile(path);
+        }
+    }
+
+    /// <summary>Creates a new directory under the given remote parent directory.</summary>
+    public void MakeDirectory(string parentDir, string name) => _client.CreateDirectory(JoinPosixPath(parentDir, name));
+
+    // SSH.NET's DeleteDirectory only removes an empty directory, so drain the children first.
+    private void DeleteDirectoryRecursive(string path)
+    {
+        foreach (var entry in _client.ListDirectory(path).Where(e => e.Name != "." && e.Name != ".."))
+        {
+            if (entry.IsDirectory)
+            {
+                DeleteDirectoryRecursive(entry.FullName);
+            }
+            else
+            {
+                _client.DeleteFile(entry.FullName);
+            }
+        }
+
+        _client.DeleteDirectory(path);
     }
 
     private static string JoinPosixPath(string dir, string name) => dir.EndsWith('/') ? dir + name : dir + "/" + name;

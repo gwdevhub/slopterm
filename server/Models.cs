@@ -75,3 +75,41 @@ public sealed class SftpDownloadRequest
     public required string RemotePath { get; set; }
     public required string LocalDir { get; set; }
 }
+
+// Rename/delete/mkdir on the remote side operate on an SFTP session (path is the target
+// entry; NewName/Name are leaf names, never full paths, so nothing can escape the parent).
+public sealed class SftpRenameRequest
+{
+    public required string Path { get; set; }
+    public required string NewName { get; set; }
+}
+
+public sealed class SftpDeleteRequest
+{
+    public required string Path { get; set; }
+}
+
+public sealed class SftpMakeDirectoryRequest
+{
+    public required string ParentDir { get; set; }
+    public required string Name { get; set; }
+}
+
+// The local-side equivalents - same shapes, but they need no session (they hit the
+// machine running slopterm directly, gated the same way /api/local/list is).
+public sealed class LocalRenameRequest
+{
+    public required string Path { get; set; }
+    public required string NewName { get; set; }
+}
+
+public sealed class LocalDeleteRequest
+{
+    public required string Path { get; set; }
+}
+
+public sealed class LocalMakeDirectoryRequest
+{
+    public required string ParentDir { get; set; }
+    public required string Name { get; set; }
+}
