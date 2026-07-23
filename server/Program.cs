@@ -286,11 +286,107 @@ app.MapPost("/api/sftp/{sessionId}/upload-bytes", async (string sessionId, strin
     }
 });
 
+app.MapPost("/api/sftp/{sessionId}/rename", (string sessionId, SftpRenameRequest request) =>
+{
+    var session = sftpSessions.Get(sessionId);
+    if (session is null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        session.Rename(request.Path, request.NewName);
+        return Results.NoContent();
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/sftp/{sessionId}/delete", (string sessionId, SftpDeleteRequest request) =>
+{
+    var session = sftpSessions.Get(sessionId);
+    if (session is null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        session.Delete(request.Path);
+        return Results.NoContent();
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/sftp/{sessionId}/mkdir", (string sessionId, SftpMakeDirectoryRequest request) =>
+{
+    var session = sftpSessions.Get(sessionId);
+    if (session is null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        session.MakeDirectory(request.ParentDir, request.Name);
+        return Results.NoContent();
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
 app.MapGet("/api/local/list", (string? path) =>
 {
     try
     {
         return Results.Ok(LocalFileSystem.ListDirectory(path));
+    }
+    catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or ArgumentException)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/local/rename", (LocalRenameRequest request) =>
+{
+    try
+    {
+        LocalFileSystem.Rename(request.Path, request.NewName);
+        return Results.NoContent();
+    }
+    catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or ArgumentException)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/local/delete", (LocalDeleteRequest request) =>
+{
+    try
+    {
+        LocalFileSystem.Delete(request.Path);
+        return Results.NoContent();
+    }
+    catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or ArgumentException)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/local/mkdir", (LocalMakeDirectoryRequest request) =>
+{
+    try
+    {
+        LocalFileSystem.MakeDirectory(request.ParentDir, request.Name);
+        return Results.NoContent();
     }
     catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or ArgumentException)
     {
