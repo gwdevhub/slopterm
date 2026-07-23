@@ -12,7 +12,7 @@ import {
 import { resolveConnectRequest, resolveRecentConnectRequest, resolveStartupCommands } from '../lib/hosts'
 import { VaultGate } from './VaultGate'
 import { HostGrid } from './HostGrid'
-import { HostDetailsPanel } from './HostDetailsPanel'
+import { HostModal } from './HostModal'
 import { RecentConnections } from './RecentConnections'
 import { QuickConnectModal } from './QuickConnectModal'
 import { ContextMenu } from './ContextMenu'
@@ -27,14 +27,15 @@ interface HostsSectionProps {
   isConnecting: boolean
 }
 
+// 'new' opens the modal empty (creating a host); a SavedHost opens it pre-filled for that
+// host (editing); null means no modal at all - there's no persistent side panel anymore
+// (see HostModal's doc comment for why), so this is the only "what's showing" state left.
+type HostModalState = 'new' | SavedHost | null
+
 export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnecting }: HostsSectionProps) {
   const [hosts, setHosts] = useState<SavedHost[]>([])
   const [snippets, setSnippets] = useState<SavedSnippet[]>([])
-  const [selection, setSelection] = useState<'none' | 'new' | string>('none')
-  // Whether the selected host is showing in edit mode (vs. read-only details). Kept
-  // separate from `selection` so both context-menu "Edit" and the details panel's own
-  // Edit button just flip this without changing which host is selected.
-  const [editing, setEditing] = useState(false)
+  const [hostModal, setHostModal] = useState<HostModalState>(null)
   const [quickConnectOpen, setQuickConnectOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [recentsRefreshToken, setRecentsRefreshToken] = useState(0)
@@ -57,17 +58,19 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
   }, [notice])
 
   function refreshHosts() {
-    listHosts().then(setHosts)
+    return listHosts().then((updated) => {
+      setHosts(updated)
+      return updated
+    })
   }
 
-  function selectHost(id: string) {
-    setSelection(id)
-    setEditing(false)
-  }
-
-  function backToList() {
-    setSelection('none')
-    setEditing(false)
+  // After "Duplicate" creates a copy, re-open this same modal for the new host so its
+  // address/username are right there to adjust, instead of leaving the user to find the
+  // copy themselves among the cards.
+  async function handleHostDuplicated(newHostId: string) {
+    const updated = await refreshHosts()
+    const newHost = updated.find((h) => h.id === newHostId)
+    setHostModal(newHost ?? null)
   }
 
   // Ad hoc connections (Quick Connect, or reconnecting via an existing Recent) remember
@@ -138,62 +141,53 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
     if (await onConnectSftp(request, `${recent.connection.username}@${recent.connection.host}`)) rememberRecent(request)
   }
 
-  const selectedHost = selection !== 'none' && selection !== 'new' ? hosts.find((h) => h.id === selection) : undefined
-
-  // 'new' mode and the Quick Connect modal both already show this inline via
-  // ConnectionForm's own errorMessage prop - showing it a second time here would be
-  // redundant (and, for the modal specifically, an ambiguous duplicate match in tests).
-  const showBannerHere = selection !== 'new' && !quickConnectOpen
+  // The modal already shows this inline via ConnectionForm's own errorMessage prop -
+  // showing it a second time here would be redundant (and an ambiguous duplicate match
+  // in tests).
+  const showBannerHere = hostModal === null && !quickConnectOpen
 
   return (
     <VaultGate>
-      <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-        <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-          {showBannerHere && errorMessage && (
-            <p className="mx-3 mt-3 rounded border border-red-800 bg-red-950 px-3 py-2 text-sm text-red-300 sm:mx-4 sm:mt-4">
-              {errorMessage}
-            </p>
-          )}
-          <HostGrid
-            hosts={hosts}
-            selectedId={selection === 'new' || selection === 'none' ? null : selection}
-            onSelect={selectHost}
-            onNewHost={() => {
-              setSelection('new')
-              setEditing(false)
-            }}
-            onQuickConnect={() => setQuickConnectOpen(true)}
-            onImport={() => setImportOpen(true)}
-            onSsh={handleSsh}
-            onSftp={handleSftp}
-            onHostContextMenu={(host, x, y) => setMenu({ host, x, y })}
-            isConnecting={isConnecting}
-          />
-          <RecentConnections
-            refreshToken={recentsRefreshToken}
-            onSsh={handleRecentSsh}
-            onSftp={handleRecentSftp}
-            isConnecting={isConnecting}
-          />
-        </div>
-        <HostDetailsPanel
-          mode={selection === 'new' ? 'new' : selection === 'none' ? 'empty' : editing ? 'edit' : 'view'}
-          host={selectedHost}
-          onConnect={onConnect}
-          onEdit={() => setEditing(true)}
-          onDeleted={() => {
-            backToList()
-            refreshHosts()
-          }}
-          onSaved={() => {
-            backToList()
-            refreshHosts()
-          }}
-          onHostUpdated={refreshHosts}
-          onClose={backToList}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        {showBannerHere && errorMessage && (
+          <p className="mx-3 mt-3 rounded border border-red-800 bg-red-950 px-3 py-2 text-sm text-red-300 sm:mx-4 sm:mt-4">
+            {errorMessage}
+          </p>
+        )}
+        <HostGrid
+          hosts={hosts}
+          onNewHost={() => setHostModal('new')}
+          onQuickConnect={() => setQuickConnectOpen(true)}
+          onImport={() => setImportOpen(true)}
+          onSsh={handleSsh}
+          onSftp={handleSftp}
+          onEditHost={setHostModal}
+          onHostContextMenu={(host, x, y) => setMenu({ host, x, y })}
+          isConnecting={isConnecting}
+        />
+        <RecentConnections
+          refreshToken={recentsRefreshToken}
+          onSsh={handleRecentSsh}
+          onSftp={handleRecentSftp}
           isConnecting={isConnecting}
         />
       </div>
+      {hostModal !== null && (
+        <HostModal
+          host={hostModal === 'new' ? undefined : hostModal}
+          onClose={() => setHostModal(null)}
+          onSaved={() => {
+            setHostModal(null)
+            refreshHosts()
+          }}
+          onDeleted={() => {
+            setHostModal(null)
+            refreshHosts()
+          }}
+          onDuplicated={handleHostDuplicated}
+          isConnecting={isConnecting}
+        />
+      )}
       {quickConnectOpen && (
         <QuickConnectModal
           onSubmit={handleQuickConnectSubmit}
@@ -220,14 +214,7 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
           onClose={() => setMenu(null)}
           items={[
             { label: 'Connect', onClick: () => handleSsh(menu.host), disabled: resolveConnectRequest(menu.host) === undefined },
-            {
-              label: 'Edit',
-              onClick: () => {
-                setSelection(menu.host.id)
-                setEditing(true)
-              },
-            },
-            { label: 'Show Details', onClick: () => selectHost(menu.host.id) },
+            { label: 'Edit', onClick: () => setHostModal(menu.host) },
             { label: 'Copy', onClick: () => void handleCopyShare(menu.host) },
           ]}
         />

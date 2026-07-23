@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { deleteHost, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -63,9 +63,7 @@ test('hosts sharing a group collapse into one folder card that expands to show i
   // Clean up: open the group, delete both members (editing each back out of the group
   // first isn't necessary - deleting removes them from the grid entirely).
   await page.getByText(groupName).click()
-  await page.click('text=group member A')
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
-  await page.click('text=group member B')
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await deleteHost(page, 'group member A')
+  await deleteHost(page, 'group member B')
   await expect(page.getByText('No saved hosts yet.')).toBeVisible({ timeout: 10_000 })
 })

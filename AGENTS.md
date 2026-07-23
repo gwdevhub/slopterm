@@ -16,7 +16,7 @@ spirit of Termius, targeting Linux, macOS and Windows.
   (xterm.js) is the one exception where small-screen usability is inherently limited, but
   its surrounding chrome (tabs, keyboard toolbar, connect/disconnect controls) must still
   work at phone width.
-- **App shell (implemented, `web/src/App.tsx` + `Sidebar`/`HostGrid`/`HostDetailsPanel`/
+- **App shell (implemented, `web/src/App.tsx` + `Sidebar`/`HostGrid`/`HostModal`/
   `HostsSection`/`SectionContent`):** the Termius-reference layout (issues #8/#10), now
   restructured so the sidebar is always visible instead of living inside a "new
   connection" view. `Sidebar.tsx` renders Hosts/Keychain/Snippets/Logs/Settings, all
@@ -43,30 +43,40 @@ spirit of Termius, targeting Linux, macOS and Windows.
   `App.tsx` owns the sidebar's active section, the collapsed flag, and the open tabs -
   clicking any sidebar item sets `activeTabId` to `null` so the section shows even while
   tabs stay open in the background (see multi-session tabs below); it does not close any
-  tab. `HostsSection` shows a searchable host card grid, a "Quick connect" button next to
-  "New host" that opens `QuickConnectModal` (a `ConnectionForm` for an ad hoc connection
-  that isn't saved to the vault), a "Recent" card grid snapped to the *bottom* of the
-  screen (`RecentConnections.tsx`, below the saved-host grid), and a right-hand Host
-  Details panel (always present on desktop, even empty, so its container never has to be
-  added later). Both the saved-host grid and Recent share one presentational `HostCard`
-  component so a Recent entry looks and behaves exactly like a saved host's card, not a
-  lesser/different-looking feature. Each card has two buttons on its right edge - "SSH"
-  (`onSsh`, opens a terminal tab) and "SFTP" (`onSftp`, opens a dual-pane file browser tab,
-  see below) - both resolve to a `ConnectRequest` via `lib/hosts.ts` (`resolveConnectRequest`
-  for a saved host, `resolveRecentConnectRequest` for a Recent entry), shared with
-  `HostDetailsPanel`'s own "Connect" button so there is exactly one place that logic lives
-  per source. The same resolved credential also drives the card's own at-a-glance summary
-  (`user@host` plus "Password"/"Private key") so what's shown always matches what the
-  SSH/SFTP buttons would actually use, rather than being derived separately from the raw
-  credential list and risking drifting out of sync. Double-clicking the card itself (not
-  the SSH/SFTP buttons) is a shortcut for the SSH button - single-click on a saved host
-  just selects it into the details panel (Recent cards have no details panel, so their
-  single-click is purely a local visual "selected" state); either way a double-click's
-  first click doesn't do anything surprising on its way to the connect. Mobile collapse
-  for the grid/details panel itself
-  (issue #11's baseline, not a full separate spec pass): the grid drops to one column, and
-  the details panel stacks below the grid with its own close button instead of living in
-  a persistent side column.
+  tab. `HostsSection` shows a searchable host card grid, full width - there is no more
+  right-hand Host Details side panel. It was wasted space for the common case (most
+  visits are "dive into a host via SSH/SFTP", not "browse its details"), and is gone in
+  favor of: a "Quick connect" button next to "New host" that opens `QuickConnectModal`
+  (a `ConnectionForm` for an ad hoc connection that isn't saved to the vault), a "Recent"
+  card grid snapped to the *bottom* of the screen (`RecentConnections.tsx`, below the
+  saved-host grid), and a small pencil icon in each card's bottom-right corner (alongside
+  its SSH/SFTP buttons) opening `HostModal.tsx` - the same `ConnectionForm` used for
+  "New host", pre-filled, plus Duplicate/Cancel/Delete buttons for an existing host
+  (Delete goes through the shared `ConfirmDialog`, same as tab-close). A host's own
+  right-click context menu (`ContextMenu.tsx`) offers the same Edit action as a second
+  entry point. "Duplicate" (issue #54, replacing the abandoned #12/#13 multi-credential/
+  shared-Identity approaches - see their closing comments) calls `createHost` with a copy
+  of the source host's fields (`" (copy)"` appended to the name so it's obviously the
+  duplicate in the grid) and re-opens the same modal for the new copy so its
+  address/username are right there to adjust, rather than leaving the user to find the
+  copy themselves. Both the saved-host grid and Recent share one presentational
+  `HostCard` component so a Recent entry looks and behaves exactly like a saved host's
+  card, not a lesser/different-looking feature - `selected`/`onSelect` on it are now only
+  meaningful to callers that still want a local visual highlight (`RecentConnections`
+  tracks its own selected id; the main Hosts grid has nothing to select *into* anymore,
+  so it doesn't pass either). Each card has two connect buttons on its right edge - "SSH"
+  (`onSsh`, opens a terminal tab) and "SFTP" (`onSftp`, opens a dual-pane file browser
+  tab, see below) - both resolve to a `ConnectRequest` via `lib/hosts.ts`
+  (`resolveConnectRequest` for a saved host, `resolveRecentConnectRequest` for a Recent
+  entry). The card's own at-a-glance summary (`user@host`, plus `:port` when it's
+  non-default so ":22" isn't repeated on every single card, plus "Password"/"Private
+  key", plus a small snippets-icon badge if the host has startup snippets attached) is
+  derived from that same resolved credential, so what's shown always matches what the
+  SSH/SFTP buttons would actually use rather than being computed separately and risking
+  drifting out of sync. Double-clicking the card itself (not the SSH/SFTP/edit buttons)
+  is a shortcut for the SSH button. Mobile collapse for the grid itself (issue #11's
+  baseline, not a full separate spec pass): it drops to one column; there's no details
+  panel to worry about stacking anymore.
 
   Multi-session tabs (issue #9, implemented) let more than one connection stay open at
   once - see `TabBar.tsx`/`App.tsx`. Every open tab's view (`TerminalView` for `kind:
@@ -249,7 +259,7 @@ spirit of Termius, targeting Linux, macOS and Windows.
     visible to inject into while this section is showing. Direct injection is a natural
     follow-up if the section content and an open session ever coexist on screen.
   - **Startup snippets per host** (`HostRecord.StartupSnippetIds`, `ConnectionForm.tsx`'s
-    checklist for new hosts, `HostDetailsPanel.tsx`'s for existing ones): a saved host can
+    checklist, used by both `HostModal`'s new-host and edit-host modes): a saved host can
     have one or more Snippets attached, sent to the shell in order right after that host's
     SSH tab connects (`TerminalView.tsx`, on the WebSocket's `open` event) - the intended
     use is env vars/setup commands you'd otherwise type by hand every time. Only ids, not
@@ -263,12 +273,12 @@ spirit of Termius, targeting Linux, macOS and Windows.
     already snapshot a credential rather than re-resolving a live reference on every
     reconnect. A 300ms guard delay before the first command (and between each one) lets
     the shell's own banner/prompt print first, rather than racing it. Editing an
-    already-saved host's attachments happens inline in `HostDetailsPanel`'s "view" mode
-    (checkboxes save immediately via the `PUT /api/vault/hosts/{id}` endpoint) - and the
-    field is also carried through the general edit-host flow added alongside it (see the
-    "Shared connect/host form" bullet's `edit` mode), so re-saving a host from that form
-    preserves its snippet attachments rather than clearing them (`hostToFormValues`/
-    `formValuesToHost` round-trip `startupSnippetIds`).
+    already-saved host's attachments (or its Group, credential, anything) all goes
+    through the one `HostModal` edit flow now (`ConnectionForm`'s checklist, toggled then
+    explicitly saved via "Save changes" - not an auto-save-on-toggle side effect the way
+    an earlier pass briefly had it) - `hostToFormValues`/`formValuesToHost` round-trip
+    `startupSnippetIds` so re-saving a host preserves its snippet attachments rather than
+    clearing them.
   - **Logs** (`LogsSection.tsx`, `logs/{id}.json`): an append-only record of connection
     attempts (`connected`/`connect_failed`/`disconnected`), written by `Program.cs`
     whenever `/api/ssh/connect` succeeds/fails and whenever a session is actually removed
@@ -352,8 +362,8 @@ spirit of Termius, targeting Linux, macOS and Windows.
     already-cross-platform-verified Argon2id/AES-GCM primitives in a new sequence, not a
     new crypto boundary, but re-verified anyway since it's a real change to a core
     security flow.
-- **Shared connect/host form (`web/src/components/ConnectionForm.tsx`):** the "new host"
-  form (`HostDetailsPanel`'s `new` mode) and the ad hoc connect form (`QuickConnectModal`,
+- **Shared connect/host form (`web/src/components/ConnectionForm.tsx`):** the "new host"/
+  "edit host" form (`HostModal.tsx`) and the ad hoc connect form (`QuickConnectModal`,
   triggered by the "Quick connect" button on the Hosts screen) used to be separately
   maintained and drifted - the host form had no private-key option at all. Both now
   render the same `ConnectionForm`, parameterized by
@@ -363,13 +373,12 @@ spirit of Termius, targeting Linux, macOS and Windows.
   (previously only `Secret`) so a saved host's private-key credential can carry a
   passphrase too - a nullable additive field, not a breaking schema change.
   `ConnectionForm` also takes an optional `initialValues` to pre-fill the fields - that's
-  what the **edit-host** flow uses. Editing was a real gap before: a saved host could only
-  be viewed or deleted, never changed. `HostDetailsPanel` gained an `edit` mode (alongside
-  `view`/`new`/`empty`) that renders `ConnectionForm` pre-filled and PUTs to the existing
-  `/api/vault/hosts/{id}` endpoint; it's reachable from the host card's right-click menu
-  and from an Edit button in the read-only details view. Like the `new` flow it edits a
-  single credential, so a (currently UI-unbuildable) multi-credential host would collapse
-  to one on save - consistent with there being no multi-credential editor yet (issue #12).
+  what **editing** an existing host uses (`HostModal`, `host` prop set, PUTs to the
+  existing `/api/vault/hosts/{id}` endpoint - reachable from a host card's own pencil icon
+  or its right-click menu's Edit item). Like the "new host" flow it edits a single
+  credential, so a (currently UI-unbuildable) multi-credential host would collapse to one
+  on save - consistent with there being no multi-credential editor yet (issue #12,
+  closed - see #54's "duplicate a host" instead).
 - **Host sharing (`server/Vault/HostShareCodec.cs`, the host card's right-click "Copy"):**
   encodes one host - address, port, credentials and all - into a compact, clipboard-
   friendly token (`slopterm:host:v1:<base64url>`) another slopterm instance imports as a
@@ -410,7 +419,9 @@ spirit of Termius, targeting Linux, macOS and Windows.
   React `onContextMenu` handlers that run first during bubbling and are unaffected. The
   shared `ContextMenu` component (`web/src/components/ContextMenu.tsx`) is portal-rendered,
   clamped into the viewport, and dismissed by Escape / an outside press / scroll / resize -
-  wired to host cards today (Connect/Edit/Show Details/Copy), reusable elsewhere later.
+  wired to host cards today (Connect/Edit/Copy - Edit opens `HostModal`, same as the
+  card's own pencil icon; there's no separate "Show Details" item since that modal
+  already shows everything, editable, in one place), reusable elsewhere later.
 - **Keychain (implemented, `KeychainSection.tsx`, `keychain/{id}.json`):** saved,
   reusable SSH private keys (`KeychainEntryRecord { Name, PrivateKey, Passphrase? }`),
   following the same generic `VaultService` CRUD pattern as Snippets/Logs. `ConnectionForm`

@@ -10,10 +10,10 @@ interface QuickConnectModalProps {
 }
 
 // Triggered by the "Quick connect" button next to "New host" on the Hosts screen - an ad
-// hoc connection that isn't saved as a Host. Used to be an inline 'connect' mode of
-// HostDetailsPanel (reached only by picking a Recent), which meant there was no way to
-// start one from scratch without already having a Recent entry - a real modal fixes both
-// that and gives it the same escape-to-close affordance as ConfirmDialog.
+// hoc connection that isn't saved as a Host. Used to be an inline 'connect' mode of the
+// old Host Details side panel (reached only by picking a Recent), which meant there was
+// no way to start one from scratch without already having a Recent entry - a real modal
+// fixes both that and gives it the same escape-to-close affordance as ConfirmDialog.
 export function QuickConnectModal({ onSubmit, onClose, errorMessage, isConnecting }: QuickConnectModalProps) {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {

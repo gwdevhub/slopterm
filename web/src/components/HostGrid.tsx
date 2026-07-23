@@ -7,13 +7,12 @@ import { ArrowLeftIcon, PlusIcon } from './icons'
 
 interface HostGridProps {
   hosts: SavedHost[]
-  selectedId: string | null
-  onSelect: (id: string) => void
   onNewHost: () => void
   onQuickConnect: () => void
   onImport: () => void
   onSsh: (host: SavedHost) => void
   onSftp: (host: SavedHost) => void
+  onEditHost: (host: SavedHost) => void
   onHostContextMenu: (host: SavedHost, x: number, y: number) => void
   isConnecting?: boolean
 }
@@ -32,13 +31,12 @@ function matchesQuery(host: SavedHost, q: string): boolean {
 // instead of a card each - clicking it drills into just that group's members.
 export function HostGrid({
   hosts,
-  selectedId,
-  onSelect,
   onNewHost,
   onQuickConnect,
   onImport,
   onSsh,
   onSftp,
+  onEditHost,
   onHostContextMenu,
   isConnecting,
 }: HostGridProps) {
@@ -145,7 +143,13 @@ export function HostGrid({
         {individualHosts.map((saved) => {
           const request = resolveConnectRequest(saved)
           const canConnect = request !== undefined
-          const summary = request ? `${request.username}@${request.host}` : saved.host.address
+          // The port only earns a place in the at-a-glance summary when it's non-default -
+          // ":22" on every single card would just be repetitive noise.
+          const summary = request
+            ? request.port === 22
+              ? `${request.username}@${request.host}`
+              : `${request.username}@${request.host}:${request.port}`
+            : saved.host.address
           const authLabel = request ? (request.authMethod === 'privateKey' ? 'Private key' : 'Password') : null
           return (
             <HostCard
@@ -153,12 +157,12 @@ export function HostGrid({
               name={saved.host.name}
               summary={summary}
               authLabel={authLabel}
-              selected={selectedId === saved.id}
               canConnect={canConnect}
               isConnecting={isConnecting}
-              onSelect={() => onSelect(saved.id)}
+              hasStartupSnippets={(saved.host.startupSnippetIds?.length ?? 0) > 0}
               onSsh={() => onSsh(saved)}
               onSftp={() => onSftp(saved)}
+              onEdit={() => onEditHost(saved)}
               onContextMenu={(event) => {
                 event.preventDefault()
                 onHostContextMenu(saved, event.clientX, event.clientY)

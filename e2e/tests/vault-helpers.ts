@@ -26,6 +26,15 @@ export async function closeTab(page: Page, label: string, options?: { first?: bo
   await page.getByRole('button', { name: 'Close', exact: true }).click()
 }
 
+// Deletes a saved host via its card's edit (pencil) button - there's no more side panel
+// to select a host into, so this is the only path to Delete now. Confirms through the
+// shared ConfirmDialog the same way closeTab does above.
+export async function deleteHost(page: Page, name: string) {
+  await page.getByRole('button', { name: `Edit ${name}` }).click()
+  await page.getByRole('button', { name: 'Delete host' }).click()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+}
+
 export async function ensureVaultUnlocked(page: Page) {
   // VaultGate shows "Loading vault..." while its initial status fetch is in flight -
   // checking isVisible() before that resolves gives a false negative (nothing has

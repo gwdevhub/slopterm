@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, deleteHost, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -93,6 +93,5 @@ test('records connection attempts in the logs section', async ({ page }) => {
   await expect(page.getByText('No connection history yet.')).toBeVisible({ timeout: 10_000 })
 
   await gotoSection(page, 'Hosts')
-  await page.click('text=log test host')
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await deleteHost(page, 'log test host')
 })

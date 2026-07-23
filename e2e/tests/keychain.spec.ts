@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { deleteHost, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -34,6 +34,10 @@ test('saves a key in the Keychain and reuses it from the shared connection form'
   await page.selectOption('#keychainEntry', { label: 'e2e laptop key' })
   await expect(page.locator('#privateKey')).toHaveValue(FAKE_KEY)
 
+  // The "new host" form is a real modal now (HostModal), unlike the old inline side
+  // panel - it covers the whole page and blocks navigating elsewhere until closed, so
+  // abandoning it (never actually saving a host here) needs an explicit Escape first.
+  await page.keyboard.press('Escape')
   await gotoSection(page, 'Keychain')
   await page.click('button:has-text("Delete")')
   await expect(page.getByText('No saved keys yet.')).toBeVisible({ timeout: 10_000 })
@@ -59,9 +63,9 @@ test('browses a key file and can opt in to saving it to the Keychain', async ({ 
   await page.fill('input[placeholder="Key name"]', 'e2e browsed key')
 
   // The "new host" form only ever saves to the vault - it never attempts a connection
-  // itself (that's a deliberate separate step, the card's own "SSH"/"SFTP" buttons or
-  // HostDetailsPanel's "Connect" button) - so what this test cares about is that the
-  // opt-in Keychain save fires as part of that save, not that any connection happens.
+  // itself (that's a deliberate separate step, the card's own "SSH"/"SFTP" buttons) - so
+  // what this test cares about is that the opt-in Keychain save fires as part of that
+  // save, not that any connection happens.
   await page.fill('#name', 'e2e key browse host')
   await page.fill('#host', ctx.sshHost)
   await page.fill('#port', String(ctx.sshPort))
@@ -75,6 +79,5 @@ test('browses a key file and can opt in to saving it to the Keychain', async ({ 
   await expect(page.getByText('No saved keys yet.')).toBeVisible({ timeout: 10_000 })
 
   await gotoSection(page, 'Hosts')
-  await page.click('text=e2e key browse host')
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await deleteHost(page, 'e2e key browse host')
 })

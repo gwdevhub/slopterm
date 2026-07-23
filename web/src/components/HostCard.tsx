@@ -1,16 +1,27 @@
 import type { MouseEvent } from 'react'
-import { HostsIcon } from './icons'
+import { HostsIcon, PencilIcon, SnippetsIcon } from './icons'
 
 interface HostCardProps {
   name: string
   summary: string
   authLabel: string | null
-  selected: boolean
+  // Purely a local/visual highlight for whichever list is rendering this card (e.g.
+  // RecentConnections tracks its own selected id) - optional since the main Hosts grid
+  // has nothing to select *into* anymore now that host details are a modal, not a
+  // persistent side panel.
+  selected?: boolean
   canConnect: boolean
   isConnecting?: boolean
-  onSelect: () => void
+  // True if this host has one or more startup snippets attached - shown as a small
+  // unobtrusive badge so that's visible without having to open the edit modal.
+  hasStartupSnippets?: boolean
+  onSelect?: () => void
   onSsh: () => void
   onSftp: () => void
+  // Small pencil button in the card's bottom-right corner opening the edit modal -
+  // omitted for lists with nothing to edit (e.g. Recent connections, which aren't saved
+  // Host records).
+  onEdit?: () => void
   // Right-click anywhere on the card opens our own context menu (Connect/Edit/…) instead
   // of the browser's - omitted for lists that don't offer one (e.g. Recent connections).
   onContextMenu?: (event: MouseEvent) => void
@@ -19,7 +30,20 @@ interface HostCardProps {
 // The card look from the Termius reference (issue #10) - shared by HostGrid (saved
 // hosts) and RecentConnections so both lists render identically instead of Recent having
 // its own, different-looking row style.
-export function HostCard({ name, summary, authLabel, selected, canConnect, isConnecting, onSelect, onSsh, onSftp, onContextMenu }: HostCardProps) {
+export function HostCard({
+  name,
+  summary,
+  authLabel,
+  selected,
+  canConnect,
+  isConnecting,
+  hasStartupSnippets,
+  onSelect,
+  onSsh,
+  onSftp,
+  onEdit,
+  onContextMenu,
+}: HostCardProps) {
   return (
     <div
       onContextMenu={onContextMenu}
@@ -36,7 +60,14 @@ export function HostCard({ name, summary, authLabel, selected, canConnect, isCon
       >
         <HostsIcon aria-hidden="true" className="h-5 w-5 text-slate-400" />
         <span className="truncate font-medium text-slate-100">{name}</span>
-        <span className="truncate text-xs text-slate-400">{summary}</span>
+        <span className="flex min-w-0 items-center gap-1 truncate text-xs text-slate-400">
+          <span className="truncate">{summary}</span>
+          {hasStartupSnippets && (
+            <span title="Has startup snippets" className="shrink-0">
+              <SnippetsIcon aria-hidden="true" className="h-3 w-3" />
+            </span>
+          )}
+        </span>
         {authLabel && <span className="truncate text-xs text-slate-500">{authLabel}</span>}
       </button>
       <div className="flex shrink-0 flex-col justify-center gap-1">
@@ -58,6 +89,16 @@ export function HostCard({ name, summary, authLabel, selected, canConnect, isCon
         >
           SFTP
         </button>
+        {onEdit && (
+          <button
+            type="button"
+            aria-label={`Edit ${name}`}
+            onClick={onEdit}
+            className="flex items-center justify-center rounded bg-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-700"
+          >
+            <PencilIcon aria-hidden="true" className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
     </div>
   )

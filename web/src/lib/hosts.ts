@@ -1,6 +1,6 @@
 import type { ConnectRequest, SavedHost, SavedRecentConnection, SavedSnippet } from './api'
 
-// Shared by the saved-host "Connect"/"SSH"/"SFTP" buttons (HostDetailsPanel, HostGrid) -
+// Shared by the saved-host "Connect"/"SSH"/"SFTP" buttons (HostModal, HostGrid) -
 // picks the first usable credential off a host record. Full multi-credential selection
 // (letting the user pick when a host has more than one) is issue #12, not this change.
 export function resolveConnectRequest(host: SavedHost): ConnectRequest | undefined {

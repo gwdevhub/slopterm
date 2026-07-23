@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { deleteHost, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -57,8 +57,7 @@ test('connects over SSH and closes its tab when the remote shell exits', async (
   // Clean up - other spec files assert "No saved hosts yet." against this same shared
   // vault, so anything created here must not leak past this test.
   await gotoSection(page, 'Hosts')
-  await page.click('text=connect test host')
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await deleteHost(page, 'connect test host')
 })
 
 test('shows an error message for a bad password instead of hanging', async ({ page }) => {
@@ -81,6 +80,5 @@ test('shows an error message for a bad password instead of hanging', async ({ pa
   // Should stay on the Hosts screen, not silently switch to a terminal tab.
   await expect(page.locator('button:has-text("New host")')).toBeVisible()
 
-  await page.click('text=bad password test host')
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await deleteHost(page, 'bad password test host')
 })

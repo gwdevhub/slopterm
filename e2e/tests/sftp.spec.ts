@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, deleteHost, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -58,6 +58,5 @@ test('a host card\'s SFTP button opens a dual-pane browser with independent loca
 
   await closeTab(page, 'sftp test host (SFTP)')
   await gotoSection(page, 'Hosts')
-  await page.click('text=sftp test host')
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await deleteHost(page, 'sftp test host')
 })

@@ -9,7 +9,7 @@ interface TerminalViewProps {
   isActive: boolean
   onSessionClosed: () => void
   // Sent to the shell, in order, right after the socket opens (see the host's attached
-  // snippets in HostDetailsPanel/ConnectionForm) - only meaningful the first time a given
+  // snippets in HostModal/ConnectionForm) - only meaningful the first time a given
   // session id is seen, same as everything else keyed on [sessionId] below.
   startupCommands?: string[]
 }

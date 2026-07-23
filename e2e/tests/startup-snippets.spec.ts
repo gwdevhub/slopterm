@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, deleteHost, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -21,8 +21,8 @@ test('a host can run its attached startup snippets automatically right after con
   await page.goto(ctx.baseUrl)
 
   // One snippet attached at host-creation time (ConnectionForm's checklist), one attached
-  // later to the already-saved host (HostDetailsPanel's checklist) - covers both places a
-  // snippet can be attached.
+  // later to the already-saved host via the edit modal (same checklist, reused) - covers
+  // both places a snippet can be attached.
   await gotoSection(page, 'Snippets')
   await ensureVaultUnlocked(page)
   const markerA = `startupmarkerA${Date.now()}`
@@ -47,14 +47,12 @@ test('a host can run its attached startup snippets automatically right after con
   await page.click('button:has-text("Save host")')
   await expect(page.getByText('startup snippet test host')).toBeVisible({ timeout: 10_000 })
 
-  // Attach the second snippet to the now-saved host via its details panel - this round
-  // trips through PUT /api/vault/hosts/{id} + a refetch (see HostDetailsPanel's
-  // handleToggleStartupSnippet/onHostUpdated), so the checkbox settling into "checked"
-  // lags a beat behind the click itself.
-  await page.click('text=startup snippet test host')
-  const snippetBCheckbox = page.getByLabel('startup snippet B')
-  await snippetBCheckbox.click()
-  await expect(snippetBCheckbox).toBeChecked({ timeout: 10_000 })
+  // Attach the second snippet to the now-saved host via its edit modal (the card's pencil
+  // icon), then save.
+  await page.getByRole('button', { name: 'Edit startup snippet test host' }).click()
+  await page.getByLabel('startup snippet B').check()
+  await page.click('button:has-text("Save changes")')
+  await expect(page.getByText('startup snippet test host')).toBeVisible({ timeout: 10_000 })
 
   await page.getByRole('button', { name: 'SSH to startup snippet test host' }).click()
   await expect(async () => {
@@ -66,8 +64,7 @@ test('a host can run its attached startup snippets automatically right after con
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
 
   await gotoSection(page, 'Hosts')
-  await page.click('text=startup snippet test host')
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await deleteHost(page, 'startup snippet test host')
 
   await gotoSection(page, 'Snippets')
   await page.getByRole('listitem').filter({ hasText: 'startup snippet A' }).getByRole('button', { name: 'Delete' }).click()

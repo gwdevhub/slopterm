@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, deleteHost, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -29,7 +29,10 @@ test('a host card shows user@host and its auth method at a glance, and double-cl
   // Exact match matters: "SSH to card summary test host"/"SFTP to card summary test
   // host" both contain this card's name as a substring too.
   const cardButton = page.getByRole('button', { name: /^card summary test host/ })
-  await expect(cardButton.getByText(`${ctx.sshUsername}@${ctx.sshHost}`, { exact: true })).toBeVisible({ timeout: 10_000 })
+  // The port only joins the summary when it's non-default (see HostGrid.tsx) - the e2e
+  // SSH container's port is always a random non-22 one, so it's expected here too.
+  const summary = ctx.sshPort === 22 ? `${ctx.sshUsername}@${ctx.sshHost}` : `${ctx.sshUsername}@${ctx.sshHost}:${ctx.sshPort}`
+  await expect(cardButton.getByText(summary, { exact: true })).toBeVisible({ timeout: 10_000 })
   await expect(cardButton.getByText('Password', { exact: true })).toBeVisible()
 
   await cardButton.dblclick()
@@ -37,6 +40,5 @@ test('a host card shows user@host and its auth method at a glance, and double-cl
 
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
   await gotoSection(page, 'Hosts')
-  await page.click('text=card summary test host')
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await deleteHost(page, 'card summary test host')
 })

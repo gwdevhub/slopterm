@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { closeTab, ensureVaultUnlocked, gotoSection } from './vault-helpers'
+import { closeTab, deleteHost, ensureVaultUnlocked, gotoSection } from './vault-helpers'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as {
@@ -40,8 +40,7 @@ async function connect(page: Page, hostName: string) {
 async function cleanup(page: Page, hostName: string) {
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
   await gotoSection(page, 'Hosts')
-  await page.click(`text=${hostName}`)
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await deleteHost(page, hostName)
 }
 
 // Double-clicks the given (already-visible, on-screen-by-itself) word inside the

@@ -126,6 +126,15 @@ export function SidebarToggleIcon(props: IconProps) {
   )
 }
 
+export function PencilIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 20 L4.7 16.4 L15 6.1 C15.6 5.5 16.5 5.5 17.1 6.1 L17.9 6.9 C18.5 7.5 18.5 8.4 17.9 9 L7.6 19.3 Z" />
+      <line x1="13.5" y1="8" x2="16" y2="10.5" />
+    </svg>
+  )
+}
+
 export function FolderIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>
