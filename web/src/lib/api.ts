@@ -36,6 +36,17 @@ export async function disconnect(sessionId: string): Promise<void> {
   await fetch(`/api/ssh/session/${sessionId}`, { method: 'DELETE' })
 }
 
+// Tells the backend to resize the remote PTY to match the browser terminal (see
+// TerminalView). Best-effort: a failed resize just leaves the shell at its previous size,
+// not worth surfacing an error over.
+export async function resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
+  await fetch(`/api/ssh/${sessionId}/resize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cols, rows }),
+  }).catch(() => {})
+}
+
 export interface SshUploadResponse {
   remotePath: string
 }

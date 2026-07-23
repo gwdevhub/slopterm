@@ -147,6 +147,17 @@ spirit of Termius, targeting Linux, macOS and Windows.
   never be nudged by xterm's rendered content (e.g. sub-pixel cell-size rounding) - it
   must stay purely parent-driven, since `fit()` computes rows/cols *from* this element's
   size in the first place.
+  - **The fitted size is also pushed to the remote PTY**, not just the local xterm viewport.
+    Each fit (once on WebSocket open - the `ConnectRequest` hard-codes 80x24 before xterm
+    has measured itself - and after every settled resize) posts the cols/rows to
+    `POST /api/ssh/{sessionId}/resize`, which calls `TerminalSession.Resize` →
+    `ShellStream.ChangeWindowSize` (an SSH window-change request). Without this the remote
+    PTY stayed at 80 columns, so `systemctl status`, pagers, editors etc. capped output at
+    80 no matter how wide the window was. (SSH.NET only exposed `ChangeWindowSize` in a
+    recent version - it genuinely wasn't available when this was first written.) Sends are
+    deduped on the last cols/rows so an unchanged re-fit doesn't spam the endpoint; the call
+    is best-effort (a failed resize just leaves the old size). See
+    `e2e/tests/terminal-width.spec.ts`.
 - **SFTP dual-pane browser (`SftpView.tsx`/`FilePane.tsx`, backend `SftpSession.cs`/
   `LocalFileSystem.cs`):** opened by a host card's "SFTP" button - local filesystem (the
   machine running slopterm) on the left, the connected host's remote filesystem on the

@@ -57,6 +57,12 @@ public sealed class UpdateApplyRequest
     public required string ExpectedSha256 { get; set; }
 }
 
+public sealed class TerminalResizeRequest
+{
+    public required int Cols { get; set; }
+    public required int Rows { get; set; }
+}
+
 public sealed class SftpUploadRequest
 {
     public required string LocalPath { get; set; }
