@@ -91,7 +91,21 @@ public sealed class VaultService
             return new AppSettings();
         }
 
-        return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath)) ?? new AppSettings();
+        // Deliberately NOT swallowed into defaults: settings.json carries RequireMasterPassword,
+        // so silently treating a corrupt/older-format file as "all defaults" could unlock a
+        // password-protected vault. Fail closed instead, with a message that names the file and
+        // the fix (it's non-secret and safe to delete) - the crash reporter surfaces it, rather
+        // than a raw System.Text.Json stack trace nobody can act on.
+        try
+        {
+            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath)) ?? new AppSettings();
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"settings.json is corrupt or from an incompatible version and can't be read ({_settingsPath}). " +
+                "It holds only non-secret app preferences - delete it to reset to defaults, then relaunch.", ex);
+        }
     }
 
     /// <summary>
@@ -408,14 +422,25 @@ public sealed class VaultService
             return new OpenTabsRecord();
         }
 
-        var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
-        if (envelope is null)
+        // Genuinely never throw (this runs at startup, before there's any UI to surface an
+        // error): a restored-tabs record left over from an older/incompatible build - bad
+        // JSON, bad base64, or ciphertext this key can't decrypt - must degrade to "no tabs
+        // to restore", never take startup down. It's non-critical convenience data.
+        try
+        {
+            var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
+            if (envelope is null)
+            {
+                return new OpenTabsRecord();
+            }
+
+            var json = VaultCrypto.Decrypt(_key!, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
+            return JsonSerializer.Deserialize<OpenTabsRecord>(json) ?? new OpenTabsRecord();
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException or CryptographicException or ArgumentException)
         {
             return new OpenTabsRecord();
         }
-
-        var json = VaultCrypto.Decrypt(_key!, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
-        return JsonSerializer.Deserialize<OpenTabsRecord>(json) ?? new OpenTabsRecord();
     }
 
     /// <summary>Best-effort, same as AppendLog/UpsertRecentConnection - silently no-ops if locked.</summary>

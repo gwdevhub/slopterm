@@ -16,6 +16,7 @@ using Slopterm.Server.Vault;
 // Installed before anything else below gets a chance to throw - see CrashLogger's doc
 // comment for why this matters specifically for the published (no-console) Windows build.
 CrashLogger.Install();
+CrashLogger.LogPhase("process starting");
 
 // Static asset paths that don't need the auth cookie/token - none of them are sensitive
 // (no secrets, just "an app called slopterm exists"), and installing as a PWA relies on
@@ -61,6 +62,7 @@ var vault = new VaultService();
 // If settings (persisted from a previous run) say a master password isn't required, this
 // transparently unlocks the vault right now - the frontend never sees an unlock prompt.
 vault.EnsureUnlockedIfPasswordNotRequired();
+CrashLogger.LogPhase("vault + settings loaded");
 var forwarding = new ForwardingService(vault);
 
 // Best-effort cleanup of a previous update's backup - see UpdateService.ApplyAsync. Not
@@ -1045,10 +1047,12 @@ app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId
 });
 
 app.Start();
+CrashLogger.LogPhase("kestrel started");
 
 // Bring up background port forwards marked auto-start. Best-effort: no-op if the vault is
 // still locked (a master-password vault starts its forwards on first connect/unlock instead).
 forwarding.StartAutoForwards();
+CrashLogger.LogPhase("auto port-forwards started");
 
 var addressesFeature = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
 var boundPort = new Uri(addressesFeature?.Addresses.First() ?? "http://127.0.0.1:0").Port;
@@ -1063,6 +1067,10 @@ void Quit()
     // OS process Program.cs's own shutdown never touches. The main Photino window needs
     // no equivalent call here: it lives on a background thread that already dies once
     // StopApplication unblocks WaitForShutdownAsync below and the process exits.
+    // Records who asked to quit (window close vs tray "Quit") - a spurious window close right
+    // after launch presents to the user exactly like a crash ("tray showed, then it vanished"),
+    // so the breadcrumb is what tells the two apart after the fact.
+    CrashLogger.LogPhase("shutdown requested (window closed or tray Quit)");
     AppWindowManager.CloseAllFallbackBrowserWindows();
     app.Lifetime.StopApplication();
 }
@@ -1081,6 +1089,7 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     // "Quit" stops it.
     trayIcon = new WindowsTrayIcon("slopterm", OpenWindow, Quit);
     trayIcon.Start();
+    CrashLogger.LogPhase("tray icon started, opening window");
 
     // Create the native window immediately so Windows gives the running application a
     // taskbar button as well as its tray icon. The window already uses the embedded app
@@ -1088,6 +1097,7 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     // the user opts into CloseToTray does the close handler minimize-and-keep-running
     // instead, leaving the taskbar/tray entry available for the rest of the process life.
     OpenWindow();
+    CrashLogger.LogPhase("window opened");
 }
 else
 {
@@ -1099,7 +1109,9 @@ else
     Console.WriteLine();
 }
 
+CrashLogger.LogPhase("running");
 await app.WaitForShutdownAsync();
+CrashLogger.LogPhase("shut down cleanly");
 forwarding.Dispose(); // tears down every background forwarding connection cleanly
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {

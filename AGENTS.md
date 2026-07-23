@@ -943,11 +943,30 @@ spirit of Termius, targeting Linux, macOS and Windows.
   `user32.dll` P/Invoke pattern as `AppWindowManager`'s missing-webview-runtime message)
   with the short exception message and the log file's path, so a user hitting this isn't
   just left staring at nothing.
-- Doesn't (and can't) catch a genuine native crash with no corresponding .NET exception at
-  all (see `AppWindowManager`'s doc comment on the double-`PhotinoWindow` case) - this is
-  strictly for .NET-level unhandled exceptions, which cover ordinary startup failures
-  (a bad vault file, a permissions error, an unexpected config value) that would otherwise
-  be indistinguishable from that native-crash case to an affected user.
+- Also hooks `TaskScheduler.UnobservedTaskException` so a crash on a fire-and-forget Task
+  (the window thread, `ForwardingService`'s per-host loops) - which doesn't reach
+  `UnhandledException` and, in modern .NET, doesn't even terminate the process - still gets
+  recorded instead of silently dropped.
+- **`CrashLogger.LogPhase(...)` writes a `startup.log` breadcrumb** (truncated once per
+  launch, so it always reflects the current run) at each startup/lifecycle milestone -
+  `Program.cs` calls it for "process starting", "vault + settings loaded", "kestrel
+  started", "auto port-forwards started", "tray icon started, opening window", "window
+  opened", "running", and (from `Quit`) "shutdown requested (window closed or tray Quit)".
+  This exists for the two failure modes the `UnhandledException` hook genuinely can't see:
+  a native crash with no .NET exception (see `AppWindowManager`'s doc comment on the
+  double-`PhotinoWindow` case) and a *clean* process exit (closing the window quits by
+  default). Both look identical to the user - "the tray icon appeared, then it vanished
+  with no error" - but the last line of `startup.log` distinguishes them and pins down the
+  phase: a native crash leaves the log ending on the last phase it reached, while a
+  window-close-triggered quit ends on the "shutdown requested" line. That last line is the
+  first thing to ask a user for when they report a silent flash-and-close.
+- The `AppDomain.UnhandledException` path still covers ordinary .NET-level startup failures
+  (a corrupt `settings.json`, a permissions error, an unexpected config value) with
+  `crash.log` + the Windows `MessageBox`. Startup reads that can hit *old/incompatible*
+  persisted data are hardened accordingly: `GetOpenTabs` degrades to "no tabs to restore"
+  on any parse/decrypt failure (non-critical convenience data), while `GetSettings` fails
+  *closed* with a clear, file-naming message (it carries `RequireMasterPassword`, so
+  silently defaulting a corrupt file could unlock a protected vault).
 
 ## Testing
 
