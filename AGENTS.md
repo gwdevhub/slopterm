@@ -263,11 +263,12 @@ spirit of Termius, targeting Linux, macOS and Windows.
     already snapshot a credential rather than re-resolving a live reference on every
     reconnect. A 300ms guard delay before the first command (and between each one) lets
     the shell's own banner/prompt print first, rather than racing it. Editing an
-    already-saved host's attachments happens inline in `HostDetailsPanel`'s existing
-    "view" mode (checkboxes save immediately via the `PUT /api/vault/hosts/{id}` endpoint,
-    which already existed but had no frontend caller before this) - there's still no
-    general "edit host" flow beyond that, on purpose; this only adds the one field that
-    needed to be editable after the fact.
+    already-saved host's attachments happens inline in `HostDetailsPanel`'s "view" mode
+    (checkboxes save immediately via the `PUT /api/vault/hosts/{id}` endpoint) - and the
+    field is also carried through the general edit-host flow added alongside it (see the
+    "Shared connect/host form" bullet's `edit` mode), so re-saving a host from that form
+    preserves its snippet attachments rather than clearing them (`hostToFormValues`/
+    `formValuesToHost` round-trip `startupSnippetIds`).
   - **Logs** (`LogsSection.tsx`, `logs/{id}.json`): an append-only record of connection
     attempts (`connected`/`connect_failed`/`disconnected`), written by `Program.cs`
     whenever `/api/ssh/connect` succeeds/fails and whenever a session is actually removed
@@ -361,6 +362,39 @@ spirit of Termius, targeting Linux, macOS and Windows.
   identical in both places. `CredentialRecord` gained an optional `Passphrase` field
   (previously only `Secret`) so a saved host's private-key credential can carry a
   passphrase too - a nullable additive field, not a breaking schema change.
+  `ConnectionForm` also takes an optional `initialValues` to pre-fill the fields - that's
+  what the **edit-host** flow uses. Editing was a real gap before: a saved host could only
+  be viewed or deleted, never changed. `HostDetailsPanel` gained an `edit` mode (alongside
+  `view`/`new`/`empty`) that renders `ConnectionForm` pre-filled and PUTs to the existing
+  `/api/vault/hosts/{id}` endpoint; it's reachable from the host card's right-click menu
+  and from an Edit button in the read-only details view. Like the `new` flow it edits a
+  single credential, so a (currently UI-unbuildable) multi-credential host would collapse
+  to one on save - consistent with there being no multi-credential editor yet (issue #12).
+- **Host sharing (`server/Vault/HostShareCodec.cs`, the host card's right-click "Copy"):**
+  encodes one host - address, port, credentials and all - into a compact, clipboard-
+  friendly token (`slopterm:host:v1:<base64url>`) another slopterm instance imports as a
+  new saved host (the "Import" button on the Hosts toolbar → `ImportHostModal` →
+  `POST /api/vault/hosts/import-share`). The record is AES-GCM encrypted under a fixed,
+  **non-secret** app-wide key (`VaultCrypto.ShareSeed`/`DeriveShareKey`, deliberately public
+  exactly like `NoPasswordSeed`): the token is never human-readable plaintext (a password
+  won't sit on the clipboard in the clear) but *is* decodable by any slopterm build - that's
+  the whole point, so it provides obfuscation/portability, not confidentiality against
+  someone who already has this app. The Settings note on `NoPasswordSeed` covers the same
+  trade-off. "Copy" writes straight to the clipboard (127.0.0.1 is a secure context, so
+  `navigator.clipboard` works) and shows a transient toast; a `ShareTokenModal` is the
+  manual-copy fallback only if the clipboard API is blocked. A malformed/foreign token is a
+  plain 400 from the import endpoint, not a 500 - it's user-pasted input.
+- **Native-feel chrome (no browser tells):** two deliberate touches so the WebView2 window
+  doesn't read as a web page. (1) `web/src/index.css` styles thin, indigo-tinted scrollbars
+  app-wide (`::-webkit-scrollbar` + `scrollbar-width/color`) instead of the chunky default
+  OS scrollbar - most visible on the tall Settings page; xterm styles its own terminal
+  viewport, so this is chrome-only in practice. (2) `App.tsx`'s `useSuppressBrowserContextMenu`
+  cancels the browser's default right-click menu everywhere *except* text-entry fields
+  (so right-click paste still works for tokens/keys/passwords); our own menus open via
+  React `onContextMenu` handlers that run first during bubbling and are unaffected. The
+  shared `ContextMenu` component (`web/src/components/ContextMenu.tsx`) is portal-rendered,
+  clamped into the viewport, and dismissed by Escape / an outside press / scroll / resize -
+  wired to host cards today (Connect/Edit/Show Details/Copy), reusable elsewhere later.
 - **Keychain (implemented, `KeychainSection.tsx`, `keychain/{id}.json`):** saved,
   reusable SSH private keys (`KeychainEntryRecord { Name, PrivateKey, Passphrase? }`),
   following the same generic `VaultService` CRUD pattern as Snippets/Logs. `ConnectionForm`
@@ -609,12 +643,20 @@ spirit of Termius, targeting Linux, macOS and Windows.
     reliably crashes the whole process natively - a silent, unrecoverable death with no
     catchable .NET exception, confirmed by reproducing it directly (the process was
     consistently gone within ~1s of the second window's `Load()` completing, on both
-    Linux/WebKitGTK and under Wine). "Closing" the window (the OS close button, or the
-    tray icon reopening it later) is intercepted via `RegisterWindowClosingHandler`
-    returning `true` (cancel the close) and calling `SetMinimized(true)` instead -
-    reopening later un-minimizes and focuses that same instance rather than ever creating
-    a new one. The only time the native window is actually destroyed is as a side effect
-    of the whole process exiting (Quit), which needs no special handling.
+    Linux/WebKitGTK and under Wine). Every close is intercepted via
+    `RegisterWindowClosingHandler` returning `true` (cancel the native close) so Photino
+    never destroys the window directly - what happens *instead* depends on the
+    `CloseToTray` setting (`AppSettings.CloseToTray`, a Settings toggle, off by default). **Default (off): closing quits slopterm outright** - the handler runs the
+    same clean `Quit` the tray menu does (`AppWindowManager.Configure` is handed that
+    action plus a live predicate reading the setting, so a Settings toggle applies without
+    a restart). It still returns `true` rather than letting the window be destroyed here:
+    `Quit` stops the process and letting process exit tear the window down is the one
+    destruction path proven safe, so the window just lingers for the instant shutdown
+    takes (exactly as the tray's own "Quit" already did). **When `CloseToTray` is on:** the
+    handler calls `SetMinimized(true)` instead, leaving the app running behind its tray
+    icon - reopening later un-minimizes and focuses that same instance rather than ever
+    creating a new one. Either way the only time the native window is actually destroyed is
+    as a side effect of the whole process exiting, which needs no special handling.
   - **Runs on its own dedicated background thread** (STA on Windows, required for the
     native message loop; a documented no-op elsewhere), the same pattern
     `WindowsTrayIcon` already uses - `PhotinoWindow.WaitForClose()` blocks that thread
@@ -676,10 +718,11 @@ spirit of Termius, targeting Linux, macOS and Windows.
     existed) and no equivalent trigger on Linux/macOS yet (no tray/menu-bar icon there -
     see the System tray section's "Not yet done" note); `AppWindowManager` itself is
     written to work on any OS Photino supports, it's just not wired to a UI trigger
-    outside Windows yet. Minimizing instead of closing may leave a taskbar entry behind
-    while "closed" on some platforms/window managers, unlike apps that fully hide from
-    the taskbar - Photino doesn't expose a hide-not-minimize API, and this is a
-    reasonable trade against the alternative (a process crash).
+    outside Windows yet. In the opt-in `CloseToTray` mode, minimizing instead of closing
+    may leave a taskbar entry behind while "closed" on some platforms/window managers,
+    unlike apps that fully hide from the taskbar - Photino doesn't expose a hide-not-
+    minimize API, and this is a reasonable trade against the alternative (a process crash);
+    it doesn't arise in the default close-quits-the-app behavior.
 
 ## Mobile packaging (Android APK) — future consideration
 

@@ -10,14 +10,16 @@ interface HostGridProps {
   onSelect: (id: string) => void
   onNewHost: () => void
   onQuickConnect: () => void
+  onImport: () => void
   onSsh: (host: SavedHost) => void
   onSftp: (host: SavedHost) => void
+  onHostContextMenu: (host: SavedHost, x: number, y: number) => void
   isConnecting?: boolean
 }
 
 // The searchable card grid from the Termius reference (issue #10). Single column on
 // narrow screens, more columns as space allows - full mobile spec is issue #11.
-export function HostGrid({ hosts, selectedId, onSelect, onNewHost, onQuickConnect, onSsh, onSftp, isConnecting }: HostGridProps) {
+export function HostGrid({ hosts, selectedId, onSelect, onNewHost, onQuickConnect, onImport, onSsh, onSftp, onHostContextMenu, isConnecting }: HostGridProps) {
   const [query, setQuery] = useState('')
 
   const filtered = useMemo(() => {
@@ -49,6 +51,13 @@ export function HostGrid({ hosts, selectedId, onSelect, onNewHost, onQuickConnec
         </button>
         <button
           type="button"
+          onClick={onImport}
+          className="flex items-center gap-1.5 rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700"
+        >
+          Import
+        </button>
+        <button
+          type="button"
           onClick={onNewHost}
           className="flex items-center gap-1.5 rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
         >
@@ -75,6 +84,10 @@ export function HostGrid({ hosts, selectedId, onSelect, onNewHost, onQuickConnec
               onSelect={() => onSelect(saved.id)}
               onSsh={() => onSsh(saved)}
               onSftp={() => onSftp(saved)}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                onHostContextMenu(saved, event.clientX, event.clientY)
+              }}
             />
           )
         })}

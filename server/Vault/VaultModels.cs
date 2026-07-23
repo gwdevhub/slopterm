@@ -169,4 +169,10 @@ public sealed class AppSettings
     // all (see VaultService.EnsureUnlockedIfPasswordNotRequired). Users who want real
     // protection opt in via the Settings page.
     public bool RequireMasterPassword { get; set; }
+
+    // Off by default - closing the app window quits slopterm outright, the normal desktop
+    // expectation. When on, closing the window instead minimizes it and leaves the app
+    // running behind its tray icon (see AppWindowManager's window-closing handler). Only
+    // has an effect where that native window/tray model exists (currently Windows).
+    public bool CloseToTray { get; set; }
 }

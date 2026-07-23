@@ -117,10 +117,6 @@ export async function createHost(host: HostRecord): Promise<{ id: string }> {
   return res.json()
 }
 
-export async function deleteHost(id: string): Promise<void> {
-  await fetch(`/api/vault/hosts/${id}`, { method: 'DELETE' })
-}
-
 export async function updateHost(id: string, host: HostRecord): Promise<void> {
   const res = await fetch(`/api/vault/hosts/${id}`, {
     method: 'PUT',
@@ -128,6 +124,29 @@ export async function updateHost(id: string, host: HostRecord): Promise<void> {
     body: JSON.stringify(host),
   })
   await throwOnError(res)
+}
+
+export async function deleteHost(id: string): Promise<void> {
+  await fetch(`/api/vault/hosts/${id}`, { method: 'DELETE' })
+}
+
+// Returns a portable, encrypted token encoding this host (address/port/credentials) that
+// another slopterm instance can import via importHostShare - backs the "Copy" context-menu
+// action. See server HostShareCodec for the format.
+export async function getHostShareToken(id: string): Promise<string> {
+  const res = await fetch(`/api/vault/hosts/${id}/share`)
+  await throwOnError(res)
+  return (await res.json()).token
+}
+
+export async function importHostShare(token: string): Promise<{ id: string }> {
+  const res = await fetch('/api/vault/hosts/import-share', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+  await throwOnError(res)
+  return res.json()
 }
 
 export interface SnippetRecord {
@@ -285,6 +304,7 @@ export async function saveOpenTabs(record: OpenTabsRecord): Promise<void> {
 
 export interface AppSettingsInfo {
   requireMasterPassword: boolean
+  closeToTray: boolean
 }
 
 export async function getSettings(): Promise<AppSettingsInfo> {
@@ -302,6 +322,16 @@ export async function setRequireMasterPassword(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ required, currentPassword, newPassword }),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function setCloseToTray(enabled: boolean): Promise<AppSettingsInfo> {
+  const res = await fetch('/api/settings/close-to-tray', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
   })
   await throwOnError(res)
   return res.json()

@@ -9,3 +9,39 @@ body,
 body {
   margin: 0;
 }
+
+/* Thin, blue-tinted scrollbars everywhere instead of the chunky default OS one, so tall
+   views (e.g. the Settings page) read as a native app rather than a browser. WebView2 is
+   Chromium, so ::-webkit-scrollbar drives the look; scrollbar-width/color is the standards
+   fallback. The thumb is a translucent indigo that darkens on hover; the track stays
+   invisible. xterm styles its own terminal viewport, so this is chrome-only in practice. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.45) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(99, 102, 241, 0.4);
+  border-radius: 9999px;
+  /* Transparent border + background-clip keeps the visible thumb slim inside the 10px
+     gutter, so it reads as a thin pill rather than filling the whole track width. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(99, 102, 241, 0.7);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

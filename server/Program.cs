@@ -5,6 +5,7 @@ using System.Net.WebSockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.FileProviders;
@@ -317,6 +318,12 @@ app.MapPost("/api/settings/require-master-password", (SetRequireMasterPasswordRe
     }
 });
 
+app.MapPost("/api/settings/close-to-tray", (SetCloseToTrayRequest request) =>
+{
+    vault.SetCloseToTray(request.Enabled);
+    return Results.Ok(vault.GetSettings());
+});
+
 app.MapGet("/api/settings/github-token", () => Results.Ok(new { hasToken = !string.IsNullOrEmpty(vault.GetGithubToken()) }));
 
 app.MapPost("/api/settings/github-token", (SetGithubTokenRequest request) =>
@@ -494,6 +501,55 @@ app.MapDelete("/api/vault/hosts/{id}", (string id) =>
     try
     {
         return vault.DeleteHost(id) ? Results.NoContent() : Results.NotFound();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+// Encodes a saved host (address/port/credentials) into a portable, encrypted token the
+// "Copy" right-click action puts on the clipboard - see HostShareCodec for the format and
+// its (deliberately non-secret) encryption.
+app.MapGet("/api/vault/hosts/{id}/share", (string id) =>
+{
+    try
+    {
+        var match = vault.ListHosts().FirstOrDefault(h => h.Id == id);
+        if (match.Record is null)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.Ok(new { token = HostShareCodec.Encode(match.Record) });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+// The other side of "Copy": decode a share token from another instance and save it as a
+// new host here. A bad/foreign token is a plain 400, not a 500 - it's user-pasted input.
+app.MapPost("/api/vault/hosts/import-share", (ImportHostShareRequest request) =>
+{
+    HostRecord host;
+    try
+    {
+        host = HostShareCodec.Decode(request.Token ?? string.Empty);
+    }
+    catch (Exception ex) when (ex is FormatException or JsonException or CryptographicException or ArgumentException)
+    {
+        return Results.BadRequest(new { error = "That isn't a valid slopterm host share token." });
+    }
+
+    // Groups aren't shared/synced, so a source-instance group id would just dangle here.
+    host.ParentGroupId = null;
+
+    try
+    {
+        var id = vault.SaveHost(null, host);
+        return Results.Ok(new { id });
     }
     catch (InvalidOperationException ex)
     {
@@ -726,6 +782,11 @@ void Quit()
     app.Lifetime.StopApplication();
 }
 
+// Closing the app window quits by default; a user can opt into the old minimize-to-tray
+// behavior via Settings (CloseToTray). The flag is read live at each close, so toggling it
+// takes effect without a restart, and closing runs the same clean Quit the tray menu does.
+AppWindowManager.Configure(() => vault.GetSettings().CloseToTray, Quit);
+
 WindowsTrayIcon? trayIcon = null;
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
@@ -738,8 +799,9 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 
     // Create the native window immediately so Windows gives the running application a
     // taskbar button as well as its tray icon. The window already uses the embedded app
-    // icon (AppWindowManager.SetIconFile), and its close handler minimizes rather than
-    // destroys it, so the taskbar entry remains available for the process lifetime.
+    // icon (AppWindowManager.SetIconFile). Closing it quits the app by default; only when
+    // the user opts into CloseToTray does the close handler minimize-and-keep-running
+    // instead, leaving the taskbar/tray entry available for the rest of the process life.
     OpenWindow();
 }
 else
