@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
     // The .NET backend serves this build output directly from wwwroot.
-    outDir: '../server/wwwroot',
+    outDir: '../core/wwwroot',
     emptyOutDir: true,
   },
 })

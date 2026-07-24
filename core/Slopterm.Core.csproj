@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- The Web SDK gives us ASP.NET Core + its implicit usings, but defaults to producing
+         an executable; this is a library the head drives (SloptermHost.Start), so force it. -->
+    <OutputType>Library</OutputType>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- The React build is embedded into THIS assembly (SloptermHost serves it via a
+         ManifestEmbeddedFileProvider over GetExecutingAssembly()), so it travels with Core
+         to whichever head hosts it - desktop today, Android later. -->
+    <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ASP.NET Core (Kestrel + minimal APIs) as a framework reference, so this stays a
+         plain library rather than a web *app* with its own entry point - the head owns the
+         entry point and calls SloptermHost.Start. -->
+    <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
+    <PackageReference Include="SSH.NET" Version="2025.1.0" />
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Remove="wwwroot/**" />
+    <EmbeddedResource Include="wwwroot/**" />
+  </ItemGroup>
+
+</Project>

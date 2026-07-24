@@ -10,7 +10,7 @@ dist/
 .vite/
 
 # React build output copied into the .NET wwwroot at build time
-server/wwwroot/
+core/wwwroot/
 
 # Playwright e2e
 e2e/test-results/
