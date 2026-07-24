@@ -13,7 +13,6 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.FileProviders;
 using Slopterm.Server;
 using Slopterm.Server.Ai;
-using Slopterm.Server.Native;
 using Slopterm.Server.Vault;
 
 namespace Slopterm.Server;
