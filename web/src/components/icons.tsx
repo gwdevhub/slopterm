@@ -48,6 +48,17 @@ export function ForwardingIcon(props: IconProps) {
   )
 }
 
+export function SyncIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 12a8 8 0 0 1 14-5.2" />
+      <polyline points="18,3 18,7 14,7" />
+      <path d="M20 12a8 8 0 0 1-14 5.2" />
+      <polyline points="6,21 6,17 10,17" />
+    </svg>
+  )
+}
+
 export function SnippetsIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

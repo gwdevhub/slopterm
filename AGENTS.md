@@ -498,6 +498,45 @@ spirit of Termius, targeting Linux, macOS and Windows.
   AES-GCM ciphertext ever leaves the device, the master key/password never does. Start
   with a git-backed sync backend (push/pull the encrypted blob to a private repo or gist)
   before considering a hosted sync service.
+- **Folder sync (`server/SyncService.cs`, `SyncSection.tsx`, `sync-rules/{id}.json`) - not
+  to be confused with the vault/cross-device sync above.** Local ↔ remote folder mirroring
+  over SFTP through a saved host. A `SyncRuleRecord` (vault-stored, references a `HostId`,
+  plus `LocalPath`/`RemotePath`) carries three settings the create/edit modal exposes
+  directly (there's no separate "start" dialog - the same modal used for every other rule
+  setting covers this too):
+  - **`Direction`**: `"localToRemote"` (push only - watches `LocalPath`, remote side is
+    never polled/watched back), `"remoteToLocal"` (pull only - polls `RemotePath` on a fixed
+    interval, since SFTP has no push/notify and a remote `inotify` helper would be
+    Linux-only and not guaranteed installed), or `"twoWay"` (both at once). A file changed
+    on both sides between passes in `twoWay` is resolved by whichever side's modified time
+    is newer - simple last-writer-wins, not real conflict/version handling.
+  - **`DeleteExtraneous`** (default on): mirrors deletions too. Off = copy-only/additive -
+    a file removed at the source is left alone at the destination.
+  - **`SkipUnchanged`** (default on): compares size + modified time and skips a file that
+    already matches at the destination, so a reconnect/poll doesn't re-transfer an unchanged
+    tree. Off always re-transfers every file every pass.
+  - **`SyncService` owns one dedicated background `RuleSync` per rule** (its own `SftpClient`,
+    plus a `FileSystemWatcher` on `LocalPath` when pushing and/or a periodic remote listing
+    when pulling), independent of any terminal/SFTP tab. On (re)connect it reconciles once in
+    whichever direction(s) apply, then starts watching/polling; every local
+    Created/Changed/Renamed/Deleted event is queued and drained in small batches (last event
+    per path wins, so a burst of Changed events from one save coalesces into one upload). A
+    renamed local directory re-walks its new contents since the watcher only fires once for
+    the directory itself, not its children. A remote poll just diffs the latest full listing
+    against the previous one - simpler than the local watcher, since SFTP hands over the
+    whole current state each time rather than incremental events.
+  - **Every loop iteration is wrapped in a top-level try/catch that can never let the retry
+    loop die** - this is the exact bug `ForwardingService`'s monitor loop had (see its own
+    history/git log): an unhandled exception (including SSH.NET's `IsConnected` throwing
+    once a session has died) used to permanently end that per-host task with nothing left to
+    restart it. `SyncService` bakes the fix in from the start rather than repeating it.
+  - **Only one automatic trigger, unlike port forwarding:** `AutoStart` rules come up at
+    launch (`StartAutoSyncs`, no-op if the vault is locked). There is deliberately no
+    "connecting a session brings the rule up" trigger the way `ForwardingService` has for
+    port forwards - a sync rule isn't tied to any particular tab being open.
+  - Endpoints: `/api/vault/sync-rules` CRUD for the rules, plus `/api/sync/status` and
+    `/api/sync/rules/{id}/start|stop` for live control. `sync.Dispose()` on shutdown tears
+    every watcher/connection down cleanly.
 
 ## In-terminal AI agent (`server/Ai/`, `AgentBar.tsx`, `AiSettingsSection.tsx`)
 

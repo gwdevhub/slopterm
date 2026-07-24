@@ -576,6 +576,11 @@ public sealed class VaultService
     public string SavePortForward(string? id, PortForwardRecord record) => SaveRecord("port-forwards", id, record);
     public bool DeletePortForward(string id) => DeleteRecord("port-forwards", id);
 
+    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, SyncRuleRecord Record)> ListSyncRules() =>
+        ListRecords<SyncRuleRecord>("sync-rules");
+    public string SaveSyncRule(string? id, SyncRuleRecord record) => SaveRecord("sync-rules", id, record);
+    public bool DeleteSyncRule(string id) => DeleteRecord("sync-rules", id);
+
     public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, LogEntryRecord Record)> ListLogs() =>
         ListRecords<LogEntryRecord>("logs").OrderByDescending(l => l.UpdatedAt).ToList();
 

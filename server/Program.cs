@@ -74,6 +74,7 @@ var vault = new VaultService();
 vault.EnsureUnlockedIfPasswordNotRequired();
 CrashLogger.LogPhase("vault + settings loaded");
 var forwarding = new ForwardingService(vault);
+var sync = new SyncService(vault);
 
 // Best-effort cleanup of a previous update's backup - see UpdateService.ApplyAsync. Not
 // fatal if this fails (e.g. the old process briefly still holds it on Windows); it'll just
@@ -992,6 +993,81 @@ app.MapPost("/api/forwarding/rules/{id}/stop", (string id) =>
     return Results.NoContent();
 });
 
+app.MapGet("/api/vault/sync-rules", () =>
+{
+    try
+    {
+        var rules = vault.ListSyncRules().Select(r => new { id = r.Id, updatedAt = r.UpdatedAt, rule = r.Record });
+        return Results.Ok(rules);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPost("/api/vault/sync-rules", (SyncRuleRecord request) =>
+{
+    try
+    {
+        var id = vault.SaveSyncRule(null, request);
+        return Results.Ok(new { id });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPut("/api/vault/sync-rules/{id}", (string id, SyncRuleRecord request) =>
+{
+    try
+    {
+        // Edits take effect on the next start, so stop any live instance of this rule first.
+        sync.StopRule(id);
+        vault.SaveSyncRule(id, request);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapDelete("/api/vault/sync-rules/{id}", (string id) =>
+{
+    try
+    {
+        sync.StopRule(id);
+        return vault.DeleteSyncRule(id) ? Results.NoContent() : Results.NotFound();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapGet("/api/sync/status", () => Results.Ok(sync.GetStatus()));
+
+app.MapPost("/api/sync/rules/{id}/start", (string id) =>
+{
+    try
+    {
+        sync.StartRule(id);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/sync/rules/{id}/stop", (string id) =>
+{
+    sync.StopRule(id);
+    return Results.NoContent();
+});
+
 app.MapGet("/api/vault/logs", () =>
 {
     try
@@ -1463,6 +1539,10 @@ CrashLogger.LogPhase("kestrel started");
 forwarding.StartAutoForwards();
 CrashLogger.LogPhase("auto port-forwards started");
 
+// Same best-effort/vault-locked-is-a-no-op shape as the port forwards above.
+sync.StartAutoSyncs();
+CrashLogger.LogPhase("auto sync rules started");
+
 var addressesFeature = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
 var boundPort = new Uri(addressesFeature?.Addresses.First() ?? "http://127.0.0.1:0").Port;
 var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
@@ -1531,6 +1611,7 @@ CrashLogger.LogPhase("running");
 await app.WaitForShutdownAsync();
 CrashLogger.LogPhase("shut down cleanly");
 forwarding.Dispose(); // tears down every background forwarding connection cleanly
+sync.Dispose(); // tears down every background sync watcher/connection cleanly
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
     trayIcon?.Dispose();

@@ -1,13 +1,14 @@
 import { useState } from 'react'
-import { ForwardingIcon, HostsIcon, KeychainIcon, LogsIcon, MenuIcon, SettingsIcon, SidebarToggleIcon, SnippetsIcon, CloseIcon } from './icons'
+import { ForwardingIcon, HostsIcon, KeychainIcon, LogsIcon, MenuIcon, SettingsIcon, SidebarToggleIcon, SnippetsIcon, SyncIcon, CloseIcon } from './icons'
 import type { ComponentType, SVGProps } from 'react'
 
-export type NavSection = 'hosts' | 'keychain' | 'snippets' | 'forwarding' | 'logs' | 'settings'
+export type NavSection = 'hosts' | 'keychain' | 'snippets' | 'forwarding' | 'sync' | 'logs' | 'settings'
 
 const SECTIONS: { id: Exclude<NavSection, 'settings'>; label: string; icon: ComponentType<SVGProps<SVGSVGElement>> }[] = [
   { id: 'hosts', label: 'Hosts', icon: HostsIcon },
   { id: 'keychain', label: 'Keychain', icon: KeychainIcon },
   { id: 'forwarding', label: 'Port Forwarding', icon: ForwardingIcon },
+  { id: 'sync', label: 'Folder Sync', icon: SyncIcon },
   { id: 'snippets', label: 'Snippets', icon: SnippetsIcon },
   { id: 'logs', label: 'Logs', icon: LogsIcon },
 ]

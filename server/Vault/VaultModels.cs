@@ -83,6 +83,37 @@ public sealed class PortForwardRecord
     public bool AutoStart { get; set; }
 }
 
+/// <summary>
+/// A folder sync rule between LocalPath and RemotePath, tunnelled through a saved host
+/// (HostId) over SFTP - see SyncService. AutoStart brings the rule up in the background
+/// when the app launches, the same shape as PortForwardRecord.
+/// </summary>
+public sealed class SyncRuleRecord
+{
+    public required string HostId { get; set; }
+    public required string LocalPath { get; set; }
+    public required string RemotePath { get; set; }
+    public string? Description { get; set; }
+    public bool AutoStart { get; set; }
+
+    // "localToRemote" (push local changes out, watches LocalPath), "remoteToLocal" (pull
+    // remote changes in, polls RemotePath - SFTP has no push/notify so this can't be a real
+    // watch), or "twoWay" (both at once; a file that changed on both sides between passes is
+    // resolved by whichever side's most recent write timestamp is newer - not real
+    // conflict/version handling, just last-writer-wins).
+    public string Direction { get; set; } = "localToRemote";
+
+    // Off = additive/copy-only: files removed at the source are left alone at the
+    // destination instead of being removed to match. On (the default, matching this
+    // feature's original one-way behavior) mirrors deletions too.
+    public bool DeleteExtraneous { get; set; } = true;
+
+    // On (default): skip re-transferring a file whose size and modified time already match
+    // at the destination - avoids re-copying an unchanged tree on every reconnect/poll. Off:
+    // always re-transfer every file every pass, e.g. to force a full re-copy.
+    public bool SkipUnchanged { get; set; } = true;
+}
+
 /// <summary>A saved, reusable command - copyable into a terminal (see AGENTS.md's Snippets note).</summary>
 public sealed class SnippetRecord
 {

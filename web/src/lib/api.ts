@@ -265,6 +265,77 @@ export async function stopForward(id: string): Promise<void> {
   await fetch(`/api/forwarding/rules/${id}/stop`, { method: 'POST' })
 }
 
+export interface SyncRuleRecord {
+  hostId: string
+  localPath: string
+  remotePath: string
+  description?: string
+  autoStart: boolean
+  direction: 'localToRemote' | 'remoteToLocal' | 'twoWay'
+  deleteExtraneous: boolean
+  skipUnchanged: boolean
+}
+
+export interface SavedSyncRule {
+  id: string
+  updatedAt: string
+  rule: SyncRuleRecord
+}
+
+// Live state of a rule: 'active' (connected, watching), 'connecting' (initial sync / not
+// connected yet), or 'error'. Rules not present here are inactive/stopped.
+export interface SyncRuleStatus {
+  ruleId: string
+  hostId: string
+  state: 'active' | 'connecting' | 'error'
+  error?: string | null
+  lastSyncUtc?: string | null
+}
+
+export async function listSyncRules(): Promise<SavedSyncRule[]> {
+  const res = await fetch('/api/vault/sync-rules')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function createSyncRule(rule: SyncRuleRecord): Promise<{ id: string }> {
+  const res = await fetch('/api/vault/sync-rules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(rule),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function updateSyncRule(id: string, rule: SyncRuleRecord): Promise<void> {
+  const res = await fetch(`/api/vault/sync-rules/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(rule),
+  })
+  await throwOnError(res)
+}
+
+export async function deleteSyncRule(id: string): Promise<void> {
+  await fetch(`/api/vault/sync-rules/${id}`, { method: 'DELETE' })
+}
+
+export async function getSyncStatus(): Promise<SyncRuleStatus[]> {
+  const res = await fetch('/api/sync/status')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function startSyncRule(id: string): Promise<void> {
+  const res = await fetch(`/api/sync/rules/${id}/start`, { method: 'POST' })
+  await throwOnError(res)
+}
+
+export async function stopSyncRule(id: string): Promise<void> {
+  await fetch(`/api/sync/rules/${id}/stop`, { method: 'POST' })
+}
+
 export interface SnippetRecord {
   name: string
   command: string
