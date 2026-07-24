@@ -1269,17 +1269,20 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
         }
     }
 
-    // True once the terminal shows a newline after the typed suggestion - the suggestion
-    // itself is typed WITHOUT one, so the first newline past that offset is the user's Enter
-    // (or them running something else; either way the model reads what actually happened).
-    // Then waits briefly for the output to settle. False on cancel or a 15-minute timeout.
-    async Task<bool> WaitForUserRunAsync(TerminalSession target, long offset, CancellationToken token)
+    // True once the terminal shows the user's Enter after the typed suggestion. The suggestion's
+    // final line is typed WITHOUT a newline, but a multi-line one (a heredoc) already sent its
+    // interior line breaks as carriage returns, which the shell echoes back - so the user's
+    // Enter is the first newline PAST those injectedNewlines (0 for a plain single-line
+    // suggestion, where the very first newline is the user's). It may equally be them running
+    // something else; either way the model then reads what actually happened. Then waits briefly
+    // for the output to settle. False on cancel or a 15-minute timeout.
+    async Task<bool> WaitForUserRunAsync(TerminalSession target, long offset, int injectedNewlines, CancellationToken token)
     {
         var deadline = Environment.TickCount64 + 15 * 60_000;
         while (Environment.TickCount64 < deadline)
         {
             await Task.Delay(300, token);
-            if (target.Scrollback.SnapshotSince(offset).Contains((byte)'\n'))
+            if (target.Scrollback.SnapshotSince(offset).Count(b => b == (byte)'\n') > injectedNewlines)
             {
                 // Let the command's output settle (quiet for 750ms, capped at 10s).
                 var last = target.Scrollback.TotalWritten;
@@ -1343,14 +1346,14 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
                         continue;
                     }
 
-                    if (session.Agent.TryTakePendingSuggestion(out var offset, out var suggested))
+                    if (session.Agent.TryTakePendingSuggestion(out var offset, out var suggested, out var injectedNewlines))
                     {
                         var wcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
                         watchCts = wcts;
                         var ran = false;
                         try
                         {
-                            ran = await WaitForUserRunAsync(session, offset, wcts.Token);
+                            ran = await WaitForUserRunAsync(session, offset, injectedNewlines, wcts.Token);
                         }
                         catch (OperationCanceledException)
                         {

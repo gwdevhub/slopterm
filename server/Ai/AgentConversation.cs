@@ -40,9 +40,11 @@ public sealed class AgentConversation : IDisposable
     private int _generation;                             // bumped by Clear() so an in-flight turn skips its commit
     private CancellationTokenSource? _currentCts;        // per-turn, standalone (not linked to the connection)
     // A command typed into the terminal but not executed (suggest mode, or an auto-mode
-    // safety flag), with the scrollback offset it was typed at. The WS handler watches from
-    // that offset for the user's Enter and then starts a continuation turn automatically.
-    private (long Offset, string Command)? _pendingSuggestion;
+    // safety flag), with the scrollback offset it was typed at and how many line breaks we
+    // injected (a multi-line heredoc echoes those back before the user acts). The WS handler
+    // watches from that offset for the FIRST newline past the injected ones - the user's Enter -
+    // and then starts a continuation turn automatically.
+    private (long Offset, string Command, int InjectedNewlines)? _pendingSuggestion;
 
     public AgentConversation(TerminalSession session)
     {
@@ -310,7 +312,7 @@ public sealed class AgentConversation : IDisposable
     /// The typed-but-not-run suggestion from the last turn, if any - read-and-clear, so each
     /// suggestion is watched exactly once.
     /// </summary>
-    public bool TryTakePendingSuggestion(out long offset, out string command)
+    public bool TryTakePendingSuggestion(out long offset, out string command, out int injectedNewlines)
     {
         lock (_stateLock)
         {
@@ -319,11 +321,13 @@ public sealed class AgentConversation : IDisposable
                 _pendingSuggestion = null;
                 offset = pending.Offset;
                 command = pending.Command;
+                injectedNewlines = pending.InjectedNewlines;
                 return true;
             }
 
             offset = 0;
             command = "";
+            injectedNewlines = 0;
             return false;
         }
     }
@@ -756,15 +760,17 @@ public sealed class AgentConversation : IDisposable
                 var (safe, reason) = await VerifyActionSafeAsync(settings, command, ct);
                 if (!safe)
                 {
-                    var typed = OneLine(command, int.MaxValue);
-                    if (!TypeSuggestion(typed))
+                    // Type it VERBATIM - multi-line and all - so the user confirms exactly what
+                    // would run; a heredoc must NOT be flattened onto one line here. No trailing
+                    // Enter: TypeSuggestion leaves the final line awaiting the user's confirm.
+                    if (!TypeSuggestion(command))
                     {
                         return ("run_command failed to type",
                             "Error: the flagged command could not be typed into the terminal (the shell may have "
                             + "disconnected). Nothing is pending - tell the user.");
                     }
 
-                    return ($"suggested (safety check): {OneLine(typed, 80)}",
+                    return ($"suggested (safety check): {OneLine(command, 80)}",
                         $"The safety check declined to run this automatically ({reason}). The command was typed into "
                         + "the terminal instead - the user can press Enter to run it or discard it. Tell the user what "
                         + "you suggested and why it was flagged, then answer their question; if they run it you will "
@@ -772,7 +778,9 @@ public sealed class AgentConversation : IDisposable
                 }
 
                 var before = _session.Scrollback.TotalWritten;
-                _session.WriteToShell(command + "\r");
+                // Multi-line commands (heredocs) go out line by line as carriage returns, then a
+                // final "\r" runs the last line - a single-line command is just "cmd\r".
+                _session.WriteToShell(ToPtyInput(command) + "\r");
                 await ReadUntilIdleAsync(ct);
                 var output = AnsiText.Strip(_session.Scrollback.SnapshotSince(before));
                 return ($"ran: {OneLine(command, 80)}", output);
@@ -1015,11 +1023,13 @@ public sealed class AgentConversation : IDisposable
 
     /// <summary>
     /// Cleans a model-proposed command into something that can actually be typed at a shell
-    /// prompt, or rejects it with a corrective error for the model. Small models paste
-    /// markdown fences, "$ " prompt artifacts, # comments, and whole multi-line scripts -
-    /// flattening those onto one PTY line is exactly the "comments leaking into the
-    /// terminal" garbage this guards against. Salvages the common single-command-plus-
-    /// comment shape; rejects anything with more than one runnable line.
+    /// prompt, or rejects it with a corrective error for the model. Strips the markdown fences
+    /// and "$ "/prompt artifacts small models paste around a command. A SINGLE line also has a
+    /// bare "# comment" / lone prompt sigil rejected. A MULTI-line command (e.g. a heredoc) is
+    /// intentionally passed through VERBATIM: a heredoc body legitimately contains blank lines,
+    /// leading indentation, and '#' characters that are content - not comments to strip - so the
+    /// whole block is kept and sent as one unit (its line breaks become carriage returns at
+    /// write time, in <see cref="ToPtyInput"/>).
     /// </summary>
     private static string? SanitizeCommand(string raw, out string error)
     {
@@ -1041,42 +1051,49 @@ public sealed class AgentConversation : IDisposable
         }
 
         text = text.Trim('`').Trim();
+        // Normalize line endings up front so the multi-line test and the later PTY conversion
+        // both see a single newline convention.
+        text = text.Replace("\r\n", "\n").Replace('\r', '\n');
 
-        var runnable = new List<string>();
-        foreach (var rawLine in text.Split('\n'))
+        if (text.Length == 0)
         {
-            var line = rawLine.Trim();
-            if (line.Length == 0 || line.StartsWith('#'))
-            {
-                continue; // empty or comment (a root-prompt "# cmd" paste isn't typeable either)
-            }
-
-            if (line.StartsWith("$ ", StringComparison.Ordinal))
-            {
-                line = line[2..].Trim(); // pasted prompt artifact
-                if (line.Length == 0)
-                {
-                    continue;
-                }
-            }
-
-            runnable.Add(line);
-        }
-
-        if (runnable.Count == 0)
-        {
-            error = "That contained no runnable command (only comments or empty lines). Send exactly one single-line shell command.";
+            error = "That was empty. Send a shell command to run.";
             return null;
         }
 
-        if (runnable.Count > 1)
+        // Multi-line (a heredoc, or a block the model means to send as one unit): keep every
+        // line EXACTLY as given. Trimming indentation or dropping "# ..." lines would corrupt a
+        // heredoc body - the whole block is written line by line, then run, as one command.
+        if (text.Contains('\n'))
         {
-            error = "That was a multi-line script. Send exactly ONE single-line command per call (chain with && or ; if you must), then wait for its result before the next one.";
+            return text;
+        }
+
+        // Single line: salvage a pasted "$ " prompt sigil, reject a bare comment / empty.
+        if (text.StartsWith("$ ", StringComparison.Ordinal))
+        {
+            text = text[2..].Trim();
+        }
+
+        if (text.Length == 0 || text.StartsWith('#'))
+        {
+            error = "That contained no runnable command (only a comment or a prompt sigil). Send a shell command.";
             return null;
         }
 
-        return runnable[0];
+        return text;
     }
+
+    /// <summary>
+    /// Converts a possibly multi-line command into the bytes a shell expects as keyboard input:
+    /// every line break becomes a carriage return - the same character the Enter key sends - so
+    /// a heredoc's body and its closing terminator are each submitted in turn. A single-line
+    /// command is returned unchanged. Callers append a trailing "\r" when the final line should
+    /// execute too (run_command), or omit it to leave that last line typed-but-unrun for the
+    /// user to confirm (suggestions).
+    /// </summary>
+    private static string ToPtyInput(string command)
+        => command.Replace("\r\n", "\n").Replace('\r', '\n').Replace('\n', '\r');
 
     /// <summary>
     /// Types a proposed command/keystrokes into the PTY and, ONLY if the write actually reached
@@ -1092,12 +1109,16 @@ public sealed class AgentConversation : IDisposable
     /// </summary>
     private bool TypeSuggestion(string text)
     {
-        // Capture the offset BEFORE writing: the continuation watch treats the first newline
-        // past this point as the user's Enter, so it has to predate the typed characters.
+        // Capture the offset BEFORE writing: the continuation watch counts newlines past this
+        // point, so it has to predate the typed characters.
         var typedAt = _session.Scrollback.TotalWritten;
+        // No trailing "\r": the final line is left typed-but-unrun for the user's confirming
+        // Enter. A multi-line command's interior line breaks DO go out as carriage returns, so
+        // a heredoc's body and terminator are entered and only the last line awaits confirm.
+        var pty = ToPtyInput(text);
         try
         {
-            _session.WriteToShell(text);
+            _session.WriteToShell(pty);
         }
         catch (Exception)
         {
@@ -1106,7 +1127,10 @@ public sealed class AgentConversation : IDisposable
 
         lock (_stateLock)
         {
-            _pendingSuggestion = (typedAt, text);
+            // Each injected "\r" echoes back as a newline before the user acts; the confirming
+            // Enter is the one AFTER those. For a single-line suggestion this count is 0, so the
+            // very first newline is the user's - exactly the original behavior.
+            _pendingSuggestion = (typedAt, text, pty.Count(c => c == '\r'));
         }
 
         return true;
@@ -1167,7 +1191,7 @@ public sealed class AgentConversation : IDisposable
                     $"""
                     {header}
                     You cannot execute anything yourself. You can read the recent terminal output (read_terminal), pause for output to settle (wait), and propose a command with the suggest_command tool - it types the command into the terminal WITHOUT executing it; the user reviews it and presses Enter themselves.
-                    Whenever the user wants something done or wants a command, you MUST call suggest_command with the exact command - never only write a command in your chat text, because the user expects it typed into the terminal ready to run. Suggest ONE command at a time and explain in chat what it does and why. When the user runs your suggestion, you are automatically asked to continue: read the result, report it, and suggest the next single command - until the task is complete, then say so clearly and stop suggesting. {answerRule}
+                    Whenever the user wants something done or wants a command, you MUST call suggest_command with the exact command - never only write a command in your chat text, because the user expects it typed into the terminal ready to run. Suggest ONE command at a time and explain in chat what it does and why. A single command MAY span multiple lines (for example a heredoc) - put the entire block, its body AND the closing terminator (like EOF), into that one call; do not split a heredoc across calls. When the user runs your suggestion, you are automatically asked to continue: read the result, report it, and suggest the next single command - until the task is complete, then say so clearly and stop suggesting. {answerRule}
                     """;
 
             case "auto":
@@ -1175,7 +1199,7 @@ public sealed class AgentConversation : IDisposable
                     $"""
                     {header}
                     You can read the recent terminal output (read_terminal), run commands (run_command - it types the command, presses Enter, and returns the output), press a few raw keys for interactive prompts and pagers (press_keys - y/n/q/space only, never a command), and pause for output to settle (wait). Everything you send appears in the user's real terminal, which they are watching live.
-                    To run ANY shell command, USE run_command and nothing else - do not ask permission and do not merely describe it. A safety check runs automatically on everything you send: safe, read-only actions execute immediately; anything potentially destructive is only TYPED into the terminal as a suggestion the user must confirm with Enter - when that happens, say so in chat and wait for the user instead of retrying.
+                    To run ANY shell command, USE run_command and nothing else - do not ask permission and do not merely describe it. A single command MAY span multiple lines (for example a heredoc) - put the whole block, its body AND the closing terminator (like EOF), into one run_command call; do not split a heredoc across calls or type its body with press_keys. A safety check runs automatically on everything you send: safe, read-only actions execute immediately; anything potentially destructive is only TYPED into the terminal as a suggestion the user must confirm with Enter - when that happens, say so in chat and wait for the user instead of retrying.
                     Prefer reading recent output or waiting to observe results before continuing. {answerRule}
                     """;
 
@@ -1250,7 +1274,7 @@ public sealed class AgentConversation : IDisposable
                 type = "object",
                 properties = new
                 {
-                    command = new { type = "string", description = "The shell command to propose. Single line; no trailing newline." },
+                    command = new { type = "string", description = "The shell command to propose. May span multiple lines for constructs like a heredoc - include the whole block (its body and the closing terminator, e.g. EOF); it is typed line by line. No trailing newline." },
                 },
                 required = new[] { "command" },
             },
@@ -1269,7 +1293,7 @@ public sealed class AgentConversation : IDisposable
                 type = "object",
                 properties = new
                 {
-                    command = new { type = "string", description = "The shell command to run. No trailing newline needed." },
+                    command = new { type = "string", description = "The shell command to run. May span multiple lines for constructs like a heredoc - include the whole block (its body and the closing terminator, e.g. EOF); it is sent line by line and executed. No trailing newline needed." },
                 },
                 required = new[] { "command" },
             },
