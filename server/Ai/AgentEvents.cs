@@ -24,6 +24,14 @@ public sealed class AgentClientMessage
     public string? Mode { get; set; }
     public string? Text { get; set; }
     public string? Id { get; set; }
+
+    /// <summary>
+    /// On a <c>send</c>: start a fresh conversation for this message first (the "New chat then
+    /// send" flow), used when the user sends while the saved-chats list is open. Done as part of
+    /// the send rather than a separate <c>new_chat</c> frame precisely so no empty <c>history</c>
+    /// frame is emitted to wipe the message the client just rendered optimistically.
+    /// </summary>
+    public bool NewChat { get; set; }
 }
 
 /// <summary>One entry in the per-host saved-conversations list (the <c>chats</c> frame).</summary>

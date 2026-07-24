@@ -511,6 +511,20 @@ public sealed class AgentConversation : IDisposable
                     await emit(new { type = "tool_activity", id = assistantId, tool = call.Function.Name, summary });
                     localHistory.Add(new AiChatMessage { Role = "tool", ToolCallId = call.Id, Content = output });
                 }
+
+                // A suggestion just got typed at the prompt and is now awaiting the user's Enter.
+                // Everything typeable is blocked for the rest of the turn to protect that pending
+                // line, so another tool-calling round can accomplish nothing - a small model would
+                // only spend rounds hitting "one already pending". Worse, staying in this loop keeps
+                // RunTurnAsync from returning, and the pump only watches for the user's Enter (the
+                // event that clears the pending and fires the continuation turn) AFTER the turn ends -
+                // so looping here is exactly what makes a pending suggestion look like it "never
+                // clears". End the tool loop now; the forced-summary round below still lets the model
+                // explain in chat what it proposed before the turn concludes and the watch begins.
+                if (HasPendingSuggestion())
+                {
+                    break;
+                }
             }
 
             // Small local models sometimes stop right after their tool calls without ever

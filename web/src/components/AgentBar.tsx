@@ -214,15 +214,24 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     // Sending while a turn runs is allowed - the backend queues messages and processes
     // them in order (a queued message also interrupts waiting-for-Enter on a suggestion).
     if (!text || !socket || socket.readyState !== WebSocket.OPEN) return
+    // Sending while the saved-chats list is open starts a fresh conversation for this message -
+    // the same as pressing "New chat" first. Otherwise it would append to the current chat behind
+    // the hidden transcript and look like it just vanished. The backend folds the new-chat into
+    // this send (see the send frame's newChat flag) precisely so no empty history frame arrives
+    // to wipe the optimistic bubble below; we just close the list and reset the transcript here.
+    const startNewChat = chatsOpen
+    if (startNewChat) setChatsOpen(false)
     // Render the user bubble optimistically - the server records it and returns it in later
     // history snapshots, which only arrive on connect/clear, so this never double-renders.
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', text, mode, activities: [] }
     // Sending is a deliberate "bring me to the latest" action - re-pin to the bottom so the
     // reply follows, even if the user had scrolled up while reading earlier output.
     atBottomRef.current = true
-    setMessages((prev) => [...prev, userMessage])
+    // A new-chat send replaces the superseded transcript with just this message; a normal send
+    // appends to what's already shown.
+    setMessages((prev) => (startNewChat ? [userMessage] : [...prev, userMessage]))
     setNotice(null)
-    const frame: AgentClientMessage = { type: 'send', mode, text }
+    const frame: AgentClientMessage = { type: 'send', mode, text, newChat: startNewChat }
     socket.send(JSON.stringify(frame))
     setInput('')
   }

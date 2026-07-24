@@ -1434,6 +1434,20 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
             switch (msg?.Type)
             {
                 case "send":
+                    // Sending while the saved-chats list is open starts a fresh conversation for
+                    // this one message - the "New chat then send" flow the user expects - instead
+                    // of appending it to the now-hidden current chat, where it would look like the
+                    // message just vanished. Doing it here as part of the send (rather than the
+                    // client firing a separate new_chat frame) is deliberate: the new_chat handler
+                    // emits an empty history frame, which would wipe the user bubble the client
+                    // already rendered optimistically. NewChat() keeps the outgoing chat in the
+                    // saved list and supersedes anything in flight (it bumps the generation).
+                    if (msg.NewChat)
+                    {
+                        queue.Clear();
+                        session.Agent.NewChat();
+                    }
+
                     // Never rejected: messages queue in order and the pump drains them one
                     // turn at a time. A new message also supersedes any watch still waiting
                     // on a previous suggestion's Enter.

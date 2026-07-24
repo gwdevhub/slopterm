@@ -656,7 +656,10 @@ export type AgentServerEvent =
 // Client -> server frames. open_chat/new_chat/delete_chat manage the per-host saved
 // conversations (new_chat keeps the outgoing one in the list; clear deletes it).
 export type AgentClientMessage =
-  | { type: 'send'; mode: AgentMode; text: string }
+  // newChat starts a fresh conversation for this message first (used when sending while the
+  // saved-chats list is open) - folded into the send so no empty history frame wipes the
+  // optimistically-rendered user bubble, unlike firing a separate new_chat frame.
+  | { type: 'send'; mode: AgentMode; text: string; newChat?: boolean }
   | { type: 'stop' }
   | { type: 'clear' }
   | { type: 'list_chats' }
