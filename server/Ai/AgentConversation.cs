@@ -413,6 +413,14 @@ public sealed class AgentConversation : IDisposable
 
             var suggestNudged = false;
             var bufferNextRound = false;
+            // The text the FINAL round contributed to assistant.Text, and whether that round made
+            // tool calls. Used after the loop to tell a complete answer from one that ended
+            // mid-thought (a dangling "Let me summarize:" lead-in, or a token-cap truncation), and
+            // to feed just that trailing text back for a clean continuation - a natural-break
+            // round's text isn't in localHistory yet, so re-adding all of assistant.Text would
+            // duplicate what the tool-call rounds already put there.
+            var lastRoundText = "";
+            var lastRoundHadToolCalls = false;
 
             while (true)
             {
@@ -423,6 +431,8 @@ public sealed class AgentConversation : IDisposable
                     new() { Role = "system", Content = SystemPrompt(mode, settings.AiModel) },
                 };
                 request.AddRange(localHistory);
+
+                var textLenBefore = assistant.Text.Length;
 
                 // The nudged round is buffered instead of streamed live, so a bare "DONE"
                 // (nothing to type) can be discarded without ever reaching the UI. roundText
@@ -460,6 +470,11 @@ public sealed class AgentConversation : IDisposable
                         await emit(new { type = "text_delta", id = assistantId, text = addition });
                     }
                 }
+
+                // Exactly what THIS round added to the visible answer (delta-based, so it captures
+                // the buffered path's "\n\n"-joined addition and excludes a discarded "DONE").
+                lastRoundText = assistant.Text[textLenBefore..];
+                lastRoundHadToolCalls = result.ToolCalls.Count > 0;
 
                 if (result.ToolCalls.Count == 0)
                 {
@@ -531,23 +546,43 @@ public sealed class AgentConversation : IDisposable
                 }
             }
 
-            // Small local models sometimes stop right after their tool calls without ever
-            // answering in chat. Guarantee an answer: one final no-tools request that forces
-            // a summary. The nudge message is request-local - never committed to history.
-            if (string.IsNullOrWhiteSpace(assistant.Text) && assistant.Activities.Count > 0)
+            // After doing tool work, small local models routinely end a turn mid-thought: they go
+            // silent right after the tool calls, or stream a lead-in ("Great news! ... Let me
+            // summarize what we accomplished:") and just stop, or get truncated by the token cap.
+            // In every case the work already happened but the user is left with a dangling,
+            // incomplete answer. Guarantee a complete one: one final no-tools request. If a partial
+            // answer exists, feed it back and ask the model to CONTINUE it (not restart, which
+            // doubles the opening); otherwise ask for a fresh summary. Request-local - never
+            // committed to history. Only when there was real tool activity to report.
+            var partial = assistant.Text.TrimEnd();
+            var endedMidThought = partial.Length == 0
+                || lastFinishReason == "length"
+                || partial.EndsWith(':');
+            if (assistant.Activities.Count > 0 && endedMidThought)
             {
                 var followUp = new List<AiChatMessage>
                 {
                     new() { Role = "system", Content = SystemPrompt(mode, settings.AiModel) },
                 };
                 followUp.AddRange(localHistory);
+                var hasPartial = partial.Length > 0;
+                // A natural-break round's text lives only in assistant.Text, not localHistory, so
+                // re-add just that trailing piece; a tool-call round's text is already in history.
+                if (hasPartial && !lastRoundHadToolCalls && lastRoundText.Trim().Length > 0)
+                {
+                    followUp.Add(new AiChatMessage { Role = "assistant", Content = lastRoundText });
+                }
+
                 followUp.Add(new AiChatMessage
                 {
                     Role = "user",
-                    Content = "Based on the tool results above, tell me in one or two sentences what happened and answer my original question. Do not call any tools.",
+                    Content = hasPartial
+                        ? "Continue and finish that reply now, using the tool results above - complete the summary you started. "
+                          + "Write only the remaining part; do not repeat what you already said, and do not call any tools."
+                        : "Based on the tool results above, tell me in one or two sentences what happened and answer my original question. Do not call any tools.",
                 });
 
-                await OpenAiChatClient.StreamAsync(
+                var conclusion = await OpenAiChatClient.StreamAsync(
                     settings.AiBaseUrl, settings.AiModel, followUp, tools: null,
                     async text =>
                     {
@@ -556,18 +591,23 @@ public sealed class AgentConversation : IDisposable
                     },
                     ct,
                     onReasoning);
+                lastFinishReason = conclusion.FinishReason;
             }
 
             // A reasoning model can spend its whole token budget thinking (finish_reason
             // "length") and never produce a visible answer - or a model can just return empty
-            // content. Either way, surface a note instead of leaving the user staring at a
-            // silent, blank turn (the exact "runs forever, sends nothing" symptom).
-            if (string.IsNullOrWhiteSpace(assistant.Text) && assistant.Activities.Count == 0)
+            // content, even after the forced conclusion above. Either way, surface a note instead
+            // of leaving the user staring at a silent, blank turn (the exact "runs forever, sends
+            // nothing" symptom) - and when tool work DID happen, say so, so the empty chat doesn't
+            // read as "nothing occurred" when the terminal actually changed.
+            if (string.IsNullOrWhiteSpace(assistant.Text))
             {
                 var note = lastFinishReason == "length"
                     ? "The model hit its response-token limit while thinking and never produced an answer. "
                       + "Try a shorter prompt, or switch to a model that doesn't \"think\" as much (Settings -> AI agent)."
-                    : "The model returned an empty response.";
+                    : assistant.Activities.Count > 0
+                        ? "The action completed, but the model didn't write a summary - check the terminal above for the result."
+                        : "The model returned an empty response.";
                 assistant.Text = note;
                 await emit(new { type = "text_delta", id = assistantId, text = note });
             }
