@@ -1030,8 +1030,26 @@ spirit of Termius, targeting Linux, macOS and Windows.
     minimize API, and this is a reasonable trade against the alternative (a process crash);
     it doesn't arise in the default close-quits-the-app behavior.
 
-## Mobile packaging (Android APK) — future consideration
+## Mobile packaging (Android APK) — in progress (Option A)
 
+- **Direction chosen: Option A** (.NET for Android hosting the same Kestrel+SSH.NET backend
+  behind a WebView). Size is acceptable per the maintainers as long as it ends up an
+  installable APK.
+- **Stage 1 done — the backend is now host-agnostic.** `SloptermHost.Start(args)` builds,
+  configures and starts the whole web app (Kestrel + every endpoint + vault/forwarding/sync)
+  and returns the running `WebApplication` + loopback launch URL, with **no** desktop-window
+  or tray coupling. `Program.cs` is now just the desktop *head*: it calls `SloptermHost.Start`
+  then wraps the returned URL in a Photino window + Windows tray. A future Android head calls
+  the same `SloptermHost.Start` and wraps the URL in an Android `WebView` instead.
+- **Remaining stages:** (2) split the host-agnostic backend into a `Slopterm.Core` library
+  that does **not** reference Photino or `System.Drawing` (both desktop-only - the Android
+  project can't reference the current `server` assembly while it pulls those in); the desktop
+  exe keeps `Native/` + Photino and references Core. (3) Add the `net10.0-android` head
+  (Activity boots `SloptermHost.Start` on a background thread + a foreground service so SSH
+  sessions survive backgrounding, WebView → launch URL). (4) A CI workflow that installs the
+  `android` workload and builds the APK/AAB - the APK build belongs in CI (needs the Android
+  SDK/JDK), and is how the Android head is verified since it can't be built/run on the Linux
+  dev sandbox.
 - **Do not pursue a pure browser-sandboxed WASM build for Android.** Compiling the C#
   backend to WebAssembly and running it inside a WebView/browser JS engine sounds
   appealing ("wasm runs everywhere"), but browser-sandboxed WASM has no raw TCP socket
