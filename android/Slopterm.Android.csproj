@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Slopterm.Mobile</RootNamespace>
+
+    <!-- Android app identity. ApplicationId is the package name; the version pair is the
+         Play/Android versionCode + human version. -->
+    <ApplicationId>ac.pyc.slopterm</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>0.1</ApplicationDisplayVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The exact same host-agnostic backend the desktop app runs (Kestrel + SSH.NET + the
+         embedded React UI). This project is just the Android head: an Activity that boots
+         SloptermHost and points a WebView at its loopback URL. -->
+    <ProjectReference Include="../core/Slopterm.Core.csproj" />
+  </ItemGroup>
+
+</Project>
