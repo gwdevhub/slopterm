@@ -1050,12 +1050,23 @@ spirit of Termius, targeting Linux, macOS and Windows.
   still bundles Core (with its embedded `wwwroot`) - verified the win-x64 exe serves the real
   `index.html` from Core's manifest resources under Wine. e2e/CI/wine/docker are unchanged:
   they still build/run `server`, which pulls Core transitively.
-- **Remaining stages:** (3) Add the `net10.0-android` head (Activity boots `SloptermHost.Start`
-  on a background thread + a foreground service so SSH sessions survive backgrounding, WebView
-  → launch URL); the open question it must answer is whether ASP.NET Core / Kestrel runs under
-  .NET-Android as-is. (4) A CI workflow that installs the `android` workload and builds the
-  APK/AAB - the APK build belongs in CI (needs the Android SDK/JDK), and is how the Android
-  head is verified since it can't be built/run on the Linux dev sandbox.
+- **Stages 3+4 done — the APK builds.** `android/Slopterm.Android.csproj` (`net10.0-android`)
+  is the Android head: `MainActivity` boots `SloptermHost.Start` on a background thread and
+  points a `WebView` at the launch URL (padding it by the runtime system-bar/cutout insets so
+  the app's own top bar isn't hidden behind the phone's status/nav bars). **The ASP.NET-Core-on-
+  Android question: it's a packaging gap, not a wall.** There's no `Microsoft.AspNetCore.App`
+  runtime pack for android RIDs (`NETSDK1082`), but the base .NET runtime *does* ship for
+  android and the ASP.NET Core assemblies are portable IL - so the csproj drops the transitive
+  framework reference and injects the implementation assemblies from the desktop `linux-x64`
+  runtime pack (pinned version), which JIT on the android runtime. `.github/workflows/android.yml`
+  installs the `android` workload + JDK and builds the APK on every push/PR (it can't be built
+  on the Linux dev sandbox). **The desktop `release.yml` + `versioned-release.yml` also carry the
+  APK now** - a `build-android` job (`continue-on-error`, so it never blocks the desktop release)
+  publishes `slopterm-android.apk` alongside the per-OS binaries.
+- **Still open:** confirmed on-device run (build ≠ runtime - Kestrel actually serving + SSH over
+  the phone's network needs a real device/emulator, outside CI); a foreground service so SSH
+  sessions survive backgrounding; narrowing cleartext to `127.0.0.1`; an app icon; and pinning
+  the injected AspNetCore version to the workload's own runtime version rather than a constant.
 - **Do not pursue a pure browser-sandboxed WASM build for Android.** Compiling the C#
   backend to WebAssembly and running it inside a WebView/browser JS engine sounds
   appealing ("wasm runs everywhere"), but browser-sandboxed WASM has no raw TCP socket
