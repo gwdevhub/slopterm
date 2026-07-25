@@ -1,6 +1,8 @@
 using Android;
 using Android.App;
+using Android.Graphics;
 using Android.OS;
+using Android.Views;
 using Android.Webkit;
 using Slopterm.Server;
 
@@ -23,13 +25,21 @@ public class MainActivity : Activity
         CrashLogger.Install();
 
         var webView = new WebView(this);
-        // The app is a local single-page app talking to 127.0.0.1 over WebSocket/fetch; it
-        // needs JS and DOM storage, same as any browser rendering it.
+        // Modern Android draws apps edge-to-edge (behind the status bar and the gesture/nav
+        // bar), which left the app's own top bar + Settings sitting half under the system UI.
+        // Pad the WebView by the actual system-bar + display-cutout insets so all content lays
+        // out inside the safe area - detected at runtime, so it's correct on any device
+        // (notch, punch-hole, 3-button vs gesture nav, landscape). The padding strips show the
+        // WebView's own background, so paint it the app's dark slate to match seamlessly.
+        webView.SetBackgroundColor(Color.ParseColor("#0f172b"));
+        webView.SetOnApplyWindowInsetsListener(new SafeAreaInsetsListener());
+
         webView.Settings.JavaScriptEnabled = true;
         webView.Settings.DomStorageEnabled = true;
         // Keep navigation inside the WebView instead of bouncing out to a browser.
         webView.SetWebViewClient(new WebViewClient());
         SetContentView(webView);
+        webView.RequestApplyInsets(); // kick an initial inset pass so padding is right on first paint
 
         // Start the backend off the UI thread: SloptermHost.Start does vault work (Argon2 key
         // derivation) that's too heavy for OnCreate, then load the UI once it's listening.
@@ -38,5 +48,28 @@ public class MainActivity : Activity
             var host = SloptermHost.Start([]);
             RunOnUiThread(() => webView.LoadUrl(host.LaunchUrl));
         });
+    }
+
+    // Insets the view by the space the system bars + any display cutout occupy, so nothing the
+    // app draws ends up underneath them.
+    private sealed class SafeAreaInsetsListener : Java.Lang.Object, View.IOnApplyWindowInsetsListener
+    {
+        public WindowInsets OnApplyWindowInsets(View view, WindowInsets insets)
+        {
+            if (OperatingSystem.IsAndroidVersionAtLeast(30))
+            {
+                var bars = insets.GetInsets(WindowInsets.Type.SystemBars() | WindowInsets.Type.DisplayCutout());
+                view.SetPadding(bars.Left, bars.Top, bars.Right, bars.Bottom);
+            }
+            else
+            {
+#pragma warning disable CA1422 // the pre-API-30 inset accessors are the correct ones there
+                view.SetPadding(
+                    insets.SystemWindowInsetLeft, insets.SystemWindowInsetTop,
+                    insets.SystemWindowInsetRight, insets.SystemWindowInsetBottom);
+#pragma warning restore CA1422
+            }
+            return insets;
+        }
     }
 }
