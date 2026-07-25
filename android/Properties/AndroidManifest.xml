@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+	<uses-permission android:name="android.permission.INTERNET" />
+	<!-- The WebView loads http://127.0.0.1:<port> - cleartext to our own loopback server, which
+	     Android blocks by default from API 28. Allowed app-wide here for the prototype; a later
+	     pass can narrow this to a network-security-config that only permits 127.0.0.1. -->
+	<application android:label="slopterm" android:usesCleartextTraffic="true"></application>
+</manifest>

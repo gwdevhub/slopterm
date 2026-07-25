@@ -1,0 +1,56 @@
+# Builds the Android APK for the .NET-Android head (Slopterm.Android). The APK build needs the
+# Android SDK/JDK + the `android` .NET workload, so it lives here rather than on the dev box.
+# This is currently the only way the Android head is verified to compile/package - treat a red
+# run as "the Android port is broken", same weight as the desktop CI.
+name: Android
+
+on:
+  push:
+    branches: [main]
+    paths: ['android/**', 'core/**', 'web/**', '.github/workflows/android.yml']
+  pull_request:
+    paths: ['android/**', 'core/**', 'web/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install the Android .NET workload
+        run: dotnet workload install android
+
+      # The React UI is embedded into Slopterm.Core (vite outputs to core/wwwroot), so it must
+      # be built before the Android project compiles Core.
+      - name: Build the web UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish the APK
+        working-directory: android
+        run: dotnet publish -c Release -f net10.0-android
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: slopterm-android-apk
+          path: android/bin/Release/net10.0-android/**/*.apk
+          if-no-files-found: error

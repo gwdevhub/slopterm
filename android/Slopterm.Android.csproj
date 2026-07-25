@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Slopterm.Mobile</RootNamespace>
+
+    <ApplicationId>ac.pyc.slopterm</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>0.1</ApplicationDisplayVersion>
+
+    <!-- EXPERIMENT: ASP.NET Core has no *runtime pack* for android RIDs (NETSDK1082), but the
+         base .NET runtime does ship for android and the ASP.NET Core assemblies are portable
+         managed IL. So: don't inherit Core's Microsoft.AspNetCore.App framework reference
+         (which would demand the missing android runtime pack), and instead inject the ASP.NET
+         Core implementation assemblies from the desktop (linux-x64) runtime pack below. They
+         should JIT from their IL on the android runtime (R2R native is arch-specific and just
+         falls back to IL). Whether Kestrel then actually RUNS on-device is the next question. -->
+    <DisableTransitiveFrameworkReferences>true</DisableTransitiveFrameworkReferences>
+    <_AspNetCoreRuntimePackVersion>10.0.10</_AspNetCoreRuntimePackVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../core/Slopterm.Core.csproj" />
+    <!-- Pull the linux-x64 ASP.NET Core runtime pack into the NuGet cache so we can borrow its
+         assemblies (we never target linux - we only want the portable IL bodies). -->
+    <PackageDownload Include="Microsoft.AspNetCore.App.Runtime.linux-x64" Version="[$(_AspNetCoreRuntimePackVersion)]" />
+  </ItemGroup>
+
+  <Target Name="_InjectAspNetCoreAssemblies" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Include="$(NuGetPackageRoot)microsoft.aspnetcore.app.runtime.linux-x64/$(_AspNetCoreRuntimePackVersion)/runtimes/linux-x64/lib/net10.0/*.dll">
+        <Private>true</Private>
+      </Reference>
+    </ItemGroup>
+  </Target>
+
+</Project>
