@@ -11,6 +11,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { AiSettingsSection } from './AiSettingsSection'
 import { UpdateSection } from './UpdateSection'
 import { isTabBadgeEnabled, setTabBadgeEnabled } from '../lib/tabBadge'
+import { saveFileViaAndroid } from '../lib/androidBridge'
 
 const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
@@ -49,10 +50,14 @@ export function SettingsPage() {
     setExportError(null)
     try {
       const blob = await exportVaultBackup()
+      const fileName = `slopterm-vault-backup-${new Date().toISOString().slice(0, 10)}.zip`
+      // On Android a WebView can't do a blob download; hand the bytes to the native save dialog
+      // instead. Everywhere else this returns false and we do the normal anchor download.
+      if (await saveFileViaAndroid(blob, fileName, 'application/zip')) return
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `slopterm-vault-backup-${new Date().toISOString().slice(0, 10)}.zip`
+      a.download = fileName
       a.click()
       URL.revokeObjectURL(url)
     } catch (err) {
