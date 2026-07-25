@@ -68,8 +68,62 @@ jobs:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
 
+  # The Android APK - separate from the desktop matrix because it needs the android .NET
+  # workload + JDK and publishes from android/ (see .github/workflows/android.yml, which this
+  # mirrors). continue-on-error so a flaky Android build never blocks the desktop release;
+  # the release job below only hard-requires the desktop build.
+  build-android:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install the Android .NET workload
+        run: dotnet workload install android
+
+      - name: Build front-end
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish the APK
+        working-directory: android
+        run: dotnet publish -c Release -f net10.0-android
+
+      - name: Rename to a friendly asset name
+        shell: bash
+        run: |
+          apk="$(find android/bin/Release/net10.0-android -name '*-Signed.apk' | head -1)"
+          [ -z "$apk" ] && apk="$(find android/bin/Release/net10.0-android -name '*.apk' | head -1)"
+          test -n "$apk"
+          cp "$apk" slopterm-android.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slopterm-android.apk
+          path: slopterm-android.apk
+
   release:
-    needs: build
+    needs: [build, build-android]
+    # Run as long as the desktop build succeeded, regardless of the Android build's outcome -
+    # a missing APK shouldn't hold back the per-OS desktop assets.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
