@@ -6,6 +6,7 @@ import {
   resetVaultToDefault,
   setCloseToTray,
   setRequireMasterPassword,
+  setShowSshConfigHosts,
 } from '../lib/api'
 import { ConfirmDialog } from './ConfirmDialog'
 import { AiSettingsSection } from './AiSettingsSection'
@@ -27,6 +28,10 @@ export function SettingsPage() {
   const [closeToTrayBusy, setCloseToTrayBusy] = useState(false)
   const [closeToTrayError, setCloseToTrayError] = useState<string | null>(null)
 
+  const [showSshConfigHosts, setShowSshConfigHostsState] = useState<boolean | null>(null)
+  const [showSshConfigHostsBusy, setShowSshConfigHostsBusy] = useState(false)
+  const [showSshConfigHostsError, setShowSshConfigHostsError] = useState<string | null>(null)
+
   // Client-side visual pref (localStorage), not a backend setting - see lib/tabBadge.ts.
   const [tabBadge, setTabBadge] = useState(isTabBadgeEnabled())
 
@@ -43,6 +48,7 @@ export function SettingsPage() {
     getSettings().then((s) => {
       setRequireMasterPasswordState(s.requireMasterPassword)
       setCloseToTrayState(s.closeToTray)
+      setShowSshConfigHostsState(s.showSshConfigHosts)
     })
   }, [])
 
@@ -147,7 +153,21 @@ export function SettingsPage() {
     }
   }
 
-  if (requireMasterPassword === null || closeToTray === null) {
+  async function handleToggleShowSshConfigHosts() {
+    if (showSshConfigHosts === null) return
+    setShowSshConfigHostsBusy(true)
+    setShowSshConfigHostsError(null)
+    try {
+      const result = await setShowSshConfigHosts(!showSshConfigHosts)
+      setShowSshConfigHostsState(result.showSshConfigHosts)
+    } catch (err) {
+      setShowSshConfigHostsError(err instanceof Error ? err.message : 'Failed to update setting')
+    } finally {
+      setShowSshConfigHostsBusy(false)
+    }
+  }
+
+  if (requireMasterPassword === null || closeToTray === null || showSshConfigHosts === null) {
     return <p className="p-4 text-slate-400">Loading settings…</p>
   }
 
@@ -244,6 +264,31 @@ export function SettingsPage() {
           </button>
         </div>
         {closeToTrayError && <p className="text-sm text-red-400">{closeToTrayError}</p>}
+      </div>
+
+      <div className="flex flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="font-medium text-slate-100">Show hosts from ~/.ssh/config</p>
+            <p className="text-sm text-slate-400">
+              List the Host entries from your SSH client config file as read-only cards on the
+              Hosts screen, alongside your saved hosts. They can't be edited or deleted here -
+              edit the file itself to change them.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleToggleShowSshConfigHosts()}
+            disabled={showSshConfigHostsBusy}
+            aria-label="Show hosts from ~/.ssh/config"
+            className={`shrink-0 rounded px-4 py-2 text-sm font-medium disabled:opacity-50 ${
+              showSshConfigHosts ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+            }`}
+          >
+            {showSshConfigHosts ? 'On' : 'Off'}
+          </button>
+        </div>
+        {showSshConfigHostsError && <p className="text-sm text-red-400">{showSshConfigHostsError}</p>}
       </div>
 
       <div className="flex items-center justify-between gap-4 rounded border border-slate-700 bg-slate-900 p-4">

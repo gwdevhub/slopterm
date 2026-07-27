@@ -1,4 +1,4 @@
-import type { ConnectRequest, SavedHost, SavedRecentConnection, SavedSnippet } from './api'
+import type { ConnectRequest, SavedHost, SavedRecentConnection, SavedSnippet, SshConfigHostEntry } from './api'
 
 // Shared by the saved-host "Connect"/"SSH"/"SFTP" buttons (HostModal, HostGrid) -
 // picks the first usable credential off a host record. Full multi-credential selection
@@ -48,6 +48,27 @@ export function resolveRecentConnectRequest(recent: SavedRecentConnection): Conn
     password: connection.authMethod === 'password' ? connection.secret : undefined,
     privateKey: connection.authMethod === 'privateKey' ? connection.secret : undefined,
     passphrase: connection.authMethod === 'privateKey' ? connection.passphrase : undefined,
+    columns: 80,
+    rows: 24,
+  }
+}
+
+// Mirrors resolveRecentConnectRequest, for a ~/.ssh/config-sourced entry (the Settings
+// "Show hosts from ~/.ssh/config" toggle). Undefined when the backend found no usable
+// private key for this alias - it likely relies on ssh-agent/interactive auth this app
+// has no way to drive, so its card shows read-only but not connectable (see HostCard's
+// canConnect).
+export function resolveSshConfigConnectRequest(entry: SshConfigHostEntry): ConnectRequest | undefined {
+  if (!entry.privateKey) {
+    return undefined
+  }
+
+  return {
+    host: entry.hostName,
+    port: entry.port,
+    username: entry.username,
+    authMethod: 'privateKey',
+    privateKey: entry.privateKey,
     columns: 80,
     rows: 24,
   }

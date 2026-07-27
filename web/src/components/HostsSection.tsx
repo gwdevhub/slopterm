@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   getHostShareToken,
+  getSettings,
   listHosts,
   listSnippets,
   upsertRecentConnection,
@@ -8,12 +9,14 @@ import {
   type SavedHost,
   type SavedRecentConnection,
   type SavedSnippet,
+  type SshConfigHostEntry,
 } from '../lib/api'
-import { resolveConnectRequest, resolveRecentConnectRequest, resolveStartupCommands } from '../lib/hosts'
+import { resolveConnectRequest, resolveRecentConnectRequest, resolveSshConfigConnectRequest, resolveStartupCommands } from '../lib/hosts'
 import { VaultGate } from './VaultGate'
 import { HostGrid } from './HostGrid'
 import { HostModal } from './HostModal'
 import { RecentConnections } from './RecentConnections'
+import { SshConfigHosts } from './SshConfigHosts'
 import { QuickConnectModal } from './QuickConnectModal'
 import { ContextMenu } from './ContextMenu'
 import { ImportHostModal } from './ImportHostModal'
@@ -42,12 +45,16 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
   const [menu, setMenu] = useState<{ host: SavedHost; x: number; y: number } | null>(null)
   const [shareToken, setShareToken] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [showSshConfigHosts, setShowSshConfigHosts] = useState(false)
 
   useEffect(() => {
     refreshHosts()
     listSnippets()
       .then(setSnippets)
       .catch(() => setSnippets([]))
+    getSettings()
+      .then((s) => setShowSshConfigHosts(s.showSshConfigHosts))
+      .catch(() => setShowSshConfigHosts(false))
   }, [])
 
   // Auto-dismiss the transient "Copied…" pill.
@@ -141,6 +148,19 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
     if (await onConnectSftp(request, `${recent.connection.username}@${recent.connection.host}`)) rememberRecent(request)
   }
 
+  // Unlike Quick Connect / Recent, an ssh-config alias already lives permanently in
+  // ~/.ssh/config - no need for a second, app-owned copy of the credential, same
+  // reasoning as connecting through an already-saved Host.
+  function handleSshConfigSsh(entry: SshConfigHostEntry) {
+    const request = resolveSshConfigConnectRequest(entry)
+    if (request) void onConnect(request)
+  }
+
+  function handleSshConfigSftp(entry: SshConfigHostEntry) {
+    const request = resolveSshConfigConnectRequest(entry)
+    if (request) void onConnectSftp(request, entry.alias)
+  }
+
   // The modal already shows this inline via ConnectionForm's own errorMessage prop -
   // showing it a second time here would be redundant (and an ambiguous duplicate match
   // in tests).
@@ -169,6 +189,12 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
           refreshToken={recentsRefreshToken}
           onSsh={handleRecentSsh}
           onSftp={handleRecentSftp}
+          isConnecting={isConnecting}
+        />
+        <SshConfigHosts
+          enabled={showSshConfigHosts}
+          onSsh={handleSshConfigSsh}
+          onSftp={handleSshConfigSftp}
           isConnecting={isConnecting}
         />
       </div>

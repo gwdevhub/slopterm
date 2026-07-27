@@ -250,6 +250,11 @@ public sealed class AppSettings
     // has an effect where that native window/tray model exists (currently Windows).
     public bool CloseToTray { get; set; }
 
+    // Off by default - opt-in via Settings. When on, the Hosts screen also lists the
+    // literal aliases from ~/.ssh/config as read-only cards (see SshConfigService) -
+    // convenience for aliases already managed outside slopterm, not a second host store.
+    public bool ShowSshConfigHosts { get; set; }
+
     // The in-terminal AI agent talks to a local OpenAI-compatible server (Ollama's default
     // port out of the box). Plaintext settings, not vault secrets: a loopback URL and a model
     // name are no more sensitive than the rest of settings.json, and there's no key at all in

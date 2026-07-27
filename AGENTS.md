@@ -325,6 +325,26 @@ spirit of Termius, targeting Linux, macOS and Windows.
     id/timestamp instead of creating a duplicate, and trims down to 5 entries, oldest
     first. Same best-effort posture as the Keychain lookup below: a failed fetch just
     means the Recent list renders nothing, it never blocks the rest of the Hosts screen.
+  - **~/.ssh/config hosts (`SshConfigService.cs`, `SshConfigHosts.tsx`, Settings' "Show
+    hosts from ~/.ssh/config" toggle, off by default):** lists the file's literal `Host`
+    aliases as read-only cards below Recent - never a vault record, never editable/
+    deletable through the app, re-parsed from the file live on every fetch instead of
+    cached or copied anywhere. `SshConfigService.ListHosts` resolves each alias the way
+    real ssh does for a connect target: every block (including a trailing `Host *`
+    catch-all) whose pattern matches applies in file order, first value wins per
+    parameter - deliberately narrower than the full grammar though (no `Include`, no
+    `Match`, no quoted/`%`-token values, `!negated` patterns just never match). An alias
+    resolves a private key from an explicit `IdentityFile` or, failing that, the default
+    OpenSSH filenames (`id_ed25519`/`id_ecdsa`/`id_rsa`) under the same directory as the
+    config file; the key's contents travel in the `GET /api/ssh-config/hosts` response
+    itself (same trust model as `GET /api/vault/hosts` returning decrypted secrets - no
+    new boundary) so the frontend can build a normal `ConnectRequest` via
+    `resolveSshConfigConnectRequest` exactly like a saved host's. No resolvable key means
+    the alias likely relies on ssh-agent/interactive auth this app can't drive - its card
+    still shows (still useful as a glanceable reference of what's in the file) but with
+    disabled SSH/SFTP buttons, `HostCard`'s existing `canConnect` gate. Connecting doesn't
+    upsert a Recent entry, same reasoning as connecting through an already-saved Host: the
+    file itself is already the permanent copy.
   - **Settings (`SettingsPage.tsx`, gear icon pinned to the bottom of `Sidebar`) - master
     password is optional, and off by default.** A brand-new install never shows an
     unlock/setup prompt at all - `AppSettings.RequireMasterPassword` defaults to `false`,

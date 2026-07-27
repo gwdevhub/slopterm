@@ -40,6 +40,11 @@ public sealed class SetCloseToTrayRequest
     public required bool Enabled { get; set; }
 }
 
+public sealed class SetShowSshConfigHostsRequest
+{
+    public required bool Enabled { get; set; }
+}
+
 public sealed class ImportHostShareRequest
 {
     public required string Token { get; set; }

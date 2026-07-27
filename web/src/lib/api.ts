@@ -528,6 +528,7 @@ export async function saveVaultAppearance(settings: unknown): Promise<void> {
 export interface AppSettingsInfo {
   requireMasterPassword: boolean
   closeToTray: boolean
+  showSshConfigHosts: boolean
 }
 
 export async function getSettings(): Promise<AppSettingsInfo> {
@@ -556,6 +557,34 @@ export async function setCloseToTray(enabled: boolean): Promise<AppSettingsInfo>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
   })
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function setShowSshConfigHosts(enabled: boolean): Promise<AppSettingsInfo> {
+  const res = await fetch('/api/settings/show-ssh-config-hosts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+// A literal alias from ~/.ssh/config (see server SshConfigService) - read-only, never
+// stored in the vault. privateKey is only present when the backend found a usable key on
+// disk (an explicit IdentityFile, or one of the default OpenSSH filenames); absent means
+// the alias likely relies on ssh-agent/interactive auth this app can't drive.
+export interface SshConfigHostEntry {
+  alias: string
+  hostName: string
+  port: number
+  username: string
+  privateKey?: string
+}
+
+export async function listSshConfigHosts(): Promise<SshConfigHostEntry[]> {
+  const res = await fetch('/api/ssh-config/hosts')
   await throwOnError(res)
   return res.json()
 }

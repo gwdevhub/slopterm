@@ -546,6 +546,19 @@ app.MapPost("/api/settings/close-to-tray", (SetCloseToTrayRequest request) =>
     return Results.Ok(vault.GetSettings());
 });
 
+app.MapPost("/api/settings/show-ssh-config-hosts", (SetShowSshConfigHostsRequest request) =>
+{
+    vault.SetShowSshConfigHosts(request.Enabled);
+    return Results.Ok(vault.GetSettings());
+});
+
+// Read-only, sourced live from ~/.ssh/config on every call - no vault unlock needed (same
+// posture as /api/local/list: this app already has full local filesystem access, and
+// nothing here is ever written back to the file). The frontend only surfaces this behind
+// the ShowSshConfigHosts toggle, but the endpoint itself isn't gated on it - a missing/
+// unparseable config file already degrades to an empty list with no error either way.
+app.MapGet("/api/ssh-config/hosts", () => Results.Ok(SshConfigService.ListHosts()));
+
 app.MapGet("/api/settings/github-token", () => Results.Ok(new { hasToken = !string.IsNullOrEmpty(vault.GetGithubToken()) }));
 
 app.MapPost("/api/settings/github-token", (SetGithubTokenRequest request) =>
