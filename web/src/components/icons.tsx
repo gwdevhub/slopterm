@@ -245,3 +245,122 @@ export function RestoreIcon(props: IconProps) {
     </svg>
   )
 }
+
+// Keyboard icons for the Android keyboard toolbar
+export function CtrlIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="4" y="4" width="16" height="16" rx="1" />
+      <path d="M8 12 L8 8" />
+      <path d="M12 12 L12 8" />
+      <path d="M16 12 L16 8" />
+    </svg>
+  )
+}
+
+export function ShiftIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 6 L4 18" />
+      <polyline points="4,18 8,14 12,18 16,14 20,18" />
+      <line x1="4" y1="6" x2="20" y2="6" />
+    </svg>
+  )
+}
+
+export function AltIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="4" y="6" width="16" height="12" rx="1" />
+      <line x1="8" y1="10" x2="8" y2="16" />
+      <line x1="12" y1="10" x2="12" y2="16" />
+      <line x1="16" y1="10" x2="16" y2="16" />
+    </svg>
+  )
+}
+
+export function TabIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <polyline points="3,12 15,12 12,3 19,12 3,12" />
+      <line x1="6" y1="12" x2="6" y2="21" />
+      <line x1="18" y1="12" x2="18" y2="21" />
+    </svg>
+  )
+}
+
+export function ArrowUpIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="12" y1="19" x2="12" y2="5" />
+      <polyline points="5,12 12,5 19,12" />
+    </svg>
+  )
+}
+
+export function ArrowDownIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <polyline points="19,12 12,19 5,12" />
+    </svg>
+  )
+}
+
+export function ArrowLeftIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <polyline points="12,19 5,12 12,5" />
+    </svg>
+  )
+}
+
+export function ArrowRightIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="5" y1="12" x2="19" y2="12" />
+      <polyline points="12,5 19,12 12,19" />
+    </svg>
+  )
+}
+
+export function DeleteIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M20 6 L16 6 L14.5 3.5 C14.3 2.6 13.5 2 12.5 2 H11.5 C10.5 2 9.7 2.6 9.5 3.5 L8 6 L4 6 L4 8 L5 19.5 C5 20.4 5.6 21 6.5 21 H17.5 C18.4 21 19 20.4 19 19.5 L20 19.5 Z" />
+      <line x1="8" y1="6" x2="16" y2="6" />
+      <path d="M12 10 L12 16" />
+      <path d="M10 12 L14 12" />
+    </svg>
+  )
+}
+
+export function InsertIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12 3 L12 21" />
+      <path d="M6 12 L18 12" />
+    </svg>
+  )
+}
+
+export function EscapeIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="4" y="4" width="16" height="16" rx="1" />
+      <path d="M8 8 L16 16" />
+      <path d="M8 16 L16 8" />
+    </svg>
+  )
+}
+
+export function MoreHorizontalIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+      <circle cx="5" cy="12" r="1" />
+    </svg>
+  )
+}

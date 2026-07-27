@@ -4,6 +4,8 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { resizeTerminal, sshUpload, terminalSocketUrl, type ConnectRequest } from '../lib/api'
 import { getAppearance, subscribeAppearance, terminalFontFamily } from '../lib/appearance'
+import { KeyboardToolbar } from './KeyboardToolbar'
+import { isMobileApp } from '../lib/androidBridge'
 
 interface TerminalViewProps {
   sessionId: string
@@ -408,6 +410,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
           content (e.g. a fractional cell-size rounding mismatch) - it must stay purely
           parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size. */}
       <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden bg-black p-1 sm:p-2" />
+      {/* Keyboard toolbar for Android - provides special keys not available on mobile keyboards */}
+      {isMobileApp() && <KeyboardToolbar termRef={termRef} isActive={isActive} />}
     </div>
   )
 }
