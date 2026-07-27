@@ -54,6 +54,56 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
   const requestRef = useRef(request)
   const [uploadStatus, setUploadStatus] = useState<{ message: string; error?: boolean } | null>(null)
   const uploadIdRef = useRef(0)
+  // Lets KeyboardToolbar (rendered outside the [sessionId] effect below, which owns the
+  // actual live WebSocket) push raw bytes into the same connection term.onData writes to -
+  // set once the socket exists, reset to a no-op on cleanup so a stale tap after teardown
+  // can't throw on a closed socket.
+  const sendRawRef = useRef<(data: string) => void>(() => {})
+  // Ctrl/Alt are "sticky" one-shot modifiers for the toolbar (mobile keyboards have no
+  // physical Ctrl/Alt to hold): tapping arms one, then the *next* single-character keydown
+  // - from the real (on-screen or Bluetooth) keyboard - is remapped into the equivalent
+  // control code / ESC-prefixed meta byte instead of typing literally, and the modifier
+  // disarms itself either way. modifiersRef mirrors the state into the key-event handler
+  // closure below (created once per [sessionId], so it reads live values through the ref
+  // rather than a stale one captured at effect-run time); the state itself only exists so
+  // the toolbar can render which modifier is currently armed. Shift isn't in this "next
+  // real keystroke" scheme - a real/on-screen keyboard already produces shifted characters
+  // on its own - it's only meaningful combined with the toolbar's own Tab button below.
+  const [modifiers, setModifiers] = useState({ ctrl: false, alt: false, shift: false })
+  const modifiersRef = useRef(modifiers)
+
+  useEffect(() => {
+    modifiersRef.current = modifiers
+  }, [modifiers])
+
+  function toggleModifier(key: 'ctrl' | 'alt' | 'shift') {
+    setModifiers((m) => ({ ...m, [key]: !m[key] }))
+    // Same reason sendKey below refocuses: a toolbar button tap otherwise leaves browser
+    // focus sitting on the <button> itself, so the very next real keystroke - the one this
+    // whole sticky-modifier scheme exists to intercept - would land there instead of on
+    // xterm's hidden textarea, and attachCustomKeyEventHandler would never see it at all.
+    termRef.current?.focus()
+  }
+
+  // Sends a fixed key/escape sequence from a toolbar button tap, then refocuses the
+  // terminal - tapping the toolbar otherwise steals focus from xterm's hidden textarea,
+  // so the very next real keystroke would be lost instead of reaching the shell.
+  function sendKey(data: string) {
+    sendRawRef.current(data)
+    termRef.current?.focus()
+  }
+
+  // Shift+Tab reverses focus/completion order in most shells/TUIs (CSI Z) - consumed the
+  // same one-shot way the sticky Ctrl/Alt modifiers are, just triggered by a toolbar tap
+  // instead of a real keydown.
+  function handleTab() {
+    if (modifiers.shift) {
+      sendKey('\x1b[Z')
+      toggleModifier('shift')
+    } else {
+      sendKey('\t')
+    }
+  }
 
   useEffect(() => {
     onSessionClosedRef.current = onSessionClosed
@@ -219,6 +269,37 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
     // turns the keydown into onData for the copy cases), returning true lets the keydown
     // fall through to xterm's default handling, which is what actually sends \x03.
     term.attachCustomKeyEventHandler((event) => {
+      // Consumes a sticky Ctrl/Alt armed via the mobile keyboard toolbar (see toggleModifier
+      // above) against the very next single-character keydown from the real keyboard, one
+      // shot either way. Gated on the real event carrying no actual modifier keys itself -
+      // a genuine Ctrl/Alt combo from a real (e.g. Bluetooth) keyboard should behave
+      // normally and fall through to the checks below untouched.
+      const armed = modifiersRef.current
+      if (
+        event.type === 'keydown' &&
+        !event.ctrlKey && !event.altKey && !event.metaKey &&
+        event.key.length === 1 &&
+        (armed.ctrl || armed.alt)
+      ) {
+        let bytes: string | null = null
+        const code = event.key.toLowerCase().charCodeAt(0)
+        if (armed.ctrl && code >= 97 && code <= 122) {
+          // The C0 control codes real terminals expect for Ctrl+a..Ctrl+z (0x01-0x1A).
+          bytes = String.fromCharCode(code - 96)
+          if (armed.alt) bytes = '\x1b' + bytes
+        } else if (armed.alt) {
+          // The "meta sends escape" convention readline/bash expect (M-x == ESC x).
+          bytes = '\x1b' + event.key
+        }
+        setModifiers({ ctrl: false, alt: false, shift: false })
+        if (bytes !== null) {
+          sendRawRef.current(bytes)
+          event.preventDefault()
+          return false
+        }
+        return true
+      }
+
       // Ctrl+T is the app's "duplicate this tab" shortcut (issue #51, handled at the
       // window level in App.tsx). Swallow it here so a focused terminal doesn't also send
       // the literal \x14 (DC4) control byte to the remote shell.
@@ -301,6 +382,11 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
 
     const socket = new WebSocket(terminalSocketUrl(sessionId))
     socket.binaryType = 'arraybuffer'
+    sendRawRef.current = (data: string) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(new TextEncoder().encode(data))
+      }
+    }
 
     const startupTimeouts: ReturnType<typeof setTimeout>[] = []
     socket.addEventListener('open', () => {
@@ -378,6 +464,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
       socket.close()
       term.dispose()
       termRef.current = null
+      sendRawRef.current = () => {}
     }
     // startupCommands is intentionally excluded - it's fixed for the lifetime of a given
     // sessionId (resolved once at tab-creation time, see App.tsx), so re-running this
@@ -410,8 +497,28 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
           content (e.g. a fractional cell-size rounding mismatch) - it must stay purely
           parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size. */}
       <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden bg-black p-1 sm:p-2" />
-      {/* Keyboard toolbar for Android - provides special keys not available on mobile keyboards */}
-      {isMobileApp() && <KeyboardToolbar termRef={termRef} isActive={isActive} />}
+      {/* Keyboard toolbar for Android/mobile - special keys mobile keyboards don't expose.
+          Every button is wired to sendKey/toggleModifier above, which push bytes into the
+          same live WebSocket term.onData writes to - not into termRef, which has no such
+          capability (xterm's Terminal has no public "inject a keystroke" API). */}
+      {isMobileApp() && (
+        <KeyboardToolbar
+          ctrlArmed={modifiers.ctrl}
+          altArmed={modifiers.alt}
+          shiftArmed={modifiers.shift}
+          onToggleCtrl={() => toggleModifier('ctrl')}
+          onToggleAlt={() => toggleModifier('alt')}
+          onToggleShift={() => toggleModifier('shift')}
+          onTab={handleTab}
+          onEscape={() => sendKey('\x1b')}
+          onArrowUp={() => sendKey('\x1b[A')}
+          onArrowDown={() => sendKey('\x1b[B')}
+          onArrowLeft={() => sendKey('\x1b[D')}
+          onArrowRight={() => sendKey('\x1b[C')}
+          onDelete={() => sendKey('\x1b[3~')}
+          onInsert={() => sendKey('\x1b[2~')}
+        />
+      )}
     </div>
   )
 }
