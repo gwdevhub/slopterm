@@ -4,5 +4,5 @@
 	<!-- The WebView loads http://127.0.0.1:<port> - cleartext to our own loopback server, which
 	     Android blocks by default from API 28. Allowed app-wide here for the prototype; a later
 	     pass can narrow this to a network-security-config that only permits 127.0.0.1. -->
-	<application android:label="slopterm" android:usesCleartextTraffic="true"></application>
+	<application android:label="slopterm" android:icon="@drawable/ic_launcher" android:usesCleartextTraffic="true"></application>
 </manifest>
