@@ -1,0 +1,23 @@
+# Fastlane sensitive files - NEVER commit these!
+# These contain private keys and passwords
+
+# Google Play service account JSON key
+service-account.json
+
+# Fastlane match files (encryption keys)
+Matchfile
+encryption_key
+
+# Fastlane env files
+.env
+.env.*
+
+# Fastlane credentials
+credentials.json
+
+# Keystore files
+*.keystore
+*.jks
+
+# Fastlane plugins
+plugins/**

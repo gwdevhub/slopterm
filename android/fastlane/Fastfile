@@ -1,0 +1,65 @@
+# frozen_string_literal: true
+
+default_platform(:android)
+
+platform :android do
+  # Lane for building and uploading a release to Google Play
+  desc "Build and upload a release to Google Play Production track"
+  lane :release do
+    # Calculate version from VERSION file
+    version_file = File.join(File.dirname(__FILE__), "../../VERSION")
+    version_name = File.read(version_file).strip
+    
+    # The APK path (built by dotnet publish)
+    apk_path = Dir.glob("../bin/Release/net10.0-android/*.apk").first
+    
+    if apk_path.nil? || !File.exist?(apk_path)
+      UI.error("APK not found! Run 'dotnet publish -c Release -f net10.0-android' first")
+      return
+    end
+    
+    UI.message("Uploading #{File.basename(apk_path)} (version: #{version_name}) to Google Play...")
+    
+    # Upload to Google Play
+    upload_to_play_store(
+      track: 'production',           # or 'beta', 'alpha', 'internal'
+      aab: apk_path,                # Can also use :aab for Android App Bundle
+      skip_metadata: true,          # Skip metadata (screenshots, etc.)
+      skip_screenshots: true,       # Skip screenshots
+      skip_product_videos: true,    # Skip product videos
+      release_status: 'draft'       # 'draft', 'inReview', or 'published'
+      # Uncomment to auto-publish:
+      # release_status: 'published'
+    )
+    
+    UI.success("Successfully uploaded to Google Play!")
+  end
+
+  # Lane for uploading to internal testing
+  desc "Upload to Google Play Internal Testing track"
+  lane :internal do
+    apk_path = Dir.glob("../bin/Release/net10.0-android/*.apk").first
+    
+    upload_to_play_store(
+      track: 'internal',
+      aab: apk_path,
+      skip_metadata: true,
+      skip_screenshots: true,
+      release_status: 'draft'
+    )
+  end
+
+  # Lane for uploading to beta
+  desc "Upload to Google Play Beta track"
+  lane :beta do
+    apk_path = Dir.glob("../bin/Release/net10.0-android/*.apk").first
+    
+    upload_to_play_store(
+      track: 'beta',
+      aab: apk_path,
+      skip_metadata: true,
+      skip_screenshots: true,
+      release_status: 'draft'
+    )
+  end
+end

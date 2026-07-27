@@ -8,7 +8,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Slopterm.Mobile</RootNamespace>
 
-    <ApplicationId>ac.pyc.slopterm</ApplicationId>
+    <ApplicationId>com.gwdevhub.slopterm</ApplicationId>
+    <!-- Output APK will be named stopterm.apk -->
+    <AndroidApkName>stopterm</AndroidApkName>
     
     <!-- 
       Android versionCode and versionName are set automatically from the root VERSION file

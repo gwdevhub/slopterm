@@ -22,6 +22,15 @@ e2e/.tmp/
 .DS_Store
 Thumbs.db
 
+# Android signing (NEVER commit these!)
+*.keystore
+*.jks
+
+# Fastlane sensitive files
+android/fastlane/service-account.json
+android/fastlane/*.keystore
+android/fastlane/*.jks
+
 # Editors
 .vs/
 .idea/

@@ -1,0 +1,14 @@
+# frozen_string_literal: true
+
+# App identifier for Google Play
+# This should match your package name in AndroidManifest.xml
+app_identifier("com.gwdevhub.slopterm")
+
+# JSON key file for Google Play API access
+# This is the service account JSON file you downloaded from Google Play Console
+# Store it as android/fastlane/service-account.json (add to .gitignore!)
+json_key_file("service-account.json")
+
+# Path to your APK/AAB file
+# This will be set dynamically by the GitHub Actions workflow
+# apk_path("../bin/Release/net10.0-android/Slopterm.Android.apk")
