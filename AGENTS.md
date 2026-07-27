@@ -1079,14 +1079,50 @@ spirit of Termius, targeting Linux, macOS and Windows.
   android and the ASP.NET Core assemblies are portable IL - so the csproj drops the transitive
   framework reference and injects the implementation assemblies from the desktop `linux-x64`
   runtime pack (pinned version), which JIT on the android runtime. `.github/workflows/android.yml`
-  installs the `android` workload + JDK and builds the APK on every push/PR (it can't be built
-  on the Linux dev sandbox). **The desktop `release.yml` + `versioned-release.yml` also carry the
-  APK now** - a `build-android` job (`continue-on-error`, so it never blocks the desktop release)
-  publishes `slopterm-android.apk` alongside the per-OS binaries.
-- **Still open:** confirmed on-device run (build ≠ runtime - Kestrel actually serving + SSH over
-  the phone's network needs a real device/emulator, outside CI); a foreground service so SSH
-  sessions survive backgrounding; narrowing cleartext to `127.0.0.1`; an app icon; and pinning
-  the injected AspNetCore version to the workload's own runtime version rather than a constant.
+  installs the `android` workload + JDK and builds the app on every push/PR (it can't be built
+  on the Linux dev sandbox) - it *only* verifies the build, no signing and no store upload.
+  **The desktop `release.yml` + `versioned-release.yml` also carry the APK now** - a
+  `build-android` job publishes `slopterm-android.apk` alongside the per-OS binaries.
+- **Google Play releases go through `versioned-release.yml`'s `build-android` job, never a
+  tag-triggered workflow.** This isn't a style preference: that workflow creates the tag itself
+  via `gh release create` with `GITHUB_TOKEN`, and events raised with that token don't start new
+  workflow runs - a `push: tags:` trigger would simply never fire for a real release (and
+  `paths:` filters aren't evaluated for tag pushes either, so pairing the two is doubly dead).
+  So one job does the signed build, the GitHub release asset, and the Play upload. Notes on the
+  pieces, each of which was a real bug first:
+  - **Signing is the SDK's** (`-p:AndroidKeyStore=true` + `AndroidSigningKeyStore`/`KeyAlias`/
+    `StorePass`/`KeyPass`), which zipaligns and runs apksigner for a v2+ signature. `jarsigner`
+    is not an option: it only writes a v1 JAR signature, which Play rejects for anything
+    targeting API 30+, and it would stack a second signer on top of the one .NET for Android has
+    already applied ( `$(AndroidKeyStore)` defaults to false, which means *debug-key signed*,
+    not unsigned). The password properties take a `file:` prefix so nothing lands on a command
+    line - `env:` also exists but is unsupported when the package format is `aab`.
+  - **Play takes the `.aab`, sideloaders get the `.apk`.** `$(AndroidPackageFormats)` defaults to
+    `aab;apk` for Release, so one publish yields both. Play hasn't accepted APKs for new apps
+    since 2021.
+  - **Secrets are surfaced as job-level `env:` and tested as `env.X != ''`.** `if: secrets.X != ''`
+    does not work - GitHub documents that secrets cannot be referenced in `if:` conditionals.
+  - **The store listing/first upload can't be automated.** supply cannot create a Play listing,
+    and refuses to run until the app has had one build uploaded by hand. See
+    `android/fastlane/README.md` for that checklist and the required secrets.
+  - **`versionCode` comes from the root `VERSION` file** (`android/Directory.Build.props`), as
+    `(MAJOR*10000 + MINOR*100 + PATCH) * 1000 + PRERELEASE` where PRERELEASE is 900 for a final
+    release and 100/200/300/400 (+trailing number) for alpha/beta/rc/other. The prerelease digits
+    exist because Play orders releases by `versionCode` alone and refuses a reused one, so
+    `0.0.1-beta` has to sort strictly below `0.0.1` - the obvious `MAJOR*10000+MINOR*100+PATCH`
+    gives both the same number and the second upload is rejected. Note `$(ApplicationVersion)` is
+    **versionCode** and `$(ApplicationDisplayVersion)` is **versionName** (verified in
+    dotnet/android's `Xamarin.Android.Common.targets`; the published .NET-for-Android
+    build-properties doc has this backwards). Also note MSBuild's `Regex::Match` stringifies to
+    the *whole match*, not capture group 1 - the version parsing uses `Regex::Replace` for that
+    reason, and got this wrong twice before.
+- **On-device run is confirmed working** - Kestrel really does serve and SSH really does connect
+  over the phone's network, so the ASP.NET-Core-on-Android packaging workaround above holds up at
+  runtime and not just at build time. CI still can't prove this (no device/emulator there); it was
+  verified by hand on a real device.
+- **Still open:** a foreground service so SSH sessions survive backgrounding; narrowing cleartext
+  to `127.0.0.1`; and pinning the injected AspNetCore version to the workload's own runtime
+  version rather than a constant.
 - **Do not pursue a pure browser-sandboxed WASM build for Android.** Compiling the C#
   backend to WebAssembly and running it inside a WebView/browser JS engine sounds
   appealing ("wasm runs everywhere"), but browser-sandboxed WASM has no raw TCP socket
@@ -1140,6 +1176,15 @@ spirit of Termius, targeting Linux, macOS and Windows.
     trimming/R8/single-ABI splitting, treat that as the trigger to revisit Option B
     (native Kotlin backend) rather than accepting the bloat — don't just wave it through
     because the code is already written.
+  - **Measured 2026-07-27 — the checkpoint passes, comfortably.** First signed Release build
+    (`0.0.1-beta`, versionCode 1200, minSdk 24 / targetSdk 36): the `.aab` is 32.3 MB total and
+    carries **only `arm64-v8a` and `x86_64`** — .NET 10 no longer emits 32-bit `armeabi-v7a`/
+    `x86`, so 32-bit-only devices are simply out of scope. Per-ABI compressed payload is
+    **~15.1 MB for the `arm64-v8a` slice** and ~15.4 MB for x86_64, so a real phone downloads
+    roughly 15 MB, not the whole 32. Installed size runs somewhat above the compressed figure
+    (native `.so`s are extracted), but there's a wide margin to the 40 MB bar - and this is
+    *before* the R8/trimming the decision above assumed would be needed. The universal APK is
+    32.3 MB, nowhere near the feared 60–90 MB. **Option A stands.**
   - Concretely: publish Android as an AAB (not a universal APK), enable R8/resource
     shrinking and .NET trimming (re-testing reflection-dependent paths per the Native AOT
     note above), and target `arm64-v8a` as the primary/first-supported ABI.

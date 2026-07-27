@@ -8,22 +8,17 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Slopterm.Mobile</RootNamespace>
 
+    <!-- Permanent once published to Google Play - it can never be changed for this listing. -->
     <ApplicationId>com.gwdevhub.slopterm</ApplicationId>
-    <!-- Output APK will be named stopterm.apk -->
-    <AndroidApkName>stopterm</AndroidApkName>
-    
-    <!-- 
-      Android versionCode and versionName are set automatically from the root VERSION file
-      by Directory.Build.props using the formula: versionCode = MAJOR * 10000 + MINOR * 100 + PATCH
-      
-      This ensures versionCode always increases and stays in sync with the app version.
-      Current VERSION file: 0.0.1-beta -> versionCode = 1 (but min 2 to be > first build)
-      
-      When you bump VERSION file, the APK will automatically get the correct versionCode.
-      
-      Fallback: If Directory.Build.props doesn't work, uncomment these and set manually:
-      <ApplicationVersion>2</ApplicationVersion>
-      <ApplicationDisplayVersion>0.0.1-beta</ApplicationDisplayVersion>
+
+    <!--
+      $(ApplicationVersion) (versionCode) and $(ApplicationDisplayVersion) (versionName) are
+      derived from the repo-root VERSION file by Directory.Build.props - see the formula and its
+      bounds there. Don't set them here; that would silently win over the computed values.
+
+      Release builds produce both an .aab and an .apk ($(AndroidPackageFormats) defaults to
+      'aab;apk' for Release): the .aab is what Google Play takes, the .apk is what gets attached
+      to the GitHub release for sideloading.
     -->
 
     <!-- EXPERIMENT: ASP.NET Core has no *runtime pack* for android RIDs (NETSDK1082), but the

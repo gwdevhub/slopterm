@@ -1,20 +1,24 @@
-# Builds the Android APK for the .NET-Android head (Slopterm.Android). The APK build needs the
+# Builds the Android app for the .NET-Android head (Slopterm.Android). The build needs the
 # Android SDK/JDK + the `android` .NET workload, so it lives here rather than on the dev box.
 # This is currently the only way the Android head is verified to compile/package - treat a red
 # run as "the Android port is broken", same weight as the desktop CI.
+#
+# This workflow only VERIFIES the build. Signing and the Google Play upload live in
+# versioned-release.yml, which is the workflow an actual release goes through - deliberately not
+# here, because a tag pushed by versioned-release.yml's own `gh release create` could never
+# trigger this one (events raised with GITHUB_TOKEN don't start new workflow runs).
 name: Android
 
 on:
   push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
-    paths: ['android/**', 'core/**', 'web/**', '.github/workflows/android.yml']
+    branches: [main]
+    paths: ['android/**', 'core/**', 'web/**', 'VERSION', '.github/workflows/android.yml']
   pull_request:
-    paths: ['android/**', 'core/**', 'web/**', '.github/workflows/android.yml']
+    paths: ['android/**', 'core/**', 'web/**', 'VERSION', '.github/workflows/android.yml']
   workflow_dispatch:
 
 jobs:
-  build-apk:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,75 +49,16 @@ jobs:
           npm ci
           npm run build
 
-      - name: Publish the APK
+      # Unsigned (well: debug-key-signed, which is what .NET for Android falls back to when
+      # $(AndroidKeyStore) isn't set). The real signing happens in versioned-release.yml.
+      - name: Publish the Android app
         working-directory: android
         run: dotnet publish -c Release -f net10.0-android
 
-      # Store the unsigned APK path for later steps
-      - name: Find APK
-        id: find-apk
-        run: |
-          APK_PATH=$(find android/bin/Release/net10.0-android -name '*.apk' | head -1)
-          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-          echo "APK found at: $APK_PATH"
-
-      # Upload unsigned APK as artifact (for debugging)
-      - name: Upload unsigned APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: slopterm-android-apk-unsigned
-          path: android/bin/Release/net10.0-android/**/*.apk
+          name: slopterm-android-unsigned
+          path: |
+            android/bin/Release/net10.0-android/**/*.apk
+            android/bin/Release/net10.0-android/**/*.aab
           if-no-files-found: error
-
-      # Sign the APK with release keystore (only on tagged releases with secrets)
-      - name: Sign APK
-        if: secrets.ANDROID_STORE_PASSWORD != ''
-        run: |
-          # Decode the keystore from base64
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/slopterm-release.keystore
-          
-          # Sign the APK
-          APK_PATH=${{ steps.find-apk.outputs.apk_path }}
-          
-          jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
-            -keystore android/slopterm-release.keystore \
-            -storepass ${{ secrets.ANDROID_STORE_PASSWORD }} \
-            -keypass ${{ secrets.ANDROID_KEY_PASSWORD }} \
-            "$APK_PATH" slopterm-release
-          
-          # Verify the signature
-          jarsigner -verify "$APK_PATH"
-          
-          # Clean up keystore
-          rm -f android/slopterm-release.keystore
-
-      # Install Ruby for Fastlane
-      - name: Install Ruby
-        if: secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != ''
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.1'
-          bundler-cache: true
-          working-directory: android/fastlane
-
-      # Set up Fastlane
-      - name: Install Fastlane
-        if: secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != ''
-        working-directory: android/fastlane
-        run: |
-          gem install bundler
-          bundle install
-
-      # Upload to Google Play Store (only on tagged releases with secrets configured)
-      - name: Upload to Google Play Store
-        if: secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != ''
-        working-directory: android/fastlane
-        run: |
-          # Decode and save service account JSON
-          echo "${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}" | base64 --decode > service-account.json
-          
-          # Run Fastlane to upload (uses draft status by default)
-          bundle exec fastlane release
-          
-          # Clean up sensitive files
-          rm -f service-account.json

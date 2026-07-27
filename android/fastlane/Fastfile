@@ -1,65 +1,71 @@
 # frozen_string_literal: true
 
+# Uploads the Android App Bundle produced by `dotnet publish -c Release -f net10.0-android`
+# to Google Play. Driven by .github/workflows/versioned-release.yml; runnable locally too
+# (see README.md). Google Play does not accept an .apk for a new app - the .aab is the only
+# artifact that can be uploaded here, so nothing in this file touches the .apk.
+
 default_platform(:android)
 
+# fastlane runs with the fastlane/ directory as the working directory, so "../" is android/.
+def android_output_dir
+  "../bin/Release/net10.0-android"
+end
+
+# The signed bundle is emitted as *-Signed.aab alongside the raw one; prefer it, and fall back to
+# any .aab so a locally-built unsigned bundle still gives a clear error from Play rather than a
+# confusing "no bundle found" here. Recursive, because `dotnet publish` puts its copy in publish/.
+def resolve_aab(options)
+  explicit = options[:aab] || ENV["SUPPLY_AAB"]
+  return explicit unless explicit.nil? || explicit.empty?
+
+  candidates = Dir.glob("#{android_output_dir}/**/*.aab")
+  candidates.find { |f| f.end_with?("-Signed.aab") } || candidates.max_by { |f| File.mtime(f) }
+end
+
+def upload_bundle(options, default_track)
+  aab = resolve_aab(options)
+  if aab.nil? || !File.exist?(aab)
+    UI.user_error!("No .aab found under #{android_output_dir}. Run `dotnet publish -c Release -f net10.0-android` from android/ first, or pass aab:<path>.")
+  end
+
+  track = options[:track] || ENV["SLOPTERM_PLAY_TRACK"] || default_track
+  # 'draft' uploads the release without rolling it out - the other valid values are 'completed',
+  # 'inProgress' and 'halted'. Draft is the default on purpose: a bad build should need a human
+  # click in the Play Console before it reaches anyone.
+  status = options[:release_status] || ENV["SLOPTERM_PLAY_RELEASE_STATUS"] || "draft"
+
+  UI.message("Uploading #{File.basename(aab)} to the '#{track}' track (release_status: #{status})")
+
+  upload_to_play_store(
+    aab: File.expand_path(aab),
+    track: track,
+    release_status: status,
+    # The store listing (title, description, screenshots, changelogs) is maintained by hand in
+    # the Play Console - this repo has no fastlane metadata/ tree to upload from, and without
+    # these skips supply would try to read one and fail.
+    skip_upload_metadata: true,
+    skip_upload_images: true,
+    skip_upload_screenshots: true,
+    skip_upload_changelogs: true
+  )
+
+  UI.success("Uploaded to Google Play ('#{track}' track, #{status}).")
+end
+
 platform :android do
-  # Lane for building and uploading a release to Google Play
-  desc "Build and upload a release to Google Play Production track"
-  lane :release do
-    # Calculate version from VERSION file
-    version_file = File.join(File.dirname(__FILE__), "../../VERSION")
-    version_name = File.read(version_file).strip
-    
-    # The APK path (built by dotnet publish)
-    apk_path = Dir.glob("../bin/Release/net10.0-android/*.apk").first
-    
-    if apk_path.nil? || !File.exist?(apk_path)
-      UI.error("APK not found! Run 'dotnet publish -c Release -f net10.0-android' first")
-      return
-    end
-    
-    UI.message("Uploading #{File.basename(apk_path)} (version: #{version_name}) to Google Play...")
-    
-    # Upload to Google Play
-    upload_to_play_store(
-      track: 'production',           # or 'beta', 'alpha', 'internal'
-      aab: apk_path,                # Can also use :aab for Android App Bundle
-      skip_metadata: true,          # Skip metadata (screenshots, etc.)
-      skip_screenshots: true,       # Skip screenshots
-      skip_product_videos: true,    # Skip product videos
-      release_status: 'draft'       # 'draft', 'inReview', or 'published'
-      # Uncomment to auto-publish:
-      # release_status: 'published'
-    )
-    
-    UI.success("Successfully uploaded to Google Play!")
+  desc "Upload the release .aab to Google Play (production track by default)"
+  lane :release do |options|
+    upload_bundle(options, "production")
   end
 
-  # Lane for uploading to internal testing
-  desc "Upload to Google Play Internal Testing track"
-  lane :internal do
-    apk_path = Dir.glob("../bin/Release/net10.0-android/*.apk").first
-    
-    upload_to_play_store(
-      track: 'internal',
-      aab: apk_path,
-      skip_metadata: true,
-      skip_screenshots: true,
-      release_status: 'draft'
-    )
+  desc "Upload the release .aab to the Google Play internal testing track"
+  lane :internal do |options|
+    upload_bundle(options, "internal")
   end
 
-  # Lane for uploading to beta
-  desc "Upload to Google Play Beta track"
-  lane :beta do
-    apk_path = Dir.glob("../bin/Release/net10.0-android/*.apk").first
-    
-    upload_to_play_store(
-      track: 'beta',
-      aab: apk_path,
-      skip_metadata: true,
-      skip_screenshots: true,
-      release_status: 'draft'
-    )
+  desc "Upload the release .aab to the Google Play beta (open/closed testing) track"
+  lane :beta do |options|
+    upload_bundle(options, "beta")
   end
 end

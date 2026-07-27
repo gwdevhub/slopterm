@@ -1,59 +1,101 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
   <!--
-    Automatically calculate Android versionCode from VERSION file.
-    
-    Sets the following .NET Android properties:
-    - AndroidApplicationVersion (versionCode): MAJOR * 10000 + MINOR * 100 + PATCH
-    - AndroidApplicationDisplayVersion (versionName): Raw version from VERSION file
+    Android versionCode/versionName are derived from the repo-root VERSION file, so bumping that
+    one file is all a release needs (see .github/workflows/versioned-release.yml).
+
+    Google Play orders releases by versionCode ALONE - versionName is cosmetic - and rejects a
+    versionCode that has already been used. So the code has to sort a prerelease strictly below
+    the final release of the same version (0.0.1-beta must be < 0.0.1), which the obvious
+    MAJOR*10000 + MINOR*100 + PATCH cannot do: it hands both of them the same number, and the
+    second upload is refused. Hence the extra prerelease digits:
+
+        versionCode = (MAJOR*10000 + MINOR*100 + PATCH) * 1000 + PRERELEASE
+
+        PRERELEASE = 900                  final release (no -suffix)
+                   = 100 + N              -alpha / -alpha.N
+                   = 200 + N              -beta  / -beta.N
+                   = 300 + N              -rc    / -rc.N
+                   = 400 + N              any other suffix
+                                          (N = the suffix's trailing number, 0 if it has none)
+
+    Worked examples: 0.0.1-beta -> 1200, 0.0.1-rc.2 -> 1302, 0.0.1 -> 1900, 0.1.0 -> 100900.
+
+    Bounds this assumes: MINOR/PATCH stay under 100, the prerelease number under 100, and MAJOR
+    under ~210 (Play caps versionCode at 2100000000). A VERSION that doesn't start with
+    MAJOR.MINOR.PATCH falls back to 0.0.0 rather than producing a garbage code.
+
+    NOTE: $(ApplicationVersion) is versionCode and $(ApplicationDisplayVersion) is versionName -
+    verified against dotnet/android's Xamarin.Android.Common.targets, which does
+    `<_AndroidVersionCode>$(ApplicationVersion)</_AndroidVersionCode>` /
+    `<_AndroidVersionName>$(ApplicationDisplayVersion)</_AndroidVersionName>`. The published
+    .NET-for-Android build-properties doc claims ApplicationVersion is versionName; it's wrong.
+
+    These are computed at evaluation time (a plain PropertyGroup, not inside a target) so the
+    manifest-generation targets see them no matter when they run.
   -->
 
   <PropertyGroup>
-    <VersionFile>$(MSBuildThisFileDirectory)/../VERSION</VersionFile>
+    <VersionFile>$(MSBuildThisFileDirectory)../VERSION</VersionFile>
+
+    <!--
+      A bad VERSION must be a build FAILURE, never a silent fallback. Falling back to 0.0.0 would
+      compute versionCode 900 - LOWER than the 1200 already published for 0.0.1-beta - so the
+      build would succeed and only blow up later as an opaque Play rejection. The problem is
+      recorded here and thrown by ValidateAndroidVersion below; the computation still needs a
+      usable value in the meantime, or MSBuild's own arithmetic errors out first with a much
+      worse message.
+    -->
+    <_RawVersionFromFile Condition="Exists('$(VersionFile)')">$([System.IO.File]::ReadAllText('$(VersionFile)').Trim())</_RawVersionFromFile>
+
+    <_VersionProblem Condition="!Exists('$(VersionFile)')">VERSION file not found at '$(VersionFile)'</_VersionProblem>
+    <_VersionIsWellFormed>$([System.Text.RegularExpressions.Regex]::IsMatch('$(_RawVersionFromFile)', '^\d+\.\d+\.\d+([-+][0-9A-Za-z.\-]+)?$'))</_VersionIsWellFormed>
+    <_VersionProblem Condition="'$(_VersionProblem)' == '' And '$(_VersionIsWellFormed)' != 'true'">VERSION contains '$(_RawVersionFromFile)', which is not MAJOR.MINOR.PATCH with an optional -prerelease suffix</_VersionProblem>
+
+    <RawVersion>$(_RawVersionFromFile)</RawVersion>
+    <RawVersion Condition="'$(_VersionProblem)' != ''">0.0.0</RawVersion>
+
+    <!--
+      Regex::Match returns the WHOLE match (not capture group 1) when MSBuild stringifies it, so
+      every one of these has to be a Replace that rewrites the full string down to the group.
+    -->
+    <_VersionMajor>$([System.Text.RegularExpressions.Regex]::Replace('$(RawVersion)', '^(\d+)\..*$', '$1'))</_VersionMajor>
+    <_VersionMinor>$([System.Text.RegularExpressions.Regex]::Replace('$(RawVersion)', '^\d+\.(\d+)\..*$', '$1'))</_VersionMinor>
+    <_VersionPatch>$([System.Text.RegularExpressions.Regex]::Replace('$(RawVersion)', '^\d+\.\d+\.(\d+).*$', '$1'))</_VersionPatch>
+    <_VersionSuffix>$([System.Text.RegularExpressions.Regex]::Replace('$(RawVersion)', '^\d+\.\d+\.\d+[-+]?', '').ToLowerInvariant())</_VersionSuffix>
+
+    <_PrereleaseBase Condition="'$(_VersionSuffix)' == ''">900</_PrereleaseBase>
+    <_PrereleaseBase Condition="'$(_PrereleaseBase)' == '' And $(_VersionSuffix.Contains('alpha'))">100</_PrereleaseBase>
+    <_PrereleaseBase Condition="'$(_PrereleaseBase)' == '' And $(_VersionSuffix.Contains('beta'))">200</_PrereleaseBase>
+    <_PrereleaseBase Condition="'$(_PrereleaseBase)' == '' And $(_VersionSuffix.Contains('rc'))">300</_PrereleaseBase>
+    <_PrereleaseBase Condition="'$(_PrereleaseBase)' == ''">400</_PrereleaseBase>
+
+    <_PrereleaseNumber>$([System.Text.RegularExpressions.Regex]::Replace('$(_VersionSuffix)', '\D', ''))</_PrereleaseNumber>
+    <_PrereleaseNumber Condition="'$(_PrereleaseNumber)' == ''">0</_PrereleaseNumber>
+    <_Prerelease>$([MSBuild]::Add($(_PrereleaseBase), $(_PrereleaseNumber)))</_Prerelease>
+
+    <!--
+      The bounds the formula's digit budget assumes. Exceeding any of them doesn't produce a
+      wrong-looking number, it produces a COLLIDING one - 0.0.100 and 0.1.0 both land on 100900 -
+      and Play refuses a versionCode it has already seen. Cheaper to refuse the build.
+    -->
+    <_VersionProblem Condition="'$(_VersionProblem)' == '' And $(_VersionMinor) &gt; 99">VERSION '$(RawVersion)' has minor version $(_VersionMinor); it must stay under 100</_VersionProblem>
+    <_VersionProblem Condition="'$(_VersionProblem)' == '' And $(_VersionPatch) &gt; 99">VERSION '$(RawVersion)' has patch version $(_VersionPatch); it must stay under 100</_VersionProblem>
+    <_VersionProblem Condition="'$(_VersionProblem)' == '' And $(_PrereleaseNumber) &gt; 99">VERSION '$(RawVersion)' has prerelease number $(_PrereleaseNumber); it must stay under 100</_VersionProblem>
+    <_VersionProblem Condition="'$(_VersionProblem)' == '' And $(_VersionMajor) &gt; 210">VERSION '$(RawVersion)' has major version $(_VersionMajor); above 210 the versionCode exceeds Google Play's 2100000000 ceiling</_VersionProblem>
+
+    <_VersionCore>$([MSBuild]::Add($([MSBuild]::Add($([MSBuild]::Multiply($(_VersionMajor), 10000)), $([MSBuild]::Multiply($(_VersionMinor), 100)))), $(_VersionPatch)))</_VersionCore>
+
+    <!-- versionCode (integer, must only ever increase) and versionName (the raw VERSION string). -->
+    <ApplicationVersion>$([MSBuild]::Add($([MSBuild]::Multiply($(_VersionCore), 1000)), $(_Prerelease)))</ApplicationVersion>
+    <ApplicationDisplayVersion>$(RawVersion)</ApplicationDisplayVersion>
   </PropertyGroup>
 
-  <!--
-    Calculate versionCode and versionName before the build starts.
-    This target runs automatically before the build process.
-  -->
-  <Target Name="SetAndroidVersions" BeforeTargets="BeforeBuild">
-    <PropertyGroup>
-      <!-- Read and parse VERSION file -->
-      <RawVersion>$([System.IO.File]::ReadAllText($(VersionFile)).Trim())</RawVersion>
-      <RawVersion Condition="!Exists('$(VersionFile)') Or '$(RawVersion)' == ''">0.0.1-beta</RawVersion>
-
-      <!-- Extract semantic version components -->
-      <MajorVersion>$([System.Text.RegularExpressions.Regex]::Match($(RawVersion), ^(\d+)))</MajorVersion>
-      <MinorVersion>$([System.Text.RegularExpressions.Regex]::Match($(RawVersion), ^\d+\.(\d+)))</MinorVersion>
-      <PatchVersion>$([System.Text.RegularExpressions.Regex]::Match($(RawVersion), ^\d+\.\d+\.(\d+)))</PatchVersion>
-
-      <!-- Provide defaults if regex failed -->
-      <MajorVersion Condition="'$(MajorVersion)' == ''">0</MajorVersion>
-      <MinorVersion Condition="'$(MinorVersion)' == ''">0</MinorVersion>
-      <PatchVersion Condition="'$(PatchVersion)' == ''">1</PatchVersion>
-
-      <!-- Calculate versionCode: MAJOR * 10000 + MINOR * 100 + PATCH -->
-      <MajorTimes10000>$([MSBuild]::Multiply($(MajorVersion), 10000))</MajorTimes10000>
-      <MinorTimes100>$([MSBuild]::Multiply($(MinorVersion), 100))</MinorTimes100>
-      <MajorPlusMinor>$([MSBuild]::Add($(MajorTimes10000), $(MinorTimes100)))</MajorPlusMinor>
-      <CalculatedVersionCode>$([MSBuild]::Add($(MajorPlusMinor), $(PatchVersion)))</CalculatedVersionCode>
-
-      <!-- Ensure versionCode is at least 2 (to be > first build with versionCode=1) -->
-      <VersionCode Condition="$(CalculatedVersionCode) > 1">$(CalculatedVersionCode)</VersionCode>
-      <VersionCode Condition="'$(VersionCode)' == ''">2</VersionCode>
-
-      <VersionName>$(RawVersion)</VersionName>
-    </PropertyGroup>
-
-    <!-- Set the Android SDK properties -->
-    <PropertyGroup>
-      <ApplicationVersion>$(VersionCode)</ApplicationVersion>
-      <ApplicationDisplayVersion>$(VersionName)</ApplicationDisplayVersion>
-      <!-- Also set the .NET Android specific properties -->
-      <AndroidApplicationVersion>$(VersionCode)</AndroidApplicationVersion>
-      <AndroidApplicationDisplayVersion>$(VersionName)</AndroidApplicationDisplayVersion>
-    </PropertyGroup>
-
-    <Message Text="Android: versionName=$(VersionName), versionCode=$(VersionCode)" Importance="High" />
+  <Target Name="ValidateAndroidVersion" BeforeTargets="BeforeBuild;GetAndroidDependencies">
+    <Error Condition="'$(_VersionProblem)' != ''"
+           Code="SLOP0001"
+           File="$(VersionFile)"
+           Text="$(_VersionProblem). Expected MAJOR.MINOR.PATCH with an optional prerelease suffix, e.g. '0.0.2', '0.0.2-beta', '0.0.2-beta.2', '0.0.2-rc.1'. No leading 'v', no build metadata. See the Releases section of the repo README for the progression and how it maps to the Android versionCode." />
+    <Message Importance="High" Text="Android: versionName=$(ApplicationDisplayVersion), versionCode=$(ApplicationVersion)" />
   </Target>
 </Project>

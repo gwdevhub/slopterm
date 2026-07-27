@@ -2,10 +2,9 @@
 
 source "https://rubygems.org"
 
-# Fastlane dependencies
 gem "fastlane", "~> 2.215"
 
-# Android-specific plugins (optional)
-# gem "fastlane-plugin-play_console", "~> 0.1"
-
-plugins_path = File.join(File.dirname(__FILE__), 'plugins')
+# fastlane writes its plugin list to Pluginfile when `fastlane add_plugin` is used; there are no
+# plugins today, so the file doesn't exist and this is a no-op until one is added.
+plugins_path = File.join(File.dirname(__FILE__), "Pluginfile")
+eval_gemfile(plugins_path) if File.exist?(plugins_path)

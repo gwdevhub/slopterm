@@ -7,6 +7,10 @@ name: Versioned Release
 # same way release.yml already covers all four RIDs). Re-running for a version that
 # already has a release just replaces its assets rather than failing, so a fixed build
 # can be re-uploaded without bumping VERSION again.
+#
+# This is also the whole Android release path (build-android below): the signed .apk becomes a
+# release asset and the signed .aab goes to Google Play via fastlane. VERSION drives the Android
+# versionCode/versionName too - see android/Directory.Build.props.
 on:
   push:
     branches: [main]
@@ -21,8 +25,18 @@ jobs:
       version: ${{ steps.read.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      # Validated here so a typo'd VERSION fails in seconds instead of after four builds - and
+      # before anything reaches Google Play, where a wrong versionCode is not retractable. The
+      # Android build enforces the same rules (android/Directory.Build.props, SLOP0001); this
+      # just catches it earlier and covers the desktop half too.
       - id: read
-        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error file=VERSION::VERSION is '$version' - expected MAJOR.MINOR.PATCH with an optional prerelease suffix, e.g. '0.0.2' or '0.0.2-beta.2'. No leading 'v'."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
@@ -71,13 +85,30 @@ jobs:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
 
-  # The Android APK - separate from the desktop matrix (needs the android .NET workload + JDK
-  # and publishes from android/, mirroring .github/workflows/android.yml). continue-on-error so
-  # a flaky Android build never blocks the versioned release.
+  # The Android app - separate from the desktop matrix (needs the android .NET workload + JDK
+  # and publishes from android/, mirroring .github/workflows/android.yml). This is also where
+  # release signing and the Google Play upload happen: it's the only Android job a real release
+  # actually runs through. A tag-triggered workflow could NOT do this job - the tag below is
+  # created by `gh release create` with GITHUB_TOKEN, and events raised with that token never
+  # start new workflow runs.
+  #
+  # No continue-on-error: the `release` job's own `if` already lets the desktop release ship when
+  # this job fails, so failing loudly here costs nothing and a silently-skipped Play upload would
+  # be much worse.
+  #
+  # Secrets are surfaced as job-level env vars because `if: secrets.FOO != ''` does not work -
+  # GitHub's docs are explicit that secrets cannot be referenced in `if:` conditionals.
   build-android:
     needs: version
     runs-on: ubuntu-latest
-    continue-on-error: true
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      # The alias inside upload.keystore. Not a secret, so it lives here rather than in one -
+      # override with an ANDROID_KEY_ALIAS secret if the key is ever rotated to a different alias.
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'upload' }}
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
     steps:
       - uses: actions/checkout@v4
 
@@ -105,22 +136,115 @@ jobs:
           npm ci
           npm run build
 
-      - name: Publish the APK
-        working-directory: android
-        run: dotnet publish -c Release -f net10.0-android
+      # $(AndroidSigningStorePass)/$(AndroidSigningKeyPass) take a `file:` prefix so the passwords
+      # never appear on a command line or in the build log. `env:` would work for the .apk but is
+      # explicitly unsupported when the package format is .aab, so file: is the one that covers
+      # both. Everything lands in RUNNER_TEMP, which is outside the checkout.
+      - name: Decode the release keystore
+        if: env.ANDROID_KEYSTORE_BASE64 != ''
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          test -s "$RUNNER_TEMP/release.keystore"
+          printf '%s' "$ANDROID_STORE_PASSWORD" > "$RUNNER_TEMP/store.pass"
+          printf '%s' "$ANDROID_KEY_PASSWORD" > "$RUNNER_TEMP/key.pass"
+          # Prove the secret decoded to a real keystore, the password opens it, and the alias
+          # exists - all three are invisible from outside CI, and without this check a wrong one
+          # surfaces as an opaque failure inside MSBuild's signing step. The password goes in on
+          # stdin so it never lands on a command line.
+          keytool -list -keystore "$RUNNER_TEMP/release.keystore" -alias "$ANDROID_KEY_ALIAS" \
+            <<< "$ANDROID_STORE_PASSWORD" > /dev/null
 
+      # Release builds emit both an .aab (what Google Play takes) and an .apk (what gets attached
+      # to the GitHub release), so one publish covers both distribution channels. Signing is done
+      # by the SDK itself - it zipaligns and runs apksigner, producing a v2+ signature. jarsigner
+      # would only add a v1 signature, which Play rejects for anything targeting API 30+, and it
+      # would be stacking a second signer on top of the one the SDK already applied.
+      - name: Publish the Android app
+        working-directory: android
+        run: |
+          # AndroidPackageFormats already defaults to "aab;apk" for Release, but it's stated here
+          # so a future SDK default can't silently drop one of the two artifacts this job needs.
+          if [ -f "$RUNNER_TEMP/release.keystore" ]; then
+            echo "Signing with the release keystore (alias: $ANDROID_KEY_ALIAS)"
+            dotnet publish -c Release -f net10.0-android \
+              -p:AndroidPackageFormats="aab%3Bapk" \
+              -p:AndroidKeyStore=true \
+              -p:AndroidSigningKeyStore="$RUNNER_TEMP/release.keystore" \
+              -p:AndroidSigningKeyAlias="$ANDROID_KEY_ALIAS" \
+              -p:AndroidSigningStorePass="file:$RUNNER_TEMP/store.pass" \
+              -p:AndroidSigningKeyPass="file:$RUNNER_TEMP/key.pass"
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set - falling back to the debug key. That key is generated fresh on every runner, so each release's APK carries a different signature and sideloaders cannot upgrade in place."
+            dotnet publish -c Release -f net10.0-android -p:AndroidPackageFormats="aab%3Bapk"
+          fi
+
+      # .NET for Android emits the signed package as *-Signed.apk/aab next to the raw one, so
+      # prefer that; the plain name is the fallback for a build that didn't sign.
       - name: Rename to a friendly asset name
+        id: package
         shell: bash
         run: |
-          apk="$(find android/bin/Release/net10.0-android -name '*-Signed.apk' | head -1)"
-          [ -z "$apk" ] && apk="$(find android/bin/Release/net10.0-android -name '*.apk' | head -1)"
-          test -n "$apk"
+          pick() {
+            local out="android/bin/Release/net10.0-android"
+            local f
+            f="$(find "$out" -name "*-Signed.$1" | head -1)"
+            [ -n "$f" ] || f="$(find "$out" -name "*.$1" | head -1)"
+            printf '%s' "$f"
+          }
+          apk="$(pick apk)"
+          test -n "$apk" || { echo "::error::no .apk was produced"; exit 1; }
           cp "$apk" slopterm-android.apk
+          echo "aab=$(pick aab)" >> "$GITHUB_OUTPUT"
+          echo "apk: $apk"
+          echo "aab: $(pick aab)"
 
       - uses: actions/upload-artifact@v4
         with:
           name: slopterm-android.apk
           path: slopterm-android.apk
+
+      # Kept as a workflow artifact rather than a release asset - an .aab can't be installed by a
+      # user, it only means something to Google Play. This is also how you get a properly signed
+      # bundle for the one upload that has to be done by hand: supply cannot create a Play listing,
+      # so the very first release has to be uploaded through the Play Console, and the debug-signed
+      # bundle from android.yml would be rejected (Play refuses the debug certificate).
+      - name: Upload the .aab (for the manual first Play Console upload)
+        if: steps.package.outputs.aab != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-bundle
+          path: ${{ steps.package.outputs.aab }}
+          if-no-files-found: error
+
+      - name: Set up Ruby for fastlane
+        if: env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_KEYSTORE_BASE64 != ''
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: android/fastlane
+
+      # Prereleases go to the internal track so a -beta can never land on production. Note this
+      # step fails if the version was already uploaded (Play refuses a reused versionCode), which
+      # is what a workflow_dispatch re-run of an already-released version will hit - re-running to
+      # re-upload GitHub assets is fine, re-running to re-upload to Play is not.
+      - name: Upload the .aab to Google Play
+        if: env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_KEYSTORE_BASE64 != ''
+        working-directory: android/fastlane
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          AAB_PATH: ${{ steps.package.outputs.aab }}
+        run: |
+          test -n "$AAB_PATH" || { echo "::error::no .aab was produced - Google Play does not accept APKs for new apps"; exit 1; }
+          printf '%s' "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" | base64 --decode > "$RUNNER_TEMP/play-service-account.json"
+          export SUPPLY_JSON_KEY="$RUNNER_TEMP/play-service-account.json"
+          export SUPPLY_AAB="$GITHUB_WORKSPACE/$AAB_PATH"
+          case "$VERSION" in
+            *alpha*|*beta*|*rc*) export SLOPTERM_PLAY_TRACK=internal ;;
+            *)                   export SLOPTERM_PLAY_TRACK=production ;;
+          esac
+          bundle exec fastlane android release
+          rm -f "$RUNNER_TEMP/play-service-account.json"
 
   release:
     needs: [version, build, build-android]
@@ -130,8 +254,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # `pattern` deliberately excludes the play-bundle artifact - the .aab is a Google Play input,
+      # not something a user can download and run.
       - uses: actions/download-artifact@v4
         with:
+          pattern: slopterm-*
           path: dist
           merge-multiple: true
 
