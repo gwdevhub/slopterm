@@ -307,14 +307,8 @@ export function ArrowDownIcon(props: IconProps) {
   )
 }
 
-export function ArrowLeftIcon(props: IconProps) {
-  return (
-    <svg {...base} {...props}>
-      <line x1="19" y1="12" x2="5" y2="12" />
-      <polyline points="12,19 5,12 12,5" />
-    </svg>
-  )
-}
+// ArrowLeftIcon already exists above (shared with non-keyboard UI) - reused here too
+// rather than redeclared, which is what tripped the original duplicate-export build error.
 
 export function ArrowRightIcon(props: IconProps) {
   return (
