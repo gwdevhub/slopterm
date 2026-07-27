@@ -7,9 +7,17 @@
 
 default_platform(:android)
 
-# fastlane runs with the fastlane/ directory as the working directory, so "../" is android/.
+# Anchored to THIS FILE's directory, never to the working directory. fastlane runs lanes with the
+# cwd set to the parent of fastlane/, so a bare relative path here does not mean what it looks
+# like it means - a relative json_key_file("service-account.json") in the Appfile resolves to
+# android/service-account.json and fails with "Invalid default value for json_key". Found the
+# hard way; don't reintroduce cwd-relative paths.
 def android_output_dir
-  "../bin/Release/net10.0-android"
+  File.expand_path("../bin/Release/net10.0-android", __dir__)
+end
+
+def service_account_json
+  ENV["SUPPLY_JSON_KEY"] || File.expand_path("service-account.json", __dir__)
 end
 
 # The signed bundle is emitted as *-Signed.aab alongside the raw one; prefer it, and fall back to
@@ -35,12 +43,19 @@ def upload_bundle(options, default_track)
   # click in the Play Console before it reaches anyone.
   status = options[:release_status] || ENV["SLOPTERM_PLAY_RELEASE_STATUS"] || "draft"
 
-  UI.message("Uploading #{File.basename(aab)} to the '#{track}' track (release_status: #{status})")
+  # Dry run: supply uploads into a Play edit and asks Google to validate it, then throws the edit
+  # away instead of committing. Nothing is published. `fastlane android internal validate_only:true`
+  # is the way to prove credentials/package/bundle all line up without spending a versionCode.
+  dry_run = (options[:validate_only] || ENV["SLOPTERM_PLAY_VALIDATE_ONLY"]).to_s == "true"
+
+  UI.message("Uploading #{File.basename(aab)} to the '#{track}' track (release_status: #{status}#{dry_run ? ', VALIDATE ONLY' : ''})")
 
   upload_to_play_store(
     aab: File.expand_path(aab),
+    json_key: service_account_json,
     track: track,
     release_status: status,
+    validate_only: dry_run,
     # The store listing (title, description, screenshots, changelogs) is maintained by hand in
     # the Play Console - this repo has no fastlane metadata/ tree to upload from, and without
     # these skips supply would try to read one and fail.

@@ -1104,7 +1104,9 @@ spirit of Termius, targeting Linux, macOS and Windows.
     does not work - GitHub documents that secrets cannot be referenced in `if:` conditionals.
   - **The store listing/first upload can't be automated.** supply cannot create a Play listing,
     and refuses to run until the app has had one build uploaded by hand. See
-    `android/fastlane/README.md` for that checklist and the required secrets.
+    `android/PLAY_RELEASE.md` for that checklist and the required secrets. That doc deliberately
+    does **not** live at `android/fastlane/README.md`: fastlane regenerates that path from the
+    lane descriptions on every run and silently overwrote the first copy of it.
   - **`versionCode` comes from the root `VERSION` file** (`android/Directory.Build.props`), as
     `(MAJOR*10000 + MINOR*100 + PATCH) * 1000 + PRERELEASE` where PRERELEASE is 900 for a final
     release and 100/200/300/400 (+trailing number) for alpha/beta/rc/other. The prerelease digits

@@ -106,7 +106,7 @@ prerelease number stay under 100, and MAJOR stays under 210 (Play caps `versionC
 
 Anything containing `alpha`, `beta` or `rc` is also treated as a prerelease by the workflow: the
 GitHub Release is marked pre-release, and the Play upload goes to the **internal** testing track
-instead of production. See [android/fastlane/README.md](./android/fastlane/README.md) for the
+instead of production. See [android/PLAY_RELEASE.md](./android/PLAY_RELEASE.md) for the
 Google Play side.
 
 ## Testing

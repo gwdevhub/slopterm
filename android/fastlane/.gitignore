@@ -21,3 +21,6 @@ credentials.json
 
 # Fastlane plugins
 plugins/**
+
+# Per-run output fastlane drops next to the Fastfile
+report.xml
