@@ -11,6 +11,7 @@ dist/
 
 # React build output copied into the .NET wwwroot at build time
 core/wwwroot/
+server/wwwroot/
 
 # Playwright e2e
 e2e/test-results/

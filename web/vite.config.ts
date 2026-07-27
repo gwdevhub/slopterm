@@ -9,5 +9,18 @@ export default defineConfig({
     // The .NET backend serves this build output directly from wwwroot.
     outDir: '../core/wwwroot',
     emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        codeSplitting: true,
+        manualChunks: (id: string) => {
+          if (id.includes('@xterm/xterm') || id.includes('@xterm/addon-fit')) {
+            return 'xterm'
+          }
+          if (id.includes('react') && !id.includes('react-dom/server')) {
+            return 'react'
+          }
+        },
+      },
+    },
   },
 })
