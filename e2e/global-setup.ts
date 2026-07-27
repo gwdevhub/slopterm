@@ -98,9 +98,17 @@ export default async function globalSetup() {
   // Fresh vault dir per run - never touches a real developer's actual vault, and
   // guarantees a clean "vault doesn't exist yet" state for the setup-flow test.
   const vaultDir = resolve(CONTEXT_DIR, 'vault')
+
+  // A throwaway ~/.ssh/config fixture for ssh-config-hosts.spec.ts - one literal alias
+  // pointing at the real disposable sshd above, deliberately with no IdentityFile so the
+  // resulting card exercises the "shown but not connectable" path without needing a
+  // second, key-based auth mode on the container. Never a real developer's own file.
+  const sshConfigPath = resolve(CONTEXT_DIR, 'ssh_config')
+  writeFileSync(sshConfigPath, `Host e2e-ssh-config-host\n  HostName 127.0.0.1\n  Port ${sshPort}\n  User ${SSH_USERNAME}\n`)
+
   const serverProcess = spawn('dotnet', ['run', '--no-launch-profile'], {
     cwd: SERVER_DIR,
-    env: { ...process.env, SLOPTERM_VAULT_DIR: vaultDir },
+    env: { ...process.env, SLOPTERM_VAULT_DIR: vaultDir, SLOPTERM_SSH_CONFIG_PATH: sshConfigPath },
   }) as ChildProcessWithoutNullStreams
   const baseUrl = await waitForServerUrl(serverProcess, 60_000)
 

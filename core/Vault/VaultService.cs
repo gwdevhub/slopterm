@@ -167,6 +167,24 @@ public sealed class VaultService
     }
 
     /// <summary>
+    /// Persists whether the Hosts screen also lists ~/.ssh/config aliases as read-only
+    /// cards (see SshConfigService). Same shape as SetCloseToTray - no encryption key
+    /// changes, no unlock needed.
+    /// </summary>
+    public void SetShowSshConfigHosts(bool enabled)
+    {
+        var settings = GetSettings();
+        if (enabled == settings.ShowSshConfigHosts)
+        {
+            return;
+        }
+
+        settings.ShowSshConfigHosts = enabled;
+        Directory.CreateDirectory(_vaultDir);
+        File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
+    }
+
+    /// <summary>
     /// Re-encrypts every existing record (hosts/snippets/logs/...) and vault.json's canary
     /// with a newly derived key. Records are re-keyed before vault.json is overwritten, so
     /// a crash partway through never leaves records unreadable by either the old or new key.
