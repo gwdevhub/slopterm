@@ -9,8 +9,20 @@
     <RootNamespace>Slopterm.Mobile</RootNamespace>
 
     <ApplicationId>ac.pyc.slopterm</ApplicationId>
-    <ApplicationVersion>1</ApplicationVersion>
-    <ApplicationDisplayVersion>0.1</ApplicationDisplayVersion>
+    
+    <!-- 
+      Android versionCode and versionName are set automatically from the root VERSION file
+      by Directory.Build.props using the formula: versionCode = MAJOR * 10000 + MINOR * 100 + PATCH
+      
+      This ensures versionCode always increases and stays in sync with the app version.
+      Current VERSION file: 0.0.1-beta -> versionCode = 1 (but min 2 to be > first build)
+      
+      When you bump VERSION file, the APK will automatically get the correct versionCode.
+      
+      Fallback: If Directory.Build.props doesn't work, uncomment these and set manually:
+      <ApplicationVersion>2</ApplicationVersion>
+      <ApplicationDisplayVersion>0.0.1-beta</ApplicationDisplayVersion>
+    -->
 
     <!-- EXPERIMENT: ASP.NET Core has no *runtime pack* for android RIDs (NETSDK1082), but the
          base .NET runtime does ship for android and the ASP.NET Core assemblies are portable

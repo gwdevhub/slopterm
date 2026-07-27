@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  
+  <!-- Automatically calculate Android versionCode from VERSION file. -->
+  <!-- versionCode = MAJOR * 10000 + MINOR * 100 + PATCH -->
+  
+  <PropertyGroup>
+    <VersionFile>$(MSBuildThisFileDirectory)/../VERSION</VersionFile>
+    <DefaultVersionCode>2</DefaultVersionCode>
+    <DefaultVersionName>0.0.1-beta</DefaultVersionName>
+  </PropertyGroup>
+  
+  <PropertyGroup>
+    <RawVersion>$([System.IO.File]::ReadAllText($(VersionFile)).Trim())</RawVersion>
+    <RawVersion Condition="'$(RawVersion)' == '' Or !Exists('$(VersionFile)')">$(DefaultVersionName)</RawVersion>
+    
+    <MajorVersion>$([System.Text.RegularExpressions.Regex]::Match($(RawVersion), ^(\d+)))</MajorVersion>
+    <MajorVersion Condition="'$(MajorVersion)' == ''">0</MajorVersion>
+    
+    <MinorVersion>$([System.Text.RegularExpressions.Regex]::Match($(RawVersion), ^\d+\.(\d+)))</MinorVersion>
+    <MinorVersion Condition="'$(MinorVersion)' == ''">0</MinorVersion>
+    
+    <PatchVersion>$([System.Text.RegularExpressions.Regex]::Match($(RawVersion), ^\d+\.\d+\.(\d+)))</PatchVersion>
+    <PatchVersion Condition="'$(PatchVersion)' == ''">1</PatchVersion>
+    
+    <VersionCodeMath>$(( $(MajorVersion) * 10000 + $(MinorVersion) * 100 + $(PatchVersion) ))</VersionCodeMath>
+    
+    <FinalVersionCode Condition="$(VersionCodeMath) > 1">$(VersionCodeMath)</FinalVersionCode>
+    <FinalVersionCode Condition="'$(FinalVersionCode)' == ''">$(DefaultVersionCode)</FinalVersionCode>
+    
+    <FinalVersionName>$(RawVersion)</FinalVersionName>
+  </PropertyGroup>
+  
+  <PropertyGroup>
+    <ApplicationVersion>$(FinalVersionCode)</ApplicationVersion>
+    <ApplicationDisplayVersion>$(FinalVersionName)</ApplicationDisplayVersion>
+  </PropertyGroup>
+  
+  <Target Name="LogAndroidVersions" BeforeTargets="BeforeBuild">
+    <Message Text="Building Android APK: $(FinalVersionName) (versionCode=$(FinalVersionCode))" Importance="High" />
+  </Target>
+  
+</Project>
