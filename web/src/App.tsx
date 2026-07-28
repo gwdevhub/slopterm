@@ -24,6 +24,7 @@ import {
 import { pullAppearanceFromVault } from './lib/appearance'
 import { onVaultUnlocked } from './lib/vaultEvents'
 import { applyFaviconBadge, isTabBadgeEnabled, subscribeTabBadge } from './lib/tabBadge'
+import { updateAppBadge } from './lib/appBadge'
 
 // Checked once at startup (not polled) so the Sidebar's Settings icon can show a small
 // "something's new" dot without the user having to open Settings first - the actual
@@ -184,6 +185,7 @@ function App() {
   // Redraw the favicon badge whenever the count, unseen state, or the pref changes.
   useEffect(() => {
     void applyFaviconBadge({ enabled: badgeEnabled, count: tabs.length, hasUnseen: unseenTabIds.size > 0 })
+    updateAppBadge(tabs.length)
   }, [badgeEnabled, tabs.length, unseenTabIds])
 
   const retryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())

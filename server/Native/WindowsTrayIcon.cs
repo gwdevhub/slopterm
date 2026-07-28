@@ -36,6 +36,8 @@ public sealed class WindowsTrayIcon : IDisposable
     private const int IDM_OPEN = 1;
     private const int IDM_QUIT = 2;
 
+    private static int _badgeCount;
+
     private readonly string _tooltip;
     private readonly Action _onOpen;
     private readonly Action _onQuit;
@@ -64,6 +66,7 @@ public sealed class WindowsTrayIcon : IDisposable
 
     public void Dispose()
     {
+        ClearBadge();
         if (_hwnd != nint.Zero)
         {
             PostMessage(_hwnd, WM_CLOSE, nint.Zero, nint.Zero);
@@ -71,6 +74,16 @@ public sealed class WindowsTrayIcon : IDisposable
 
         _messageLoopThread?.Join(TimeSpan.FromSeconds(2));
         _ready.Dispose();
+    }
+
+    public static void SetBadgeCount(int count)
+    {
+        _badgeCount = Math.Max(0, Math.Min(count, 99));
+    }
+
+    public static void ClearBadge()
+    {
+        SetBadgeCount(0);
     }
 
     private void RunMessageLoop()

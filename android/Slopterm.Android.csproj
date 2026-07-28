@@ -40,6 +40,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Plugin.ShortcutBadger" Version="1.1.25" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Android app icon - included in all drawable density folders -->
     <AndroidResource Include="Resources\drawable\ic_launcher.png" />
     <AndroidResource Include="Resources\drawable-hdpi\ic_launcher.png" />

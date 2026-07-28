@@ -251,6 +251,9 @@ public static class AppWindowManager
                         // the frontend can't read the native maximize state directly.
                         w.SendWebMessage(w.Maximized ? "wc:maximized" : "wc:restored");
                         break;
+                    case var msg when msg.StartsWith("wc:set-badge:"):
+                        HandleSetBadge(msg);
+                        break;
                 }
             });
 
@@ -522,6 +525,27 @@ public static class AppWindowManager
             // not worth crashing over.
         }
     }
+
+    private static void HandleSetBadge(string message)
+    {
+        try
+        {
+            var json = message.Substring("wc:set-badge:".Length);
+            var payload = System.Text.Json.JsonSerializer.Deserialize<BadgePayload>(json);
+            UpdateBadgeCount(payload?.Count ?? 0);
+        }
+        catch { }
+    }
+
+    private static int _badgeCount;
+
+    private static void UpdateBadgeCount(int count)
+    {
+        _badgeCount = Math.Max(0, Math.Min(count, 99));
+        if (OperatingSystem.IsWindows()) { WindowsTrayIcon.SetBadgeCount(_badgeCount); }
+    }
+
+    private sealed class BadgePayload { public int Count { get; set; } }
 
     private const uint MbIconError = 0x00000010;
 

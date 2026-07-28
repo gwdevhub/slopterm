@@ -56,6 +56,7 @@ public class MainActivity : Activity
         // since a WebView can't turn a blob into a download on its own.
         webView.SetWebChromeClient(new FileChooserChromeClient(this));
         webView.AddJavascriptInterface(new SaveFileBridge(this), "SloptermAndroid");
+        webView.AddJavascriptInterface(new BadgeBridge(this), "SloptermAndroid");
 
         // Put the WebView inside a container and inset the *container*, not the WebView. Some
         // WebView builds ignore their own padding for web-content layout, but a FrameLayout
@@ -171,6 +172,23 @@ public class MainActivity : Activity
                 _activity.PromptSaveFile(bytes, fileName, mimeType);
             }
         }
+
+        [JavascriptInterface]
+        [Export("setAppBadge")]
+        public void SetAppBadge(int count)
+        {
+            _activity.RunOnUiThread(() => _activity.UpdateAppBadge(count));
+        }
+    }
+
+    private void UpdateAppBadge(int count)
+    {
+        try
+        {
+            var badger = new Plugin.ShortcutBadger.ShortcutBadger();
+            badger.ApplyCountOrThrow(this, count);
+        }
+        catch { }
     }
 
     // Insets the view by the space the system bars + any display cutout occupy, detected at
