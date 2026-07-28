@@ -25,6 +25,7 @@ import { pullAppearanceFromVault } from './lib/appearance'
 import { onVaultUnlocked } from './lib/vaultEvents'
 import { applyFaviconBadge, isTabBadgeEnabled, subscribeTabBadge } from './lib/tabBadge'
 import { updateAppBadge } from './lib/appBadge'
+import { useMobileKeyboardScroll } from './hooks/useMobileKeyboard'
 
 // Checked once at startup (not polled) so the Sidebar's Settings icon can show a small
 // "something's new" dot without the user having to open Settings first - the actual
@@ -106,6 +107,7 @@ function requestToOpenTabRecord(tab: SessionTab) {
 function App() {
   useRememberWindowPosition()
   useSuppressBrowserContextMenu()
+  useMobileKeyboardScroll()
   const updateAvailable = useUpdateAvailable()
   const [section, setSection] = useState<NavSection>('hosts')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)

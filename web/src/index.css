@@ -175,3 +175,17 @@ textarea:not(.xterm-helper-textarea),
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* Mobile keyboard scrolling fix */
+@media (hover: none) and (pointer: coarse) {
+  body {
+    -webkit-overflow-scrolling: touch;
+    overflow-y: auto;
+  }
+  input, textarea, [contenteditable="true"] {
+    touch-action: manipulation;
+  }
+  .xterm-helper-textarea {
+    touch-action: none !important;
+  }
+}

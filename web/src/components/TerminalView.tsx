@@ -495,8 +495,9 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
       )}
       {/* overflow-hidden so this container's own box can never be nudged by xterm's rendered
           content (e.g. a fractional cell-size rounding mismatch) - it must stay purely
-          parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size. */}
-      <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden bg-black p-1 sm:p-2" />
+          parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size.
+          On mobile we need overflow-y-auto to allow scrolling when keyboard is open. */}
+      <div ref={containerRef} className="min-h-0 flex-1 bg-black p-1 sm:p-2 overflow-y-auto sm:overflow-hidden" />
       {/* Keyboard toolbar for Android/mobile - special keys mobile keyboards don't expose.
           Every button is wired to sendKey/toggleModifier above, which push bytes into the
           same live WebSocket term.onData writes to - not into termRef, which has no such

@@ -179,6 +179,13 @@ public class MainActivity : Activity
         {
             _activity.RunOnUiThread(() => _activity.UpdateAppBadge(count));
         }
+
+        [JavascriptInterface]
+        [Export("getKeyboardHeight")]
+        public int GetKeyboardHeight()
+        {
+            return _activity.GetKeyboardHeight();
+        }
     }
 
     private void UpdateAppBadge(int count)
@@ -189,6 +196,19 @@ public class MainActivity : Activity
             badger.ApplyCountOrThrow(this, count);
         }
         catch { }
+    }
+
+    private int GetKeyboardHeight()
+    {
+        if (Window?.DecorView?.RootView is View rootView)
+        {
+            var insets = rootView.RootWindowInsets;
+            if (insets != null && OperatingSystem.IsAndroidVersionAtLeast(30))
+            {
+                return insets.GetInsets(WindowInsets.Type.Ime()).Bottom;
+            }
+        }
+        return 0;
     }
 
     // Insets the view by the space the system bars + any display cutout occupy, detected at

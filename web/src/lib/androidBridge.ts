@@ -46,6 +46,19 @@ export function isMobileApp(): boolean {
   return false
 }
 
+// Keyboard height and visibility for mobile
+export function getKeyboardHeight(): number {
+  const bridge = androidBridge()
+  if (bridge && typeof (bridge as any).getKeyboardHeight === 'function') {
+    return (bridge as any).getKeyboardHeight()
+  }
+  return 0
+}
+
+export function isKeyboardVisible(): boolean {
+  return getKeyboardHeight() > 0
+}
+
 // Hands a blob to the Android "save file" dialog (ACTION_CREATE_DOCUMENT). Returns true if the
 // native bridge handled it, false if there's no bridge (so the caller does its normal blob
 // download). A WebView can't turn a blob into a download, so on Android this is the only way to
