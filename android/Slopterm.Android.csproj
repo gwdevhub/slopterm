@@ -39,9 +39,7 @@
     <PackageDownload Include="Microsoft.AspNetCore.App.Runtime.linux-x64" Version="[$(_AspNetCoreRuntimePackVersion)]" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Plugin.ShortcutBadger" Version="1.1.25" />
-  </ItemGroup>
+
 
   <ItemGroup>
     <!-- Android app icon - included in all drawable density folders -->

@@ -192,8 +192,9 @@ public class MainActivity : Activity
     {
         try
         {
-            var badger = new Plugin.ShortcutBadger.ShortcutBadger();
-            badger.ApplyCountOrThrow(this, count);
+            // Badge support on Android requires a library that's not available
+            // as a NuGet package for .NET 10 Android. This is a no-op until we
+            // find a suitable replacement or implement it natively.
         }
         catch { }
     }
