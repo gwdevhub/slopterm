@@ -34,5 +34,6 @@
 ## Workflow
 
 - Base branch: `main`. Land all changes via PR — no direct pushes.
+- **NEVER push to any remote unless explicitly asked.**
 - **NEVER use a `Co-Authored-By` trailer in git commits.**
 - **Always test EVERYTHING before committing: full build for all OS targets (`win-x64`, `linux-x64`, `osx-x64`, `osx-arm64`, Android APK).**
