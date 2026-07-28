@@ -12,7 +12,8 @@ interface PhotinoExternal {
 
 function photino(): PhotinoExternal | undefined {
   if (typeof window === 'undefined') return undefined
-  return (window as unknown as { external?: PhotinoExternal }).external
+  const ext = window.external as unknown
+  return (ext as PhotinoExternal)?.sendMessage !== undefined ? ext as PhotinoExternal : undefined
 }
 
 // Photino injects window.external.sendMessage before page scripts run, so this is settled
