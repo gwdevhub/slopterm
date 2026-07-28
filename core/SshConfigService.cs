@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
@@ -50,7 +51,7 @@ public static class SshConfigService
     /// </summary>
     public static List<SshConfigHostEntry> ListHosts()
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Android))
+        if (OperatingSystem.IsAndroid())
         {
             return [];
         }
