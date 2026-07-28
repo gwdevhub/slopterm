@@ -192,9 +192,8 @@ public class MainActivity : Activity
     {
         try
         {
-            // Badge support on Android requires a library that's not available
-            // as a NuGet package for .NET 10 Android. This is a no-op until we
-            // find a suitable replacement or implement it natively.
+            var badger = new Xamarin.ShortcutBadger.ShortcutBadger();
+            badger.ApplyCountOrThrow(this, count);
         }
         catch { }
     }

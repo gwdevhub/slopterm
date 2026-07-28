@@ -37,9 +37,8 @@
     <!-- Pull the linux-x64 ASP.NET Core runtime pack into the NuGet cache so we can borrow its
          assemblies (we never target linux - we only want the portable IL bodies). -->
     <PackageDownload Include="Microsoft.AspNetCore.App.Runtime.linux-x64" Version="[$(_AspNetCoreRuntimePackVersion)]" />
+    <PackageReference Include="Xamarin.ShortcutBadger" Version="1.1.22.80" />
   </ItemGroup>
-
-
 
   <ItemGroup>
     <!-- Android app icon - included in all drawable density folders -->
