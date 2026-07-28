@@ -85,12 +85,23 @@ test('toggling "require master password" off and back on re-keys the vault corre
 })
 
 test('"keep running in the tray when closed" defaults to off and toggles + persists', async ({ page }) => {
+  // This setting only appears on Windows (navigator.platform.includes('Win')).
+  // On non-Windows platforms, the button doesn't exist, so we check the API directly.
+  const isWindows = await page.evaluate(() => navigator.platform.includes('Win'))
+
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')
   await ensureVaultUnlocked(page)
 
   await gotoSection(page, 'Settings')
   await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 10_000 })
+
+  // On non-Windows, verify the API default directly and skip the UI toggle test.
+  if (!isWindows) {
+    const closeToTrayValue = await page.evaluate(async () => (await (await fetch('/api/settings')).json()).closeToTray)
+    expect(closeToTrayValue).toBe(false)
+    return
+  }
 
   // Identified by the button's stable aria-label (its visible text flips On/Off, so the
   // label is what stays constant across toggles).
