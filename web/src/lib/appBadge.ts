@@ -1,6 +1,8 @@
 // App icon badge support - communicates open tab count to native platforms.
 // Posts the current tab count to the native host via Photino message bridge or Android bridge.
 
+import { sendWindowMessage } from './photino'
+
 const MAX_BADGE_COUNT = 99
 
 /**
@@ -30,13 +32,7 @@ export function updateAppBadge(count: number): void {
 
   // Photino/WebView2 desktop window (Windows/Linux/macOS via Photino)
   // The backend (AppWindowManager) forwards this to the platform's native badge API
-  if (typeof window !== 'undefined' && typeof window.external?.sendMessage === 'function') {
-    try {
-      window.external.sendMessage('wc:set-badge', JSON.stringify({ count: normalized }))
-    } catch {
-      // Ignore errors
-    }
-  }
+  sendWindowMessage('set-badge', { count: normalized })
 
   // Android: Use the SloptermAndroid bridge
   if (typeof window !== 'undefined' && (window as any).SloptermAndroid?.setAppBadge) {
