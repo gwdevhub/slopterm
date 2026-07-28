@@ -242,29 +242,31 @@ export function SettingsPage() {
         </form>
       )}
 
-      <div className="flex flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-4">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <p className="font-medium text-slate-100">Keep running in the tray when closed</p>
-            <p className="text-sm text-slate-400">
-              By default, closing slopterm's window quits the app. Turn this on to instead
-              minimize it and keep it running behind its tray icon (Windows only).
-            </p>
+      {navigator.platform.includes('Win') && (
+        <div className="flex flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="font-medium text-slate-100">Keep running in the tray when closed</p>
+              <p className="text-sm text-slate-400">
+                By default, closing slopterm's window quits the app. Turn this on to instead
+                minimize it and keep it running behind its tray icon (Windows only).
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleCloseToTray}
+              disabled={closeToTrayBusy}
+              aria-label="Keep running in the tray when closed"
+              className={`shrink-0 rounded px-4 py-2 text-sm font-medium disabled:opacity-50 ${
+                closeToTray ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              }`}
+            >
+              {closeToTray ? 'On' : 'Off'}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={handleToggleCloseToTray}
-            disabled={closeToTrayBusy}
-            aria-label="Keep running in the tray when closed"
-            className={`shrink-0 rounded px-4 py-2 text-sm font-medium disabled:opacity-50 ${
-              closeToTray ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            {closeToTray ? 'On' : 'Off'}
-          </button>
+          {closeToTrayError && <p className="text-sm text-red-400">{closeToTrayError}</p>}
         </div>
-        {closeToTrayError && <p className="text-sm text-red-400">{closeToTrayError}</p>}
-      </div>
+      )}
 
       <div className="flex flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-4">
         <div className="flex items-center justify-between gap-4">
