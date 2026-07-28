@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { listSshConfigHosts, type SshConfigHostEntry } from '../lib/api'
 import { resolveSshConfigConnectRequest } from '../lib/hosts'
+import { isMobileApp } from '../lib/androidBridge'
 import { HostCard } from './HostCard'
 
 interface SshConfigHostsProps {
@@ -22,7 +23,7 @@ export function SshConfigHosts({ enabled, onSsh, onSftp, isConnecting }: SshConf
   const [entries, setEntries] = useState<SshConfigHostEntry[]>([])
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || isMobileApp()) {
       setEntries([])
       return
     }

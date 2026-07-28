@@ -12,7 +12,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { AiSettingsSection } from './AiSettingsSection'
 import { UpdateSection } from './UpdateSection'
 import { isTabBadgeEnabled, setTabBadgeEnabled } from '../lib/tabBadge'
-import { saveFileViaAndroid } from '../lib/androidBridge'
+import { isMobileApp, saveFileViaAndroid } from '../lib/androidBridge'
 
 const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
@@ -268,30 +268,32 @@ export function SettingsPage() {
         </div>
       )}
 
-      <div className="flex flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-4">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <p className="font-medium text-slate-100">Show hosts from ~/.ssh/config</p>
-            <p className="text-sm text-slate-400">
-              List the Host entries from your SSH client config file as read-only cards on the
-              Hosts screen, alongside your saved hosts. They can't be edited or deleted here -
-              edit the file itself to change them.
-            </p>
+      {!isMobileApp() && (
+        <div className="flex flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="font-medium text-slate-100">Show hosts from ~/.ssh/config</p>
+              <p className="text-sm text-slate-400">
+                List the Host entries from your SSH client config file as read-only cards on the
+                Hosts screen, alongside your saved hosts. They can't be edited or deleted here -
+                edit the file itself to change them.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleToggleShowSshConfigHosts()}
+              disabled={showSshConfigHostsBusy}
+              aria-label="Show hosts from ~/.ssh/config"
+              className={`shrink-0 rounded px-4 py-2 text-sm font-medium disabled:opacity-50 ${
+                showSshConfigHosts ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              }`}
+            >
+              {showSshConfigHosts ? 'On' : 'Off'}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => void handleToggleShowSshConfigHosts()}
-            disabled={showSshConfigHostsBusy}
-            aria-label="Show hosts from ~/.ssh/config"
-            className={`shrink-0 rounded px-4 py-2 text-sm font-medium disabled:opacity-50 ${
-              showSshConfigHosts ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            {showSshConfigHosts ? 'On' : 'Off'}
-          </button>
+          {showSshConfigHostsError && <p className="text-sm text-red-400">{showSshConfigHostsError}</p>}
         </div>
-        {showSshConfigHostsError && <p className="text-sm text-red-400">{showSshConfigHostsError}</p>}
-      </div>
+      )}
 
       <div className="flex items-center justify-between gap-4 rounded border border-slate-700 bg-slate-900 p-4">
         <div>

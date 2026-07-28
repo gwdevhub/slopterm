@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace Slopterm.Server;
@@ -49,6 +50,11 @@ public static class SshConfigService
     /// </summary>
     public static List<SshConfigHostEntry> ListHosts()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Android))
+        {
+            return [];
+        }
+
         var path = GetConfigPath();
         if (!File.Exists(path))
         {

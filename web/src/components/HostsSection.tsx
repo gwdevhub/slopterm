@@ -21,6 +21,7 @@ import { QuickConnectModal } from './QuickConnectModal'
 import { ContextMenu } from './ContextMenu'
 import { ImportHostModal } from './ImportHostModal'
 import { ShareTokenModal } from './ShareTokenModal'
+import { isMobileApp } from '../lib/androidBridge'
 import type { ConnectionFormValues } from './ConnectionForm'
 
 interface HostsSectionProps {
@@ -191,12 +192,14 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
           onSftp={handleRecentSftp}
           isConnecting={isConnecting}
         />
-        <SshConfigHosts
-          enabled={showSshConfigHosts}
-          onSsh={handleSshConfigSsh}
-          onSftp={handleSshConfigSftp}
-          isConnecting={isConnecting}
-        />
+        {!isMobileApp() && (
+          <SshConfigHosts
+            enabled={showSshConfigHosts}
+            onSsh={handleSshConfigSsh}
+            onSftp={handleSshConfigSftp}
+            isConnecting={isConnecting}
+          />
+        )}
       </div>
       {hostModal !== null && (
         <HostModal
