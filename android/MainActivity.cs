@@ -56,7 +56,6 @@ public class MainActivity : Activity
         // since a WebView can't turn a blob into a download on its own.
         webView.SetWebChromeClient(new FileChooserChromeClient(this));
         webView.AddJavascriptInterface(new SaveFileBridge(this), "SloptermAndroid");
-        webView.AddJavascriptInterface(new BadgeBridge(this), "SloptermAndroid");
 
         // Put the WebView inside a container and inset the *container*, not the WebView. Some
         // WebView builds ignore their own padding for web-content layout, but a FrameLayout
@@ -188,12 +187,49 @@ public class MainActivity : Activity
         }
     }
 
+    private NotificationManager? _notificationManager;
+    private bool _badgeChannelCreated = false;
+    private const string BadgeChannelId = "slopterm_badge_channel";
+
     private void UpdateAppBadge(int count)
     {
         try
         {
-            var badger = new Xamarin.ShortcutBadger.ShortcutBadger();
-            badger.ApplyCountOrThrow(this, count);
+            // Use Notification.Builder with SetNumber for badge count
+            // Badge support requires API 26+ (Android 8.0 Oreo)
+            if (Build.VERSION.SdkInt >= BuildVersionCodes.O)
+            {
+                _notificationManager ??= (NotificationManager)GetSystemService(NotificationService);
+                if (_notificationManager != null)
+                {
+                    // Create notification channel once (required for API 26+)
+                    if (!_badgeChannelCreated)
+                    {
+                        var channel = new NotificationChannel(
+                            BadgeChannelId, "App Badge", NotificationImportance.Low)
+                        {
+                            Description = "App icon badge count"
+                        };
+                        _notificationManager.CreateNotificationChannel(channel);
+                        _badgeChannelCreated = true;
+                    }
+                    
+                    // Build badge notification - SetNumber sets the launcher icon badge
+                    var builder = new Notification.Builder(this, BadgeChannelId)
+                        .SetSmallIcon(Resource.Drawable.ic_launcher)
+                        .SetNumber(count)
+                        .SetContentTitle("slopterm")
+                        .SetContentText("")
+                        .SetOnlyAlertOnce(true)
+                        .SetAutoCancel(false)
+                        .SetOngoing(true)
+                        .SetPriority((int)NotificationPriority.Low);
+                    
+                    // Use a fixed notification ID for badge updates
+                    // If count is 0, the badge is cleared
+                    _notificationManager.Notify(1, builder.Build());
+                }
+            }
         }
         catch { }
     }
