@@ -93,6 +93,14 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
     termRef.current?.focus()
   }
 
+  // Inserts text the way a real paste does (xterm wraps it in bracketed-paste markers when the
+  // remote asked for them), so a multi-line snippet lands as one paste instead of a burst of
+  // keystrokes the shell would start executing line by line.
+  function pasteText(text: string) {
+    termRef.current?.paste(text)
+    termRef.current?.focus()
+  }
+
   useEffect(() => {
     onSessionClosedRef.current = onSessionClosed
   }, [onSessionClosed])
@@ -497,6 +505,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
           onToggleCtrl={() => toggleModifier('ctrl')}
           onToggleAlt={() => toggleModifier('alt')}
           onSendKey={sendKey}
+          onPasteText={pasteText}
         />
       )}
     </div>

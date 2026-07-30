@@ -4,7 +4,9 @@ using Android.Content;
 using Android.Graphics;
 using Android.OS;
 using Android.Runtime;
+using Android.Text;
 using Android.Views;
+using Android.Views.InputMethods;
 using Android.Webkit;
 using Android.Widget;
 using Java.Interop;
@@ -44,7 +46,13 @@ public class MainActivity : Activity
             Window?.SetDecorFitsSystemWindows(false);
         }
 
-        var webView = new WebView(this);
+        // Resize (never pan) for the keyboard. On API 30+ with SetDecorFitsSystemWindows(false)
+        // the framework doesn't resize the window at all and reports the keyboard as an inset
+        // instead - which is what the listener below applies - but this is still what makes
+        // older devices shrink the window rather than sliding it up out of the status bar.
+        Window?.SetSoftInputMode(SoftInput.AdjustResize);
+
+        var webView = new TerminalWebView(this);
         webView.Settings.JavaScriptEnabled = true;
         webView.Settings.DomStorageEnabled = true;
         webView.Settings.AllowFileAccess = true;
@@ -247,6 +255,28 @@ public class MainActivity : Activity
         return 0;
     }
 
+    // A WebView that tells the IME this is a terminal, not a message box. Gboard (and every
+    // other keyboard) otherwise shows its suggestion/emoji strip above the keys - useless for
+    // shell input, and it steals the row the web app's own key toolbar needs - and feeds every
+    // keystroke into its personalized dictionary. NoSuggestions also stops the keyboard holding
+    // typed characters in a composing region instead of committing them, which is what makes a
+    // half-typed command reach the shell (and therefore complete on Tab) at all.
+    private sealed class TerminalWebView : WebView
+    {
+        public TerminalWebView(Context context) : base(context) { }
+
+        public override IInputConnection? OnCreateInputConnection(EditorInfo? outAttrs)
+        {
+            var connection = base.OnCreateInputConnection(outAttrs);
+            if (outAttrs is not null)
+            {
+                outAttrs.InputType |= InputTypes.TextFlagNoSuggestions;
+                outAttrs.ImeOptions |= ImeFlags.NoExtractUi | ImeFlags.NoFullscreen | ImeFlags.NoPersonalizedLearning;
+            }
+            return connection;
+        }
+    }
+
     // Insets the view by the space the system bars + any display cutout occupy, detected at
     // runtime so it's correct on any device/orientation (notch, punch-hole, gesture vs 3-button
     // nav, landscape) rather than hard-coded.
@@ -257,7 +287,16 @@ public class MainActivity : Activity
             if (OperatingSystem.IsAndroidVersionAtLeast(30))
             {
                 var bars = insets.GetInsets(WindowInsets.Type.SystemBars() | WindowInsets.Type.DisplayCutout());
-                view.SetPadding(bars.Left, bars.Top, bars.Right, bars.Bottom);
+                // The keyboard is an inset too, and drawing edge-to-edge means nothing else
+                // accounts for it: without this the WebView keeps its full height and the
+                // keyboard is simply painted over the bottom of the page, burying the terminal's
+                // own key toolbar. Insetting by it shrinks the WebView to the visible area, so
+                // the toolbar ends up directly above the keyboard - and Chromium's
+                // visualViewport shrinks with it, which is what the web side keys off (see
+                // useVisualViewportHeight). Max, not sum: while the keyboard is up it covers the
+                // nav bar's strip anyway.
+                var ime = insets.GetInsets(WindowInsets.Type.Ime());
+                view.SetPadding(bars.Left, bars.Top, bars.Right, Math.Max(bars.Bottom, ime.Bottom));
                 return WindowInsets.Consumed;
             }
 #pragma warning disable CA1422 // the pre-API-30 inset accessors are the correct ones there

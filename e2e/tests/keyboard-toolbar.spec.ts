@@ -205,4 +205,96 @@ test.describe('with touch emulation', () => {
     await gotoSection(page, 'Hosts')
     await deleteHost(page, 'toolbar symbol test host')
   })
+
+  test('the always-visible row holds exactly the nine keys it should, in order', async ({ page }) => {
+    await connectHost(page, 'toolbar layout test host')
+
+    // Left-to-right order is deliberate (arrows read left/right before up/down), and this is
+    // also what pins the row to nine equal grid cells - the previous scrolling row let the
+    // last key slide half underneath the panel toggle on a narrow phone.
+    const keys = page.locator('[aria-label="Terminal keys"] button')
+    await expect(keys).toHaveCount(9)
+    expect(await keys.evaluateAll((buttons) => buttons.map((b) => b.getAttribute('aria-label')))).toEqual([
+      'Escape',
+      'Tab',
+      'Ctrl',
+      'Snippets',
+      'Left',
+      'Right',
+      'Up',
+      'Down',
+      'More keys',
+    ])
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'toolbar layout test host')
+  })
+
+  test('the Snippets key pastes a saved snippet at the prompt without running it', async ({ page }) => {
+    const marker = `PLAYWRIGHT_TOOLBAR_SNIPPET_${Date.now()}`
+    await page.goto(ctx.baseUrl)
+    await gotoSection(page, 'Snippets')
+    await ensureVaultUnlocked(page)
+    await page.click('button:has-text("New snippet")')
+    await page.fill('input[placeholder=Name]', 'toolbar paste snippet')
+    await page.fill('textarea[placeholder=Command]', `echo ${marker}`)
+    await page.click('button:has-text("Save snippet")')
+    await expect(page.getByText('toolbar paste snippet')).toBeVisible({ timeout: 10_000 })
+
+    await connectHost(page, 'toolbar snippet test host')
+    // Scoped to the toolbar - the sidebar has its own "Snippets" nav button.
+    await page.locator('[aria-label="Terminal keys"]').getByRole('button', { name: 'Snippets' }).click()
+    await page.getByText('toolbar paste snippet').click()
+
+    // Pasted, not executed: the command line is on screen exactly once (the PTY's echo of the
+    // paste) and its output hasn't been printed, because nobody pressed Enter yet.
+    await expect(async () => {
+      expect(await terminalText(page)).toContain(`echo ${marker}`)
+    }).toPass({ timeout: 10_000 })
+    expect((await terminalText(page)).split(marker).length - 1).toBe(1)
+
+    // Enter is the user's own decision, and then it runs - a second occurrence, the output.
+    await page.keyboard.press('Enter')
+    await expect(async () => {
+      expect((await terminalText(page)).split(marker).length - 1).toBe(2)
+    }).toPass({ timeout: 10_000 })
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'toolbar snippet test host')
+    await page.evaluate(async (name) => {
+      const saved = (await (await fetch('/api/vault/snippets')).json()) as { id: string; snippet: { name: string } }[]
+      const match = saved.find((entry) => entry.snippet.name === name)
+      if (match) await fetch(`/api/vault/snippets/${match.id}`, { method: 'DELETE' })
+    }, 'toolbar paste snippet')
+  })
+
+  test('the toolbar stays above the on-screen keyboard instead of under it', async ({ page }) => {
+    await connectHost(page, 'toolbar keyboard inset test host')
+
+    const toolbar = page.getByRole('button', { name: 'More keys' })
+    const before = await toolbar.boundingBox()
+    const windowHeight = await page.evaluate(() => window.innerHeight)
+    expect(before!.y + before!.height).toBeGreaterThan(windowHeight - 100)
+
+    // Android Chrome doesn't shrink the layout viewport when the keyboard opens - it only
+    // shrinks the *visual* viewport - so that's what this emulates. Playwright has no keyboard
+    // emulation, and asserting on the real thing needs a device.
+    const keyboardHeight = 300
+    await page.evaluate((height) => {
+      const viewport = window.visualViewport!
+      Object.defineProperty(viewport, 'height', { configurable: true, value: window.innerHeight - height })
+      viewport.dispatchEvent(new Event('resize'))
+    }, keyboardHeight)
+
+    await expect(async () => {
+      const after = await toolbar.boundingBox()
+      expect(after!.y + after!.height).toBeLessThanOrEqual(windowHeight - keyboardHeight)
+    }).toPass({ timeout: 5_000 })
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'toolbar keyboard inset test host')
+  })
 })

@@ -80,9 +80,14 @@
 }
 
 html,
-body,
-#root {
+body {
   height: 100%;
+}
+
+/* --app-height is the visible (not keyboard-covered) part of the window on mobile, published
+   by useVisualViewportHeight; everywhere else it's unset and this is just height: 100%. */
+#root {
+  height: var(--app-height, 100%);
 }
 
 body {

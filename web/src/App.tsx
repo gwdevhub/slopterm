@@ -25,7 +25,7 @@ import { pullAppearanceFromVault } from './lib/appearance'
 import { onVaultUnlocked } from './lib/vaultEvents'
 import { applyFaviconBadge, isTabBadgeEnabled, subscribeTabBadge } from './lib/tabBadge'
 import { updateAppBadge } from './lib/appBadge'
-import { useMobileKeyboardScroll } from './hooks/useMobileKeyboard'
+import { useMobileKeyboardScroll, useVisualViewportHeight } from './hooks/useMobileKeyboard'
 
 // Checked once at startup (not polled) so the Sidebar's Settings icon can show a small
 // "something's new" dot without the user having to open Settings first - the actual
@@ -108,6 +108,9 @@ function App() {
   useRememberWindowPosition()
   useSuppressBrowserContextMenu()
   useMobileKeyboardScroll()
+  // Sizes the app to the part of the window the virtual keyboard leaves visible, so the
+  // terminal's key toolbar sits above the keyboard instead of underneath it.
+  useVisualViewportHeight()
   const updateAvailable = useUpdateAvailable()
   const [section, setSection] = useState<NavSection>('hosts')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
