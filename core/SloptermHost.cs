@@ -177,7 +177,25 @@ app.Use(async (context, next) =>
 // wwwroot folder on disk, so the published single-file exe is genuinely self-contained.
 var webAssets = new ManifestEmbeddedFileProvider(Assembly.GetExecutingAssembly(), "wwwroot");
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = webAssets });
-app.UseStaticFiles(new StaticFileOptions { FileProvider = webAssets });
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = webAssets,
+    // Never let a client keep these. The embedded assets carry Last-Modified, so without an
+    // explicit header a browser (and Android's WebView especially) is free to heuristically
+    // cache them - including index.html, which is what pins the whole app to an old build:
+    // the cached HTML keeps asking for the hashed bundle it was built against, the cache
+    // serves that too, and an updated app quietly runs its previous UI. That cost a real
+    // debugging round - a bug hunted in code the device wasn't actually running. There is also
+    // nothing to gain here: the server is on loopback, so re-fetching costs no network at all.
+    // Same reasoning as the service worker's deliberate no-caching (see web/public/sw.js).
+    OnPrepareResponse = context =>
+    {
+        var headers = context.Context.Response.Headers;
+        headers.CacheControl = "no-store, no-cache, must-revalidate";
+        headers.Pragma = "no-cache";
+        headers.Expires = "0";
+    },
+});
 app.UseWebSockets();
 
 app.MapPost("/api/ssh/connect", (ConnectRequest request) =>
