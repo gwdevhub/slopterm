@@ -123,6 +123,35 @@ test.describe('with touch emulation', () => {
     await deleteHost(page, 'toolbar ctrl test host')
   })
 
+  test('an armed Ctrl also applies to a character typed by the on-screen keyboard', async ({ page }) => {
+    await connectHost(page, 'toolbar ime ctrl test host')
+
+    await page.keyboard.type('sleep 30; echo SLEEP_FINISHED_NORMALLY')
+    await page.keyboard.press('Enter')
+
+    const ctrlButton = page.getByRole('button', { name: 'Ctrl', exact: true })
+    await ctrlButton.click()
+    await expect(ctrlButton).toHaveAttribute('aria-pressed', 'true')
+
+    // insertText is text with NO key events at all, which is what an Android soft keyboard
+    // actually produces (Chromium reports key="Unidentified"/keyCode=229 on the keydown and
+    // delivers the character as IME input). Handling the modifier on the keydown therefore
+    // missed it entirely and the shell just got a literal "c" - the bug this covers.
+    await page.keyboard.insertText('c')
+    await expect(ctrlButton).toHaveAttribute('aria-pressed', 'false')
+
+    const marker = `PLAYWRIGHT_IME_INTERRUPT_${Date.now()}`
+    await page.keyboard.type(`echo ${marker}`)
+    await page.keyboard.press('Enter')
+    await expect(async () => {
+      expect(await terminalText(page)).toContain(marker)
+    }).toPass({ timeout: 10_000 })
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'toolbar ime ctrl test host')
+  })
+
   // Tab-completion's actual visible effect depends on what's installed in the target
   // shell (bash-completion, PATH contents, ...) - not asserted on precisely, and Tab is
   // deliberately excluded from this generic click-through: tapping it against a genuinely

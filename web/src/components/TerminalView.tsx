@@ -34,6 +34,21 @@ function uploadFileName(item: File): string {
   return `pasted-${Date.now()}.${ext}`
 }
 
+// Applies the toolbar's armed Ctrl/Alt to a single character: Ctrl+a..z are the C0 control
+// codes real terminals expect (0x01-0x1A), Ctrl+Space is NUL, and Alt is the "meta sends
+// escape" convention readline/bash want (M-x == ESC x), including on top of a control code for
+// Ctrl+Alt. A combination with no terminal meaning (Ctrl+7, say) is left as the plain
+// character rather than invented.
+function applyStickyModifiers(char: string, armed: { ctrl: boolean; alt: boolean }): string {
+  let bytes = char
+  if (armed.ctrl) {
+    const code = char.toLowerCase().charCodeAt(0)
+    if (code >= 97 && code <= 122) bytes = String.fromCharCode(code - 96)
+    else if (char === ' ') bytes = '\x00'
+  }
+  return armed.alt ? `\x1b${bytes}` : bytes
+}
+
 // Renders only the terminal itself - the tab strip (App.tsx/TabBar.tsx) owns the
 // session label and close/disconnect action now that multiple sessions can be open at
 // once (issue #9), so a second "Session xxx / Disconnect" header here would be redundant.
@@ -60,11 +75,15 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
   // can't throw on a closed socket.
   const sendRawRef = useRef<(data: string) => void>(() => {})
   // Ctrl/Alt are "sticky" one-shot modifiers for the toolbar (mobile keyboards have no
-  // physical Ctrl/Alt to hold): tapping arms one, then the *next* single-character keydown
-  // - from the real (on-screen or Bluetooth) keyboard - is remapped into the equivalent
-  // control code / ESC-prefixed meta byte instead of typing literally, and the modifier
-  // disarms itself either way. modifiersRef mirrors the state into the key-event handler
-  // closure below (created once per [sessionId], so it reads live values through the ref
+  // physical Ctrl/Alt to hold): tapping arms one, then the *next* single character the
+  // terminal produces is remapped into the equivalent control code / ESC-prefixed meta byte
+  // instead of being typed literally, and the modifier disarms itself either way. Applied
+  // where xterm hands input over (term.onData, below) rather than on the keydown, because an
+  // Android soft keyboard doesn't deliver a usable keydown at all - Chromium reports
+  // key="Unidentified"/keyCode=229 and the real character only arrives as IME input - which is
+  // exactly the case that made an armed Ctrl type a plain "c". onData is the one path both a
+  // physical keystroke and an IME commit go through. modifiersRef mirrors the state into that
+  // handler's closure (created once per [sessionId], so it reads live values through the ref
   // rather than a stale one captured at effect-run time); the state itself only exists so
   // the toolbar can render which modifier is currently armed. There's no sticky Shift - a
   // real/on-screen keyboard already produces shifted characters on its own, and the one
@@ -265,37 +284,6 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
     // turns the keydown into onData for the copy cases), returning true lets the keydown
     // fall through to xterm's default handling, which is what actually sends \x03.
     term.attachCustomKeyEventHandler((event) => {
-      // Consumes a sticky Ctrl/Alt armed via the mobile keyboard toolbar (see toggleModifier
-      // above) against the very next single-character keydown from the real keyboard, one
-      // shot either way. Gated on the real event carrying no actual modifier keys itself -
-      // a genuine Ctrl/Alt combo from a real (e.g. Bluetooth) keyboard should behave
-      // normally and fall through to the checks below untouched.
-      const armed = modifiersRef.current
-      if (
-        event.type === 'keydown' &&
-        !event.ctrlKey && !event.altKey && !event.metaKey &&
-        event.key.length === 1 &&
-        (armed.ctrl || armed.alt)
-      ) {
-        let bytes: string | null = null
-        const code = event.key.toLowerCase().charCodeAt(0)
-        if (armed.ctrl && code >= 97 && code <= 122) {
-          // The C0 control codes real terminals expect for Ctrl+a..Ctrl+z (0x01-0x1A).
-          bytes = String.fromCharCode(code - 96)
-          if (armed.alt) bytes = '\x1b' + bytes
-        } else if (armed.alt) {
-          // The "meta sends escape" convention readline/bash expect (M-x == ESC x).
-          bytes = '\x1b' + event.key
-        }
-        setModifiers({ ctrl: false, alt: false })
-        if (bytes !== null) {
-          sendRawRef.current(bytes)
-          event.preventDefault()
-          return false
-        }
-        return true
-      }
-
       // Ctrl+T is the app's "duplicate this tab" shortcut (issue #51, handled at the
       // window level in App.tsx). Swallow it here so a focused terminal doesn't also send
       // the literal \x14 (DC4) control byte to the remote shell.
@@ -460,8 +448,22 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
     })
 
     const dataDisposable = term.onData((data) => {
+      let payload = data
+      // One shot: a sticky modifier armed in the toolbar applies to the next single character
+      // and then disarms, whether that character came from a physical keystroke or an IME
+      // commit. Anything longer (a paste, an escape sequence from an arrow key) isn't "the
+      // next character", so it passes through and leaves the modifier armed.
+      const armed = modifiersRef.current
+      if ((armed.ctrl || armed.alt) && data.length === 1) {
+        payload = applyStickyModifiers(data, armed)
+        // The ref is written directly as well as through state: two characters arriving in
+        // the same tick would both still see the armed value otherwise, since the ref only
+        // catches up on the next render.
+        modifiersRef.current = { ctrl: false, alt: false }
+        setModifiers({ ctrl: false, alt: false })
+      }
       if (socket.readyState === WebSocket.OPEN) {
-        socket.send(new TextEncoder().encode(data))
+        socket.send(new TextEncoder().encode(payload))
       }
     })
 
