@@ -91,24 +91,37 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
   const [modifiers, setModifiers] = useState({ ctrl: false, alt: false })
   const modifiersRef = useRef(modifiers)
 
-  useEffect(() => {
-    modifiersRef.current = modifiers
-  }, [modifiers])
-
   function toggleModifier(key: 'ctrl' | 'alt') {
-    setModifiers((m) => ({ ...m, [key]: !m[key] }))
-    // A safety net, not the mechanism: the toolbar's buttons cancel their own press default so
-    // focus never leaves xterm's textarea in the first place (see pressProps there - letting it
-    // move is what made Android rebuild the keyboard's input connection on every tap). This
-    // no-ops when focus is already where it should be, and recovers it if anything else took it.
-    termRef.current?.focus()
+    // The ref is the source of truth for the input handler and is updated synchronously here,
+    // not from an effect watching the state. React runs passive effects *after* paint and will
+    // happily defer them while the main thread is busy - and tapping a modifier on Android is
+    // exactly when it is busy - so a keystroke arriving in that window would have read an
+    // un-armed ref and typed the character literally, which is the "Ctrl is lit but c still
+    // types a c" report. The state is only what re-renders the toolbar's armed styling.
+    const next = { ...modifiersRef.current, [key]: !modifiersRef.current[key] }
+    modifiersRef.current = next
+    setModifiers(next)
+    refocusTerminal()
   }
 
-  // Sends a fixed key/escape sequence from a toolbar button press. The focus call is the same
-  // safety net as above.
+  // Puts focus back on xterm's hidden textarea, but only when it isn't already there.
+  //
+  // A redundant focus() is not free on Android: it can make the platform restart the keyboard's
+  // input connection, which is the delay between tapping a key and the shell reacting. The
+  // toolbar's buttons already cancel their own press default so focus never moves (see
+  // pressProps in KeyboardToolbar) - this is the recovery path for when something else took it.
+  function refocusTerminal() {
+    const term = termRef.current
+    if (!term) return
+    const textarea = term.element?.querySelector('textarea')
+    if (textarea && document.activeElement === textarea) return
+    term.focus()
+  }
+
+  // Sends a fixed key/escape sequence from a toolbar button press.
   function sendKey(data: string) {
     sendRawRef.current(data)
-    termRef.current?.focus()
+    refocusTerminal()
   }
 
   // Inserts text the way a real paste does (xterm wraps it in bracketed-paste markers when the
@@ -116,7 +129,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
   // keystrokes the shell would start executing line by line.
   function pasteText(text: string) {
     termRef.current?.paste(text)
-    termRef.current?.focus()
+    refocusTerminal()
   }
 
   useEffect(() => {
