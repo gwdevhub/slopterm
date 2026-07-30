@@ -20,20 +20,27 @@ public sealed record UpdateProgress(string Phase, double Percent, string? Error 
 /// <summary>
 /// Self-update: compares the SHA256 of the currently-running single-file executable
 /// against the matching asset in this repo's rolling "latest" GitHub Release (see
-/// .github/workflows/release.yml), and can download+swap+relaunch in place. gwdevhub/terminal
-/// is a *private* repo, so both the metadata lookup and the asset download need a GitHub
-/// token for anything to work at all - see VaultService.GetGithubToken/SetGithubToken and
-/// Settings' "Updates" section. Verified end-to-end against the real repo/API before this
-/// shipped: unauthenticated calls 404 (private repo), an authenticated call to
-/// /releases/tags/latest returns each asset's `digest` (sha256:<hex>, computed by GitHub
-/// itself on upload - no need to download just to hash), and downloading a private asset
-/// works via GET /releases/assets/{id} with `Accept: application/octet-stream` (NOT the
-/// asset's own `browser_download_url`, which relies on a browser's cookie session rather
-/// than a bearer token and won't work programmatically for a private repo).
+/// .github/workflows/release.yml), and can download+swap+relaunch in place.
+///
+/// gwdevhub/slopterm is public, so both the metadata lookup and the asset download work
+/// unauthenticated. A GitHub token stays supported but is purely optional - it only raises
+/// GitHub's unauthenticated rate limit (see VaultService.GetGithubToken/SetGithubToken and
+/// Settings' "Updates" section).
+///
+/// Two API details worth keeping, verified end-to-end against the real repo/API: a call to
+/// /releases/tags/latest returns each asset's `digest` (sha256:&lt;hex&gt;, computed by GitHub
+/// itself on upload - no need to download an asset just to hash it), and the download uses
+/// GET /releases/assets/{id} with `Accept: application/octet-stream` rather than the asset's
+/// own `browser_download_url`, which is a redirect aimed at a browser session.
+///
+/// Desktop only. CheckAsync bails out before touching the network on Android, where updates
+/// come from Google Play instead - there's no single-file exe to hash or swap, no release
+/// asset for the platform, and a self-update would fight Play's own installer. This is what
+/// PRIVACY.md's "no update check on mobile" claim rests on, so keep the guard first.
 /// </summary>
 public sealed class UpdateService
 {
-    private const string Repo = "gwdevhub/terminal";
+    private const string Repo = "gwdevhub/slopterm";
     private static readonly HttpClient Http = new();
 
     private string? _cachedCurrentSha256;
@@ -45,6 +52,17 @@ public sealed class UpdateService
 
     public async Task<UpdateCheckResult> CheckAsync(string? githubToken, CancellationToken ct = default)
     {
+        // First, and before any network call: the Android head runs this same SloptermHost
+        // (see MainActivity) and the shared web UI checks for updates on mount, so without
+        // this the phone would reach out to api.github.com only to fail later at
+        // AssetNameForCurrentPlatform. Supported:false is the same shape a dev build returns -
+        // the UI already renders it as "no update dot", not as an error.
+        if (OperatingSystem.IsAndroid())
+        {
+            return new UpdateCheckResult(false, false, null, null, null, null,
+                "Updates on Android are delivered through Google Play, not from here.");
+        }
+
         var currentSha = ComputeCurrentExeSha256();
         if (currentSha is null)
         {
@@ -72,7 +90,7 @@ public sealed class UpdateService
         if (!response.IsSuccessStatusCode)
         {
             var reason = response.StatusCode == System.Net.HttpStatusCode.NotFound
-                ? "No release found, or this is a private repo and no GitHub token is set in Settings."
+                ? $"No 'latest' release found in {Repo}."
                 : $"GitHub API returned {(int)response.StatusCode}.";
             return new UpdateCheckResult(true, false, currentSha, null, null, null, reason);
         }

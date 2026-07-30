@@ -10,13 +10,12 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
 // The e2e harness runs the server via `dotnet run` (see global-setup.ts) against a debug
 // apphost, not a real published single-file exe - UpdateService.CheckAsync still hashes
 // and checks *something* real (Environment.ProcessPath resolves to that debug apphost),
-// which means this test's outcome depends on live network access to api.github.com and
-// on gwdevhub/terminal's actual current state (its visibility, its latest release) -
-// none of which this suite controls or should depend on for a deterministic pass/fail.
-// So this only asserts the section renders and reaches *some* terminal state, not which
-// one - the actual download/swap/relaunch flow (and every check/apply behavior that does
-// depend on repo visibility/auth) is verified separately against a real published build
-// and the real GitHub API/repo, see AGENTS.md's Self-update section.
+// which means this test's outcome depends on live network access to api.github.com and on
+// gwdevhub/slopterm's latest release - neither of which this suite controls or should
+// depend on for a deterministic pass/fail. So this only asserts the section renders and
+// reaches *some* terminal state, not which one - the actual download/swap/relaunch flow is
+// verified separately against a real published build and the real GitHub API/repo, see
+// AGENTS.md's Self-update section.
 test('Settings shows the Updates section and reaches a terminal state', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Settings')

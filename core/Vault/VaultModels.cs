@@ -205,10 +205,10 @@ public sealed class OpenTabsRecord
 
 /// <summary>
 /// A GitHub personal access token, used only to call the GitHub API when checking for/
-/// downloading app updates (see UpdateService) - gwdevhub/terminal is a private repo, so
-/// unauthenticated requests 404. Stored encrypted like any other secret (unlike
-/// AppSettings, which must stay plaintext/readable pre-unlock) since it's a real
-/// credential, just a narrow-purpose one.
+/// downloading app updates (see UpdateService). Optional - gwdevhub/slopterm is public, so
+/// updates work without one; a token just buys a higher rate limit. Stored encrypted like
+/// any other secret (unlike AppSettings, which must stay plaintext/readable pre-unlock)
+/// since it's a real credential, just a narrow-purpose one.
 /// </summary>
 public sealed class GithubTokenRecord
 {

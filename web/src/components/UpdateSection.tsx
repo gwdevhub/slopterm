@@ -259,9 +259,9 @@ export function UpdateSection() {
           GitHub token
         </label>
         <p className="text-xs text-slate-500">
-          Only needed if gwdevhub/terminal is private, or you hit GitHub's unauthenticated
-          rate limit (a fine-grained personal access token with read-only access to this
-          repo is enough).
+          Optional. Updates work without one — this only helps if you hit GitHub's
+          unauthenticated rate limit (a fine-grained personal access token with read-only
+          access to public repos is enough).
           {hasToken === true && ' A token is currently set.'}
           {hasToken === false && ' No token is set yet.'}
         </p>

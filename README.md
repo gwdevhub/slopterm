@@ -7,6 +7,8 @@ A cross-platform (Linux, macOS, Windows) SSH/FTP terminal client in the spirit o
 - .NET backend (SSH.NET) for SSH/SFTP, served locally — no bundled browser, point your own
   browser at the printed `localhost` URL
 - End-to-end encrypted vault with cross-device sync
+- No telemetry, no ads, no accounts — see [PRIVACY.md](./PRIVACY.md) for what's stored locally
+  and the handful of servers slopterm ever talks to
 
 Status: Windows-first MVP — connect to a host over SSH (password or private key) and get
 a single working terminal tab. No saved hosts, vault, or sync yet. See
@@ -42,7 +44,7 @@ print the URL to the console for now (see `AGENTS.md`'s System tray section).
 
 **Or just grab a prebuilt one:** every push to `main` automatically builds and publishes
 Windows/Linux/macOS executables to the repo's
-[Releases page](https://github.com/gwdevhub/terminal/releases/tag/latest) (tag `latest`,
+[Releases page](https://github.com/gwdevhub/slopterm/releases/tag/latest) (tag `latest`,
 marked as a pre-release since it tracks `main` directly rather than a cut version) — no
 local toolchain needed at all. `.github/workflows/release.yml` also has a manual
 `workflow_dispatch` trigger if you need to rebuild it on demand.
