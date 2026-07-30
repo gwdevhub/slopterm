@@ -1,4 +1,4 @@
-# WebDAV vault sync, with membership, revocation and read-only members
+# WebDAV vault sync, with membership and revocation
 
 **Status: planned, not implemented.** This is written to be picked up and built from - it
 states what to build, in what order, and which decisions are already made vs. deliberately
@@ -11,46 +11,101 @@ Not to be confused with **Folder sync** (`core/SyncService.cs`), which mirrors l
 
 ## What this delivers
 
-A user points a collection of hosts/snippets/keys at a WebDAV URL. Every device that has the
-collection's invite token converges on the same content, encrypted end to end. Teams share a
-collection by sharing its token; the WebDAV server's own ACL decides who may write.
+A user points a collection of hosts (and whatever else they choose) at a WebDAV URL. Every
+device holding that collection's token converges on the same content, encrypted end to end.
+Teams share a collection by sharing its token.
 
-- Private + two team collections = three URLs (or three folders on one Nextcloud), entered
-  once per device.
-- Revocation: remove a member, rotate the collection key, re-encrypt. Old token stops working.
-- Read-only members: cannot create or modify records (server-enforced), and the UI never
-  reveals credential material to them (**not** server-enforced - see the honesty section).
+- Private + two team collections = three URLs (or three folders on one Nextcloud), scanned
+  once per device from a QR code.
+- **Everyone in a collection can add, edit and delete.** No roles, no permission model of our
+  own - the WebDAV server's ACL is the only access control, and it's the server's problem.
+- **The UI never displays stored credential material**, to anyone, in any collection. That's a
+  product decision rather than a permission: a saved secret is something the app uses, not
+  something it shows back to you.
+- **A host can name a credential instead of carrying one**, so a team shares the host inventory
+  while each member connects with their own key. This is the important one - see below.
 
-## The honesty section - read this before designing anything
+## The honesty section - read before designing anything
 
-**"Can use a credential but cannot read it" is not enforceable in this architecture.** A
-read-only member's device has to present the password/private key to the SSH server, so it
-must hold the plaintext. Hiding it in the UI stops casual copying, shoulder-surfing and
-accidental pasting into a chat; it does not stop a modified build, a debugger, or reading the
-vault file. Ship it as a guardrail and *say so in the UI* - "hidden on this device", never
-"you cannot access this".
+**Hiding credentials in the UI is a guardrail, not a boundary.** Any device that connects to a
+host holds that host's secret in plaintext, so masking it stops casual copying,
+shoulder-surfing and accidental pasting into a chat - not a patched build, a debugger, or
+someone reading the vault file. Say so in the UI ("stored, not shown"), and never imply the
+user is being denied something.
 
-What write-restriction *is* real: the WebDAV ACL. A read-only share returns 403 on PUT/DELETE,
-so "cannot create new ones" holds even against a patched client. Lean on that, and make the
-client's own restriction a UX nicety on top of it.
+The only thing that genuinely restricts a member is the **WebDAV ACL**: a read-only share
+returns 403 on PUT/DELETE regardless of what client they run. Nothing here builds on that, but
+that's where the real boundary is if it's ever wanted - so handle a 403 on push gracefully
+("this collection is read-only for you") rather than as a sync error loop.
 
-The only designs that make "use but never see" true need infrastructure the app doesn't have:
-an SSH CA issuing short-lived certificates, a bastion that authenticates on the user's behalf,
-or agent forwarding from a trusted machine. Out of scope here; don't design anything that
-forecloses adding one later.
+Designs that make "use a credential but never see it" actually true need infrastructure the
+app doesn't have: an SSH CA issuing short-lived certificates, or a bastion that authenticates
+on the user's behalf. Out of scope; don't design anything that forecloses adding one later.
 
-A cryptographic variant that *is* enforceable, if the requirement ever shifts to "can see the
-inventory but cannot connect": encrypt record metadata under the collection key and the
-credential under a second key wrapped only for full members. Restricted members then genuinely
-cannot decrypt the secret - and genuinely cannot connect either. One paragraph of code; a
-completely different product decision. Don't build it on spec.
+## Credential resolution by name
+
+The feature that makes team sharing genuinely useful: **a synced host doesn't have to carry a
+secret at all.**
+
+`CredentialRecord.Kind` gains `"keychain"`, alongside a new `KeychainName` field naming a
+keychain entry. `KeychainEntryRecord` already has a `Name`, and that name - not an id - is the
+join key, because the whole point is that it may resolve to a *different, local* entry on every
+device.
+
+Resolution at connect time, in order:
+
+1. A keychain entry with that name in the **`local` collection** - the user's own key always wins.
+2. A keychain entry with that name in the **same collection** as the host - a deliberately
+   shared team key, e.g. a `team-credentials` collection synced to its own WebDAV path.
+3. A keychain entry with that name in any other collection this device holds.
+4. The local `~/.ssh` default identities, reusing `SshConfigService`'s existing lookup of
+   `id_ed25519`/`id_ecdsa`/`id_rsa` - so "my normal SSH key" needs no keychain entry at all.
+5. Nothing: the card shows "no key on this device", SSH/SFTP disabled - exactly how an
+   `~/.ssh/config` alias with no resolvable identity already behaves (reuse `HostCard`'s
+   `canConnect` gate) - plus a "link a key" action.
+
+So a team syncs `prod-db` at `10.0.0.5:22` as user `deploy` with `KeychainName: "prod-deploy"`,
+and each member's own `prod-deploy` key resolves locally. Addresses, ports, usernames, groups
+and startup snippets are shared; nobody's private key ever leaves their device.
+
+Names are unique within a collection (enforce on save). Across collections, precedence is the
+list above, and the host card should show which entry actually resolved, so a surprise is
+visible rather than mysterious.
+
+An inline secret in a shared collection stays allowed - some teams really do share a service
+account - but saving one must warn plainly that everyone in the collection will have it.
+
+## What syncs
+
+Per collection, a set of opt-in **scopes**. Anything the app stores should be *able* to sync;
+the defaults just have to be sensible.
+
+| Scope | Default | Notes |
+|---|---|---|
+| `hosts` | on | the point of the feature |
+| `snippets` | on | |
+| `keychain` | **off** | on = deliberately sharing private keys; the warning has to be blunt |
+| `port-forwards` | on | reference hosts by id, so they follow the hosts |
+| `sync-rules` | off | folder-sync rules point at *local* paths; useful across one user's devices, rarely for a team |
+| `preferences` | off | appearance + AI endpoint/model + UI toggles - see below |
+| `recent-connections` | off | mildly private, little value shared |
+| `logs` | never | append-only, noisy, per-device by nature |
+| `open-tabs` | never | describes one device's current session state |
+| `github-token` | never | a credential for something unrelated to this collection |
+
+**Preferences need a split before they can sync.** `settings.json` today holds
+`RequireMasterPassword` next to `CloseToTray` / `ShowSshConfigHosts` / `AiBaseUrl` / `AiModel`,
+and it has to stay readable *before* the vault is unlocked, because it's what decides whether
+to prompt at all. `RequireMasterPassword` describes how *this device's* vault is encrypted and
+must never sync. So: leave `settings.json` as the pre-unlock device file, and move the syncable
+preferences (plus the existing `secrets/appearance` record) into one vault-stored `preferences`
+record a collection can carry.
 
 ## Data model
 
 ### Collections
 
-A **collection** is the unit of sync and sharing. Every host/snippet/keychain entry belongs to
-exactly one.
+A **collection** is the unit of sync and sharing. Every record belongs to exactly one.
 
 - `local` is implicit, always exists, has no remote, never leaves the device. **Today's records
   stay exactly where they are** (`hosts/{id}.json` etc.) and are treated as the `local`
@@ -58,13 +113,11 @@ exactly one.
 - Every other collection lives under `collections/{collectionId}/…` with the same per-type
   record folders. `collectionId` is 128 random bits, hex.
 
-Local layout:
-
 ```
 vault.json                                  # unchanged
-settings.json                               # unchanged
+settings.json                               # unchanged, device-local, pre-unlock
 hosts/{id}.json  snippets/{id}.json  …      # unchanged = the `local` collection
-collections/{cid}/collection.json           # name, remote config, our role, sync state
+collections/{cid}/collection.json           # name, remote config, scopes, sync state
 collections/{cid}/hosts/{id}.json           # same envelope shape as today
 collections/{cid}/members.json              # cached copy of the remote members file
 collections/{cid}/tombstones/{id}.json
@@ -72,7 +125,7 @@ collections/{cid}/identity.json             # this device's keypair for this col
 ```
 
 Everything under `collections/` is encrypted at rest with the **vault key**, exactly like
-today's records - the collection key is only used for what goes over the wire.
+today's records - the collection key is only for what goes over the wire.
 
 ### Remote layout (WebDAV)
 
@@ -83,13 +136,9 @@ today's records - the collection key is only used for what goes over the wire.
 <base>/slopterm/v1/tombstones/{id}.json
 ```
 
-`{type}` ∈ `hosts | snippets | keychain | port-forwards`. **Never sync** `logs/`,
-`secrets/open-tabs`, `secrets/github-token`, `secrets/appearance` or `settings.json`: they're
-device-local, noisy, or credentials for something else entirely.
-
 ### Envelope
 
-Mirrors today's on-disk shape, so the sync layer moves records around without decrypting them:
+Mirrors today's on-disk shape, so the sync layer moves records without decrypting them:
 
 ```json
 {
@@ -109,18 +158,17 @@ host coming back.
 ## Crypto
 
 - **Collection key (CK)**: 256-bit AES-GCM key, independent of the vault key. Independent on
-  purpose: it means a no-password vault (the default install, whose key derives from a public
-  constant - see `VaultCrypto.NoPasswordSeed`) can still sync safely, because what leaves the
-  device is never encrypted under that public-seeded key.
-- **Device identity**: an X25519 keypair (wrapping) + Ed25519 keypair (signing) per device per
-  collection, in `identity.json`. `fingerprint = SHA-256(x25519 pub || ed25519 pub)`, shown as
-  a short hex group for out-of-band verification when adding someone.
-- **Use BouncyCastle**, which is *already in the publish output* transitively via SSH.NET, so
-  X25519/Ed25519 cost no new package. The BCL alternative (P-256 `ECDiffieHellman` + `ECDsa`)
-  is tempting but Wine cannot generate ECDH keys at all (`CngKey.Create` throws 0x80090029 -
-  documented in AGENTS.md), which would make the repo's mandatory Wine test pass unable to
-  exercise any of this. BouncyCastle sidesteps that entirely. Make it a direct
-  `PackageReference` rather than relying on a transitive one.
+  purpose: a no-password vault (the default install, whose key derives from the public
+  `VaultCrypto.NoPasswordSeed`) can then still sync safely, because what leaves the device is
+  never encrypted under that public-seeded key.
+- **Device identity**: X25519 (wrapping) + Ed25519 (signing) keypair per device per collection,
+  in `identity.json`. `fingerprint = SHA-256(x25519 pub || ed25519 pub)`, shown as short hex
+  groups for out-of-band verification.
+- **Use BouncyCastle**, already in the publish output transitively via SSH.NET, so X25519/
+  Ed25519 cost no new package. The BCL alternative (P-256 `ECDiffieHellman` + `ECDsa`) is
+  tempting but Wine cannot generate ECDH keys at all (`CngKey.Create` throws 0x80090029 -
+  documented in AGENTS.md), which would leave the repo's mandatory Wine pass unable to exercise
+  any of this. Make it a direct `PackageReference` rather than relying on a transitive one.
 - **Wrapping**: `wrappedKey = ephPub || AES-GCM(HKDF-SHA256(X25519(ephPriv, memberPub)), CK)`,
   fresh ephemeral per member per epoch.
 - **Records**: AES-GCM under CK, reusing `VaultCrypto`'s existing encrypt/decrypt.
@@ -132,121 +180,137 @@ host coming back.
   "version": 1,
   "keyEpoch": 3,
   "members": [
-    { "id": "…", "label": "marc-laptop", "role": "owner|member|restricted",
-      "x25519": "b64", "ed25519": "b64", "wrappedKey": "b64",
-      "addedAt": "…", "addedBy": "sha256:…" }
+    { "id": "…", "label": "marc-laptop", "x25519": "b64", "ed25519": "b64",
+      "wrappedKey": "b64", "addedAt": "…", "addedBy": "sha256:…" }
   ],
-  "signature": "b64 Ed25519 over the canonical JSON of everything above, by an owner"
+  "signature": "b64 Ed25519 over the canonical JSON of everything above"
 }
 ```
 
-Clients **must** verify the signature against a known-owner key before trusting a member list,
-or anyone with write access to the WebDAV share could add themselves. The first owner's key is
-pinned when the collection is created; joining devices pin the signer from the invite token.
+Clients **must** verify the signature against a pinned key before trusting a member list, or
+anyone with write access to the share could add themselves. The creating device's key is pinned
+at creation; a joining device pins the signer carried in the invite token. Any member may sign
+(there are no roles) - the signature says "this came from someone already in the collection",
+not "from someone senior".
 
-### Invite token
+## Pairing and QR
 
-What a new device scans/pastes. Base64url of `{v, collectionId, name, remoteUrl, auth, CK,
-signerEd25519Pub, role}`, prefixed `slopterm:collection:v1:`. QR it - typing a WebDAV
-credential on a phone is the single worst part of this feature.
+Typing a WebDAV URL plus credentials on a phone is the worst part of this feature, so **QR is
+the primary path, not a nicety** - for the initial import of a WebDAV remote and for adding a
+teammate alike:
 
-Two properties worth stating: the token *is* the access (possession = membership, no accounts
-anywhere), and it contains CK, so an invite must be treated like a password and is
-single-purpose - after joining, the device registers its own keypair in `members.json` and the
-token can be invalidated by rotating.
+- **Invite token**: base64url of `{v, collectionId, name, remoteUrl, auth, CK, signerEd25519Pub,
+  scopes}`, prefixed `slopterm:collection:v1:` - same shape as the existing host-share token
+  (`HostShareCodec`), so follow that codec's conventions rather than inventing a second one.
+- **Desktop shows it as a QR** (and as copyable text) on the collection's screen; the phone
+  scans it. One code path covers first-time setup on a new device and inviting someone else.
+- **Android scanning** needs camera access inside the WebView: `WebChromeClient.
+  OnPermissionRequest` must grant `RESOURCE_VIDEO_CAPTURE`, plus the `CAMERA` manifest
+  permission and a runtime request. The web side then uses `getUserMedia` + `BarcodeDetector`
+  where available, with paste as the fallback everywhere else. This is the one genuinely new
+  platform capability the feature needs - prototype it in phase 1, not at the end.
+- The token **is** the access (possession = membership; there are no accounts) and it carries
+  CK, so treat it like a password: reveal-on-demand, warn about pasting it into chat, and note
+  that rotating the key invalidates every token issued before it.
 
 ## Sync algorithm
 
 Per collection, driven by `VaultSyncService`:
 
-1. **Pull.** `PROPFIND Depth: 1` on each `records/{type}/` → names + ETags. Diff against the
-   per-record ETag in the local sync state; `GET` only what changed. Same for `tombstones/`.
+1. **Pull.** `PROPFIND Depth: 1` on each enabled scope's `records/{type}/` → names + ETags.
+   Diff against the per-record ETag in the local sync state; `GET` only what changed. Same for
+   `tombstones/`.
 2. **Merge**, per record: higher `hlc` wins; a tombstone beats a record with a lower `hlc`.
    When both sides changed since the last sync, keep the loser as a copy (`name + " (conflict
    2026-07-30)"`) rather than dropping it - a silently lost host is the one bug users never
    forgive.
 3. **Push.** `PUT` with `If-Match: <last known ETag>` (`If-None-Match: *` for creates). On 412:
    re-GET, merge, retry, bounded at ~3 attempts. Preconditions are best-effort - Nextcloud's
-   handling is quirky and some servers ignore them - so last-writer-wins by HLC has to remain
-   the fallback, and the conflict copy above is what makes that survivable.
+   handling is quirky and some servers ignore them - so last-writer-wins by HLC stays the
+   fallback, and the conflict copy is what makes that survivable.
 4. **Deletes** write a tombstone and remove the record. GC tombstones older than 90 days (must
    comfortably exceed "laptop was in a drawer for a month").
 5. **Triggers**: on unlock, on local change (debounced ~2s), every 5 min, on Android foreground,
-   and a manual "Sync now". Never on a timer while the vault is locked.
+   and a manual "Sync now". Never while the vault is locked.
 
 State lives in `collection.json`: last sync time, per-record `{etag, hlc}`, last error.
 Everything is best-effort - a failed sync surfaces in the UI, never throws into a caller.
 
-## Roles, revocation, rotation
+## Membership and revocation
 
-| Role | Records | Members | Credentials in UI |
-|---|---|---|---|
-| `owner` | read/write | add, remove, rotate | shown |
-| `member` | read/write | — | shown |
-| `restricted` | read only | — | masked, no copy, no export |
-
-- **Write enforcement is the WebDAV ACL.** Give restricted members a read-only share; the
-  client additionally hides create/edit/delete and never attempts a PUT. A 403 on push must be
-  handled gracefully ("this collection is read-only for you"), not as a sync error loop.
-- **Revocation** = remove the member from `members.json`, then **rotate**: new CK at
-  `keyEpoch+1`, re-encrypt every record, re-wrap for remaining members, PUT members.json last
-  (so a crash mid-rotation leaves readable records for everyone who still has the old epoch).
-  A client seeing `keyEpoch` higher than it can unwrap re-fetches `members.json`; a revoked
-  one finds no wrapped key for its fingerprint and reports "you no longer have access".
+- **Join**: scan token → generate this device's identity → unwrap CK → add self to
+  `members.json` (signed) → full pull.
+- **Leave**: delete the local collection; optionally remove self from `members.json`.
+- **Remove someone else**: drop their entry, then **rotate** - new CK at `keyEpoch+1`,
+  re-encrypt every record, re-wrap for the remaining members, PUT `members.json` last so a
+  crash mid-rotation leaves records readable by everyone still holding the old epoch. A client
+  seeing a `keyEpoch` it can't unwrap re-fetches `members.json`; a removed one finds no wrapped
+  key for its fingerprint and reports "you no longer have access to this collection".
 - **Rotation does not un-know anything.** The removed member keeps every credential they ever
-  synced. Say this in the revoke dialog, and prompt to rotate the actual SSH credentials -
-  that's the only thing that genuinely locks them out of the hosts.
+  synced. The revoke dialog must say so and prompt to rotate the affected SSH credentials -
+  that's the only thing that actually locks them out of the hosts. A collection that shares
+  only host inventory and resolves keys by name is dramatically better off here, which is the
+  best argument for making that the documented default.
 
 ## Surfaces to build
 
 Backend (`core/VaultSync/`):
 
 - `IVaultSyncRemote` - `ListAsync(prefix)`, `GetAsync(path)`, `PutAsync(path, bytes, ifMatch)`,
-  `DeleteAsync(path)`. One interface so git/S3 can follow without touching the merge logic.
+  `DeleteAsync(path)`. One interface so git/S3 can follow without touching merge logic.
 - `WebDavRemote` - hand-rolled on `HttpClient`: PUT/GET/DELETE/PROPFIND/MKCOL, basic auth,
-  minimal XML parse of the multistatus (name + getetag). No new package.
+  minimal XML parse of the multistatus (href + getetag). No new package.
 - `VaultSyncService` - one background loop per collection, with the same
   never-let-the-loop-die try/catch `ForwardingService` had to learn the hard way.
 - `CollectionCrypto` - CK generation, wrap/unwrap, members.json signing/verification, rotation.
-- Endpoints: `/api/vault/collections` (CRUD), `/api/collections/{id}/sync|status`,
-  `/api/collections/{id}/members` (list/add/remove), `/api/collections/{id}/rotate`,
-  `/api/collections/join`, `/api/collections/{id}/token`.
+- `CredentialResolver` - the name-based lookup above, shared by the connect endpoints and by
+  whatever the UI uses to decide whether a host is connectable.
+- Endpoints: `/api/vault/collections` (CRUD incl. scopes), `/api/collections/{id}/sync|status`,
+  `/api/collections/{id}/members`, `/api/collections/{id}/rotate`, `/api/collections/join`,
+  `/api/collections/{id}/token`.
 
 Frontend:
 
-- A **Collections** sidebar section: name, remote, role, last sync, member list, Sync now,
-  Rotate key, Leave.
-- Join flow: paste token (QR scan on Android via the existing bridge pattern).
-- `ConnectionForm` gains a collection picker; `HostCard` gains a small collection badge.
-- Restricted mode: credential fields masked and read-only, no "Copy"/share-token export, "New
-  host"/Edit/Delete hidden for that collection.
+- A **Collections** sidebar section: name, remote, scopes, last sync, members, Sync now,
+  Rotate key, Show invite QR, Leave.
+- Join flow: scan QR (Android) or paste token (everywhere).
+- `ConnectionForm`: a collection picker, and a credential mode of "use a key named…" alongside
+  the existing paste/browse/keychain-entry options.
+- `HostCard`: a collection badge, and the existing `canConnect` treatment when nothing resolves
+  on this device.
+- Credential fields: masked everywhere, replace-don't-reveal on edit, no copy button, and the
+  host-share export drops inline secrets for hosts that resolve by name.
 
 ## Testing
 
-- **Unit**: HLC ordering; the merge matrix (local-only, remote-only, both-changed, tombstone
-  vs. update, tombstone GC); wrap/unwrap round-trip; rotation leaves exactly the remaining
-  members able to decrypt; members.json signature rejection.
+- **Unit**: HLC ordering; the merge matrix (local-only, remote-only, both-changed, tombstone vs.
+  update, tombstone GC); wrap/unwrap round-trip; rotation leaves exactly the remaining members
+  able to decrypt; members.json signature rejection; credential resolution precedence, including
+  the "same name resolves to a different local key on each device" case.
 - **Integration against a real server**, in Docker like the SSH one: two `VaultSyncService`
   instances against one WebDAV container, asserting convergence, a real 412 retry, a delete
-  propagating, and a revoked member failing to decrypt after rotation. Pick a small server
-  ([KaraDAV](https://github.com/kd2org/karadav) is Nextcloud-compatible and light; Apache
-  `mod_dav` is the other obvious choice) - and test against **two** implementations, because
-  ETag/precondition behaviour is exactly where servers differ.
+  propagating, and a removed member failing to decrypt after rotation. Use **two** server
+  implementations ([KaraDAV](https://github.com/kd2org/karadav) is Nextcloud-compatible and
+  light; Apache `mod_dav` is the other obvious choice) - ETag/precondition behaviour is exactly
+  where servers differ.
 - **Wine**, per the repo rule: win-x64 build against the same container. This is why the crypto
   is BouncyCastle and not CNG.
-- **e2e**: create a collection, join from a second browser context, edit on one, see it on the
-  other, restricted mode hides secrets.
+- **e2e**: create a collection, join from a second browser context, edit on one and see it on
+  the other, a host whose key resolves only locally, and the QR/paste join path.
 
 ## Phasing
 
-1. **One collection, one device, WebDAV round-trip.** Envelope, PROPFIND/GET/PUT, sync state,
-   no members - CK comes straight from the token. Proves the transport.
+1. **One collection, one device, WebDAV round-trip** - envelope, PROPFIND/GET/PUT, sync state,
+   CK straight from the token. Prototype the Android QR scan here too: it's the only new
+   platform capability, and it would be miserable to discover late.
 2. **Merge for real**: HLC, tombstones, conflict copies, 412 retry, two-instance integration test.
-3. **Membership**: identities, members.json, signing, roles, join/leave.
-4. **Revocation + rotation**, with the "rotate your SSH credentials too" prompt.
-5. **Restricted UI** + graceful read-only (403) handling.
-6. *(Later, optional)* A second `IVaultSyncRemote` - git is the interesting one for teams,
-   since it brings real ACLs and per-change attribution.
+3. **Credential resolution by name** + the "no key on this device" host state. Shippable and
+   useful before membership exists at all.
+4. **Membership**: identities, signed members.json, join/leave.
+5. **Revocation + rotation**, with the "rotate your SSH credentials too" prompt.
+6. **Scopes beyond hosts/snippets**, including the `preferences` split out of `settings.json`.
+7. *(Later, optional)* A second `IVaultSyncRemote` - git is the interesting one for teams, since
+   it brings real ACLs and per-change attribution.
 
 ## Pitfalls
 
@@ -256,6 +320,7 @@ Frontend:
   the collection itself as the first entry, and whether MKCOL on an existing path is 405 or
   201. Normalise once, in `WebDavRemote`, and keep it out of the merge logic.
 - Recommend **app passwords** (Nextcloud) rather than account passwords in the UI copy.
-- A `restricted` member must not be able to add members even if the ACL is misconfigured -
-  verify the members.json signature, don't trust the role field in your own copy.
+- `RequireMasterPassword` must never sync - it describes this device's own vault encryption.
+- A host that resolves its key by name must never fall back to *silently* connecting with a
+  different key than the card claims; show what resolved.
 - Don't start a sync loop for a locked vault, and don't let one keep the app from quitting.
