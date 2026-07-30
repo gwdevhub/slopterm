@@ -66,17 +66,17 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
   // disarms itself either way. modifiersRef mirrors the state into the key-event handler
   // closure below (created once per [sessionId], so it reads live values through the ref
   // rather than a stale one captured at effect-run time); the state itself only exists so
-  // the toolbar can render which modifier is currently armed. Shift isn't in this "next
-  // real keystroke" scheme - a real/on-screen keyboard already produces shifted characters
-  // on its own - it's only meaningful combined with the toolbar's own Tab button below.
-  const [modifiers, setModifiers] = useState({ ctrl: false, alt: false, shift: false })
+  // the toolbar can render which modifier is currently armed. There's no sticky Shift - a
+  // real/on-screen keyboard already produces shifted characters on its own, and the one
+  // combination it was there for is a literal "Shift+Tab" key in the toolbar now.
+  const [modifiers, setModifiers] = useState({ ctrl: false, alt: false })
   const modifiersRef = useRef(modifiers)
 
   useEffect(() => {
     modifiersRef.current = modifiers
   }, [modifiers])
 
-  function toggleModifier(key: 'ctrl' | 'alt' | 'shift') {
+  function toggleModifier(key: 'ctrl' | 'alt') {
     setModifiers((m) => ({ ...m, [key]: !m[key] }))
     // Same reason sendKey below refocuses: a toolbar button tap otherwise leaves browser
     // focus sitting on the <button> itself, so the very next real keystroke - the one this
@@ -91,18 +91,6 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
   function sendKey(data: string) {
     sendRawRef.current(data)
     termRef.current?.focus()
-  }
-
-  // Shift+Tab reverses focus/completion order in most shells/TUIs (CSI Z) - consumed the
-  // same one-shot way the sticky Ctrl/Alt modifiers are, just triggered by a toolbar tap
-  // instead of a real keydown.
-  function handleTab() {
-    if (modifiers.shift) {
-      sendKey('\x1b[Z')
-      toggleModifier('shift')
-    } else {
-      sendKey('\t')
-    }
   }
 
   useEffect(() => {
@@ -291,7 +279,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
           // The "meta sends escape" convention readline/bash expect (M-x == ESC x).
           bytes = '\x1b' + event.key
         }
-        setModifiers({ ctrl: false, alt: false, shift: false })
+        setModifiers({ ctrl: false, alt: false })
         if (bytes !== null) {
           sendRawRef.current(bytes)
           event.preventDefault()
@@ -506,18 +494,9 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
         <KeyboardToolbar
           ctrlArmed={modifiers.ctrl}
           altArmed={modifiers.alt}
-          shiftArmed={modifiers.shift}
           onToggleCtrl={() => toggleModifier('ctrl')}
           onToggleAlt={() => toggleModifier('alt')}
-          onToggleShift={() => toggleModifier('shift')}
-          onTab={handleTab}
-          onEscape={() => sendKey('\x1b')}
-          onArrowUp={() => sendKey('\x1b[A')}
-          onArrowDown={() => sendKey('\x1b[B')}
-          onArrowLeft={() => sendKey('\x1b[D')}
-          onArrowRight={() => sendKey('\x1b[C')}
-          onDelete={() => sendKey('\x1b[3~')}
-          onInsert={() => sendKey('\x1b[2~')}
+          onSendKey={sendKey}
         />
       )}
     </div>
