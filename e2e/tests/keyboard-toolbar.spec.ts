@@ -270,6 +270,41 @@ test.describe('with touch emulation', () => {
     }, 'toolbar paste snippet')
   })
 
+  test('double-tapping the terminal completes the current word, like tapping Tab', async ({ page }) => {
+    await connectHost(page, 'toolbar double tap test host')
+
+    // A file whose name only this test knows, so the completion below has exactly one
+    // candidate and its result is unambiguous.
+    const marker = `tabtest${Date.now()}`
+    await page.keyboard.type(`touch ${marker}_unique_file`)
+    await page.keyboard.press('Enter')
+    await expect(async () => {
+      expect((await terminalText(page)).split(`${marker}_unique_file`).length - 1).toBe(1)
+    }).toPass({ timeout: 10_000 })
+
+    await page.keyboard.type(`ls ${marker}_uni`)
+    const terminal = page.locator('.xterm-screen').last()
+    const box = (await terminal.boundingBox())!
+    const [x, y] = [box.x + box.width / 2, box.y + box.height / 2]
+    await page.touchscreen.tap(x, y)
+    await page.touchscreen.tap(x, y)
+
+    // The half-typed name became the whole name - which only happens if the double tap put a
+    // real \t on the wire (and the file itself is never listed, since nothing pressed Enter).
+    await expect(async () => {
+      expect((await terminalText(page)).split(`${marker}_unique_file`).length - 1).toBe(2)
+    }).toPass({ timeout: 10_000 })
+
+    // Clean the file up on the remote - the container is shared by the whole run.
+    await page.keyboard.press('Enter')
+    await page.keyboard.type(`rm -f ${marker}_unique_file`)
+    await page.keyboard.press('Enter')
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'toolbar double tap test host')
+  })
+
   test('the toolbar stays above the on-screen keyboard instead of under it', async ({ page }) => {
     await connectHost(page, 'toolbar keyboard inset test host')
 
