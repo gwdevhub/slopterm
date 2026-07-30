@@ -97,16 +97,15 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
 
   function toggleModifier(key: 'ctrl' | 'alt') {
     setModifiers((m) => ({ ...m, [key]: !m[key] }))
-    // Same reason sendKey below refocuses: a toolbar button tap otherwise leaves browser
-    // focus sitting on the <button> itself, so the very next real keystroke - the one this
-    // whole sticky-modifier scheme exists to intercept - would land there instead of on
-    // xterm's hidden textarea, and attachCustomKeyEventHandler would never see it at all.
+    // A safety net, not the mechanism: the toolbar's buttons cancel their own press default so
+    // focus never leaves xterm's textarea in the first place (see pressProps there - letting it
+    // move is what made Android rebuild the keyboard's input connection on every tap). This
+    // no-ops when focus is already where it should be, and recovers it if anything else took it.
     termRef.current?.focus()
   }
 
-  // Sends a fixed key/escape sequence from a toolbar button tap, then refocuses the
-  // terminal - tapping the toolbar otherwise steals focus from xterm's hidden textarea,
-  // so the very next real keystroke would be lost instead of reaching the shell.
+  // Sends a fixed key/escape sequence from a toolbar button press. The focus call is the same
+  // safety net as above.
   function sendKey(data: string) {
     sendRawRef.current(data)
     termRef.current?.focus()

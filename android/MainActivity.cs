@@ -258,9 +258,17 @@ public class MainActivity : Activity
     // A WebView that tells the IME this is a terminal, not a message box. Gboard (and every
     // other keyboard) otherwise shows its suggestion/emoji strip above the keys - useless for
     // shell input, and it steals the row the web app's own key toolbar needs - and feeds every
-    // keystroke into its personalized dictionary. NoSuggestions also stops the keyboard holding
-    // typed characters in a composing region instead of committing them, which is what makes a
-    // half-typed command reach the shell (and therefore complete on Tab) at all.
+    // keystroke into its personalized dictionary.
+    //
+    // The variation matters more than it looks: a keyboard in its normal text mode holds the
+    // word being typed in a *composing region* and only commits it later, so the shell hasn't
+    // actually received "-al" while it's still on screen - Tab has nothing to complete, and
+    // anything that tears the composition down (an arrow key, a focus change) takes those
+    // characters with it. TextVariationVisiblePassword is the long-standing way to opt out of
+    // composing entirely and have each character committed as it's typed; it's what Android
+    // terminal apps use, and it means "no autocorrect/suggestions", not "show a password".
+    // Every text field in this app is a hostname, a key, a command or a password, so none of
+    // them wanted autocorrect anyway.
     private sealed class TerminalWebView : WebView
     {
         public TerminalWebView(Context context) : base(context) { }
@@ -270,7 +278,7 @@ public class MainActivity : Activity
             var connection = base.OnCreateInputConnection(outAttrs);
             if (outAttrs is not null)
             {
-                outAttrs.InputType |= InputTypes.TextFlagNoSuggestions;
+                outAttrs.InputType = InputTypes.ClassText | InputTypes.TextVariationVisiblePassword | InputTypes.TextFlagNoSuggestions;
                 outAttrs.ImeOptions |= ImeFlags.NoExtractUi | ImeFlags.NoFullscreen | ImeFlags.NoPersonalizedLearning;
             }
             return connection;

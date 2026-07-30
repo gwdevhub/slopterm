@@ -235,6 +235,31 @@ test.describe('with touch emulation', () => {
     await deleteHost(page, 'toolbar symbol test host')
   })
 
+  test('tapping a key leaves focus in the terminal instead of moving it to the button', async ({ page }) => {
+    await connectHost(page, 'toolbar focus test host')
+
+    const focusedClass = () => page.evaluate(() => document.activeElement?.className ?? '')
+    expect(await focusedClass()).toContain('xterm-helper-textarea')
+
+    // Focus moving to the button is not cosmetic on Android: it makes the platform tear the
+    // keyboard's input connection down and rebuild it on every tap (the lag between tapping a
+    // key and the shell reacting), and it discards whatever the keyboard was still holding in
+    // its composing region - which is how tapping Left after typing "ls -al" wiped the "-al".
+    await page.getByRole('button', { name: 'Left' }).click()
+    expect(await focusedClass()).toContain('xterm-helper-textarea')
+
+    await page.getByRole('button', { name: 'Ctrl', exact: true }).click()
+    expect(await focusedClass()).toContain('xterm-helper-textarea')
+    await page.getByRole('button', { name: 'Ctrl', exact: true }).click()
+
+    await page.getByRole('button', { name: 'More keys' }).click()
+    expect(await focusedClass()).toContain('xterm-helper-textarea')
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'toolbar focus test host')
+  })
+
   test('the always-visible row holds exactly the nine keys it should, in order', async ({ page }) => {
     await connectHost(page, 'toolbar layout test host')
 
