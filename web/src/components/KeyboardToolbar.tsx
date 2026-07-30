@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ReactElement, SVGProps } from 'react'
+import type { PointerEvent, ReactElement, SVGProps } from 'react'
 import { ArrowDownIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, MoreHorizontalIcon, SnippetsIcon } from './icons'
 import { listSnippets, type SavedSnippet } from '../lib/api'
 
@@ -85,6 +85,25 @@ interface KeyboardToolbarProps {
   onPasteText: (text: string) => void
 }
 
+// Fires on press instead of on click, and - the important half - keeps the press from moving
+// focus off xterm's hidden textarea.
+//
+// A toolbar button that takes focus makes Android tear the keyboard's input connection down and
+// build it back up on every single tap. That is what the half-second lag between tapping a key
+// and the shell reacting actually was, and it also destroyed whatever the keyboard was still
+// holding in its composing region - which is why tapping the left arrow after typing "ls -al"
+// wiped out the "-al" instead of moving the cursor (with a trailing space the word had already
+// been committed, so there was nothing left to lose, and the arrow behaved). Handling
+// pointerdown rather than click also drops the wait for the tap to complete.
+function pressProps(action: () => void) {
+  return {
+    onPointerDown: (event: PointerEvent) => {
+      event.preventDefault()
+      action()
+    },
+  }
+}
+
 // A key cap. Named keys spell their own name out ("Ctrl", "Tab", "Shift+Tab") rather than
 // wearing an invented glyph - the icons this replaced told the user nothing about what the
 // button did, which is the whole complaint this layout answers.
@@ -104,7 +123,7 @@ function KeyCap({
   return (
     <button
       type="button"
-      onClick={onClick}
+      {...pressProps(onClick)}
       aria-label={name ?? label}
       aria-pressed={armed}
       className={`flex h-9 min-w-0 items-center justify-center overflow-hidden rounded px-0.5 text-[11px] font-medium whitespace-nowrap touch-manipulation ${
@@ -134,7 +153,7 @@ function IconKeyCap({
   return (
     <button
       type="button"
-      onClick={onClick}
+      {...pressProps(onClick)}
       aria-label={name}
       aria-expanded={expanded}
       className={`flex h-9 min-w-0 items-center justify-center rounded touch-manipulation ${
@@ -256,10 +275,10 @@ export function KeyboardToolbar({
               <button
                 key={entry.id}
                 type="button"
-                onClick={() => {
+                {...pressProps(() => {
                   onPasteText(entry.snippet.command)
                   setPanel('none')
-                }}
+                })}
                 className="flex w-full flex-col items-start gap-0.5 border-b border-slate-800/60 px-3 py-2 text-left touch-manipulation active:bg-slate-800"
               >
                 <span className="text-xs font-medium text-slate-200">{entry.snippet.name}</span>
