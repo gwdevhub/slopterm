@@ -93,6 +93,14 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
     termRef.current?.focus()
   }
 
+  // Inserts text the way a real paste does (xterm wraps it in bracketed-paste markers when the
+  // remote asked for them), so a multi-line snippet lands as one paste instead of a burst of
+  // keystrokes the shell would start executing line by line.
+  function pasteText(text: string) {
+    termRef.current?.paste(text)
+    termRef.current?.focus()
+  }
+
   useEffect(() => {
     onSessionClosedRef.current = onSessionClosed
   }, [onSessionClosed])
@@ -368,6 +376,42 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
     container.addEventListener('dragover', onDragOver)
     container.addEventListener('drop', onDrop)
 
+    // Double-tap the terminal itself to send Tab, the way Termius does - completion is the key
+    // a shell session reaches for most, and it shouldn't need aiming at a ~36px cap in the
+    // toolbar every time. Deliberately built on touch events rather than the `dblclick` a
+    // browser synthesizes from them, so a desktop mouse's double-click still means only what it
+    // has always meant here: xterm selecting the word under the cursor.
+    const DOUBLE_TAP_MS = 400
+    const DOUBLE_TAP_SLOP_PX = 30
+    let lastTapAt = 0
+    let lastTapX = 0
+    let lastTapY = 0
+    const onTouchEnd = (event: TouchEvent) => {
+      // Ignore anything multi-touch (pinch-zoom, a stray second finger) - only a clean
+      // one-finger tap counts.
+      if (event.touches.length > 0 || event.changedTouches.length !== 1) return
+      const touch = event.changedTouches[0]
+      const isDoubleTap =
+        event.timeStamp - lastTapAt < DOUBLE_TAP_MS &&
+        Math.abs(touch.clientX - lastTapX) < DOUBLE_TAP_SLOP_PX &&
+        Math.abs(touch.clientY - lastTapY) < DOUBLE_TAP_SLOP_PX
+      // A third tap must not pair with the second one and fire again, so a match resets the
+      // clock rather than carrying this tap's time forward.
+      lastTapAt = isDoubleTap ? 0 : event.timeStamp
+      lastTapX = touch.clientX
+      lastTapY = touch.clientY
+      if (!isDoubleTap) return
+
+      // Suppressing the compatibility mouse events this tap would otherwise synthesize is what
+      // keeps xterm from selecting the word underneath as a side effect of asking for
+      // completion (and stops the browser's double-tap zoom, belt-and-braces with the
+      // touch-manipulation style on the container).
+      event.preventDefault()
+      sendRawRef.current('\t')
+      term.focus()
+    }
+    container.addEventListener('touchend', onTouchEnd, { passive: false })
+
     const socket = new WebSocket(terminalSocketUrl(sessionId))
     socket.binaryType = 'arraybuffer'
     sendRawRef.current = (data: string) => {
@@ -448,6 +492,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
       textarea?.removeEventListener('paste', onPaste)
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
+      container.removeEventListener('touchend', onTouchEnd)
       dataDisposable.dispose()
       socket.close()
       term.dispose()
@@ -485,7 +530,12 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
           content (e.g. a fractional cell-size rounding mismatch) - it must stay purely
           parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size.
           On mobile we need overflow-y-auto to allow scrolling when keyboard is open. */}
-      <div ref={containerRef} className="min-h-0 flex-1 bg-black p-1 sm:p-2 overflow-y-auto sm:overflow-hidden" />
+      {/* touch-manipulation: no double-tap-to-zoom, so a double tap is free to mean Tab
+          (see onTouchEnd above) and single taps land without the browser's 300ms wait. */}
+      <div
+        ref={containerRef}
+        className="min-h-0 flex-1 touch-manipulation bg-black p-1 sm:p-2 overflow-y-auto sm:overflow-hidden"
+      />
       {/* Keyboard toolbar for Android/mobile - special keys mobile keyboards don't expose.
           Every button is wired to sendKey/toggleModifier above, which push bytes into the
           same live WebSocket term.onData writes to - not into termRef, which has no such
@@ -497,6 +547,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
           onToggleCtrl={() => toggleModifier('ctrl')}
           onToggleAlt={() => toggleModifier('alt')}
           onSendKey={sendKey}
+          onPasteText={pasteText}
         />
       )}
     </div>

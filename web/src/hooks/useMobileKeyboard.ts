@@ -86,3 +86,44 @@ export function useMobileKeyboardHeight(): number {
   // event listeners that we handle in useMobileKeyboardScroll
   return getKeyboardHeight()
 }
+
+/**
+ * Keeps the app's own height equal to the part of the window the virtual keyboard ISN'T
+ * covering, by publishing it as `--app-height` (consumed by #root in index.css).
+ *
+ * Must be called once at the app root (App.tsx).
+ *
+ * Opening the keyboard does not shrink the layout viewport on Android Chrome (or in a WebView
+ * that draws edge-to-edge): the page keeps its full height and the keyboard is simply painted
+ * over the bottom of it. A bottom-anchored element - the terminal's own key toolbar - then ends
+ * up underneath the keyboard, which is exactly where it's least useful. `visualViewport.height`
+ * is the part still actually visible, so sizing #root to it puts the toolbar directly above the
+ * keyboard instead. The scrollTo keeps the layout viewport pinned to the top, since a browser
+ * that scrolled the page to reveal the focused element would otherwise leave the app's own top
+ * bar off-screen once it's no longer overflowing.
+ */
+export function useVisualViewportHeight() {
+  useEffect(() => {
+    const viewport = window.visualViewport
+    if (!isMobileApp() || !viewport) return
+
+    function apply() {
+      // Guard against a transient 0 mid keyboard animation, which would collapse every pane
+      // to nothing for a frame.
+      if (viewport && viewport.height > 0) {
+        document.documentElement.style.setProperty('--app-height', `${viewport.height}px`)
+      }
+      window.scrollTo(0, 0)
+    }
+
+    apply()
+    viewport.addEventListener('resize', apply)
+    viewport.addEventListener('scroll', apply)
+
+    return () => {
+      viewport.removeEventListener('resize', apply)
+      viewport.removeEventListener('scroll', apply)
+      document.documentElement.style.removeProperty('--app-height')
+    }
+  }, [])
+}
