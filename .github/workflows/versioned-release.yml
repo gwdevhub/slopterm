@@ -224,7 +224,9 @@ jobs:
           bundler-cache: true
           working-directory: android/fastlane
 
-      # Prereleases go to the internal track so a -beta can never land on production. Note this
+      # Prereleases go to the internal track so a -beta can never land on production - and the
+      # Fastfile publishes an internal upload live (release_status 'completed') instead of as a
+      # draft, so testers get it without a promotion click. Note this
       # step fails if the version was already uploaded (Play refuses a reused versionCode), which
       # is what a workflow_dispatch re-run of an already-released version will hit - re-running to
       # re-upload GitHub assets is fine, re-running to re-upload to Play is not.
