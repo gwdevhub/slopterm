@@ -38,10 +38,13 @@ def upload_bundle(options, default_track)
   end
 
   track = options[:track] || ENV["SLOPTERM_PLAY_TRACK"] || default_track
-  # 'draft' uploads the release without rolling it out - the other valid values are 'completed',
-  # 'inProgress' and 'halted'. Draft is the default on purpose: a bad build should need a human
-  # click in the Play Console before it reaches anyone.
-  status = options[:release_status] || ENV["SLOPTERM_PLAY_RELEASE_STATUS"] || "draft"
+  # 'draft' uploads the release without rolling it out; the other valid values are 'completed',
+  # 'inProgress' and 'halted'. Draft stays the default for the tracks real users are on - a bad
+  # build should need a human click in the Play Console before it reaches anyone. The internal
+  # track is the exception: its whole audience is the handful of testers waiting for the build,
+  # and making each of them wait on a manual promotion is friction with nothing behind it.
+  default_status = track == "internal" ? "completed" : "draft"
+  status = options[:release_status] || ENV["SLOPTERM_PLAY_RELEASE_STATUS"] || default_status
 
   # Dry run: supply uploads into a Play edit and asks Google to validate it, then throws the edit
   # away instead of committing. Nothing is published. `fastlane android internal validate_only:true`

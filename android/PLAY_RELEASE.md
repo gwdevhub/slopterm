@@ -72,8 +72,14 @@ a readable error instead of somewhere inside MSBuild's signing step.
 | `beta` | beta (open/closed testing) |
 | `internal` | internal testing |
 
-All three upload as `release_status: 'draft'`, so nothing reaches users until you promote it in
-the Play Console. Valid statuses are `draft`, `completed`, `inProgress`, `halted` — override with
+The **internal** track uploads as `release_status: 'completed'` — it goes live to the internal
+testers as soon as Play finishes processing it, with no promotion step. Its audience is the few
+people already waiting for the build, so a manual click would be friction with nothing behind it.
+
+`beta` and `production` upload as `release_status: 'draft'`, so nothing reaches real users until
+you promote it in the Play Console.
+
+Valid statuses are `draft`, `completed`, `inProgress`, `halted` — override either default with
 `SLOPTERM_PLAY_RELEASE_STATUS`, and override the track with `SLOPTERM_PLAY_TRACK`.
 
 CI picks the track from `VERSION`: anything containing `alpha`/`beta`/`rc` goes to **internal**,
