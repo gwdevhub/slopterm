@@ -45,7 +45,7 @@ async function connectHost(page: import('@playwright/test').Page, name: string) 
 
 test('the mobile keyboard toolbar is absent without touch support', async ({ page }) => {
   await connectHost(page, 'toolbar visibility test host')
-  await expect(page.getByRole('button', { name: 'Ctrl' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Ctrl', exact: true })).toHaveCount(0)
 
   await closeTab(page, tabLabel)
   await gotoSection(page, 'Hosts')
@@ -61,7 +61,9 @@ test.describe('with touch emulation', () => {
 
   test('the Up-arrow button recalls shell history via a real ANSI cursor sequence', async ({ page }) => {
     await connectHost(page, 'toolbar arrow test host')
-    await expect(page.getByRole('button', { name: 'Ctrl' })).toBeVisible()
+    // Named keys spell their own name out rather than wearing an icon - the accessible name
+    // and the visible label are the same string on purpose.
+    await expect(page.getByRole('button', { name: 'Ctrl', exact: true })).toHaveText('Ctrl')
 
     const marker = `PLAYWRIGHT_TOOLBAR_${Date.now()}`
     await page.keyboard.type(`echo ${marker}`)
@@ -93,7 +95,7 @@ test.describe('with touch emulation', () => {
     await page.keyboard.type('sleep 30; echo SLEEP_FINISHED_NORMALLY')
     await page.keyboard.press('Enter')
 
-    const ctrlButton = page.getByRole('button', { name: 'Ctrl' })
+    const ctrlButton = page.getByRole('button', { name: 'Ctrl', exact: true })
     await ctrlButton.click()
     await expect(ctrlButton).toHaveAttribute('aria-pressed', 'true')
 
@@ -130,10 +132,12 @@ test.describe('with touch emulation', () => {
   // single universal observable side effect either - too environment-fragile to assert on
   // precisely. This only smoke-tests that tapping every remaining button is wired up and
   // doesn't throw/disconnect the session, not each one's exact remote effect.
-  test('Escape/Insert/Delete/Alt/Shift/arrow buttons are clickable without disconnecting the session', async ({ page }) => {
+  test('Escape/Insert/Delete/Alt/arrow buttons are clickable without disconnecting the session', async ({ page }) => {
     await connectHost(page, 'toolbar smoke test host')
 
-    for (const label of ['Escape', 'Insert', 'Delete', 'Alt', 'Shift', 'Left', 'Down', 'Right']) {
+    // Everything past the always-visible row lives behind "More keys" (see KeyboardToolbar).
+    await page.getByRole('button', { name: 'More keys' }).click()
+    for (const label of ['Escape', 'Insert', 'Delete', 'Home', 'End', 'Page Up', 'Page Down', 'Alt', 'Left', 'Down', 'Right']) {
       await page.getByRole('button', { name: label, exact: true }).click()
     }
     // Alt is a sticky modifier (see TerminalView) - the tap above armed it, and it would
@@ -152,5 +156,53 @@ test.describe('with touch emulation', () => {
     await closeTab(page, tabLabel)
     await gotoSection(page, 'Hosts')
     await deleteHost(page, 'toolbar smoke test host')
+  })
+
+  test('"More keys" toggles the extra rows the always-visible row deliberately leaves out', async ({ page }) => {
+    await connectHost(page, 'toolbar more keys test host')
+
+    const moreKeys = page.getByRole('button', { name: 'More keys' })
+    await expect(moreKeys).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByRole('button', { name: 'Shift+Tab' })).toHaveCount(0)
+
+    await moreKeys.click()
+    await expect(moreKeys).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.getByRole('button', { name: 'Shift+Tab' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'F12' })).toBeVisible()
+
+    await moreKeys.click()
+    await expect(page.getByRole('button', { name: 'Shift+Tab' })).toHaveCount(0)
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'toolbar more keys test host')
+  })
+
+  test('a symbol key types its literal character and the ^C key interrupts the line', async ({ page }) => {
+    await connectHost(page, 'toolbar symbol test host')
+    await page.getByRole('button', { name: 'More keys' }).click()
+
+    // A bare pipe is the cheapest observable proof the key sent the literal character: the
+    // PTY echoes it straight back at the prompt.
+    await page.getByRole('button', { name: 'Pipe', exact: true }).click()
+    await expect(async () => {
+      expect(await terminalText(page)).toContain('|')
+    }).toPass({ timeout: 10_000 })
+
+    // ...and it's also why ^C has to work: pressing Enter on a dangling pipe would drop bash
+    // into its PS2 continuation prompt and swallow the marker command below. Reaching the
+    // marker at all is what proves the key sent a real 0x03 rather than a literal "^C".
+    await page.getByRole('button', { name: 'Ctrl+C', exact: true }).click()
+    const marker = `PLAYWRIGHT_TOOLBAR_SYMBOL_${Date.now()}`
+    await page.keyboard.type(`echo ${marker}`)
+    await page.keyboard.press('Enter')
+    await expect(async () => {
+      const occurrences = (await terminalText(page)).split(marker).length - 1
+      expect(occurrences).toBe(2)
+    }).toPass({ timeout: 10_000 })
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'toolbar symbol test host')
   })
 })
