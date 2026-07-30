@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { PointerEvent, ReactElement, SVGProps } from 'react'
+import type { MouseEvent, PointerEvent, ReactElement, SVGProps } from 'react'
 import { ArrowDownIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, MoreHorizontalIcon, SnippetsIcon } from './icons'
 import { listSnippets, type SavedSnippet } from '../lib/api'
 
@@ -101,6 +101,10 @@ function pressProps(action: () => void) {
       event.preventDefault()
       action()
     },
+    // Belt and braces: cancelling pointerdown's default is supposed to suppress the
+    // compatibility mouse events a tap synthesizes, but not every engine honors that, and a
+    // mousedown that gets through would focus the button after all.
+    onMouseDown: (event: MouseEvent) => event.preventDefault(),
   }
 }
 
