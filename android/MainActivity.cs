@@ -158,6 +158,32 @@ public class MainActivity : Activity
         }
     }
 
+    // Whether the Activity has actually left the screen. OnStop - not OnPause - is what "the
+    // app is in the background" means here: it's the point at which nothing of ours is visible
+    // any more, which is also the point at which the platform is free to treat the process as
+    // cached and freeze it. A merely paused Activity (a dialog or a share sheet over the top,
+    // the unfocused half of a split screen) is still visible, so the process is still held at
+    // visible importance and needs no service at all.
+    //
+    // Static and volatile because SessionKeepAliveService's watchdog reads it from its own
+    // background thread; false to start with, since the process is only ever brought up by the
+    // Activity launching.
+    private static volatile bool _backgrounded;
+
+    internal static bool IsBackgrounded => _backgrounded;
+
+    protected override void OnStart()
+    {
+        base.OnStart();
+        _backgrounded = false;
+    }
+
+    protected override void OnStop()
+    {
+        base.OnStop();
+        _backgrounded = true;
+    }
+
     // Going to the background is where connections used to die: with no foreground component
     // the process is frozen within seconds and every session goes with it. Promote to a
     // foreground service on the way out so the backend keeps running (see
@@ -166,12 +192,15 @@ public class MainActivity : Activity
     //
     // OnPause, not OnStop: from Android 12 an app can't start a foreground service once it's
     // in the background, and OnPause still runs while the Activity is on screen. This is the
-    // ONLY hook that can start it, which is why it deliberately doesn't try to exclude the
-    // cases where something merely covers the app (our own document picker, a permission
-    // dialog): skipping the promotion there wouldn't defer it, it would cancel it outright
-    // for however long the user spends in that picker - and browsing Drive for a key file
-    // with two shells open is exactly when the connections need holding. The cost is a
-    // low-importance notification that appears and disappears again; OnResume removes it.
+    // ONLY hook that can start it, which is why it can't tell yet whether the app is actually
+    // leaving - something merely covering it (our own document picker, a permission dialog)
+    // pauses it exactly the same way, and skipping the start there wouldn't defer it, it would
+    // cancel it outright for however long the user spends in that picker.
+    //
+    // So the start here is provisional: the service comes up, but it only stays up if OnStop
+    // follows within a few seconds. If the Activity is still on screen after that - or comes
+    // back first, which OnResume below handles - the service stops again before its
+    // notification is ever shown. See SessionKeepAliveService.WaitForBackgroundAsync.
     protected override void OnPause()
     {
         base.OnPause();

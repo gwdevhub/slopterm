@@ -7,7 +7,8 @@ using Slopterm.Server;
 namespace Slopterm.Mobile;
 
 // Keeps the app's process running normally for a few minutes after the user switches away,
-// so the SSH connections it holds stay up.
+// so the SSH connections it holds stay up. It exists only while both halves of that sentence
+// hold: there is something live to keep, and the app is genuinely in the background.
 //
 // The problem this solves is not battery policy, which is why setting slopterm to
 // "unrestricted" background energy usage doesn't help: an app with no visible Activity and no
@@ -20,6 +21,18 @@ namespace Slopterm.Mobile;
 // on process state. A foreground service is the supported way to change process state, and
 // this is the smallest one that does the job: it exists only while it's needed, and it stops
 // itself.
+//
+// The notification is the visible cost of that, and it should only ever be seen when it's
+// buying something: connections open, app not on screen. Neither condition can be settled at
+// the moment the service starts. Connections are checked by MainActivity before it starts us
+// at all and re-checked below as they come and go; being in the background can't be checked
+// yet at all, because the only hook allowed to start a foreground service (OnPause) fires
+// before the app is one - a dialog or a picker pauses the Activity exactly the same way. So
+// the promotion here is provisional: it happens immediately, because Android requires it
+// within about five seconds of the start, and is withdrawn again if OnStop doesn't follow
+// shortly after (see WaitForBackgroundAsync). On Android 12+, which holds a foreground-service
+// notification back for ten seconds before drawing it, that withdrawal beats the draw and
+// nothing is ever shown.
 //
 // It is deliberately short-lived, and the cap below is what "keep connections open for a few
 // minutes in the background" actually means. Note that while this service is running the
@@ -53,6 +66,14 @@ public sealed class SessionKeepAliveService : Service
     // day; generous enough to cover looking something up elsewhere and coming back.
     private static readonly TimeSpan MaxLifetime = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(20);
+
+    // How long to wait for MainActivity.OnStop after the OnPause that started us, before
+    // concluding the app isn't going anywhere (see WaitForBackgroundAsync). Under the ten
+    // seconds Android 12+ defers a foreground-service notification by, so on those versions
+    // the notification of a service that gives up here is never drawn at all; comfortably
+    // over the sub-second OnPause -> OnStop gap of a real app switch.
+    private static readonly TimeSpan BackgroundGrace = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan BackgroundPollInterval = TimeSpan.FromMilliseconds(250);
 
     private CancellationTokenSource? _stopWatch;
 
@@ -137,10 +158,11 @@ public sealed class SessionKeepAliveService : Service
         }
     }
 
-    // Stops as soon as there's nothing left to keep alive, and in any case at the hard cap.
-    // The count can reach zero while backgrounded - a shell exits on its own, a forward
-    // fails - and the notification goes away as soon as it does rather than sitting out the
-    // rest of the window.
+    // Stops as soon as either of the two conditions that justify this service stops holding -
+    // the app came back to the foreground, or there's nothing left to keep alive - and in any
+    // case at the hard cap. The count can reach zero while backgrounded - a shell exits on its
+    // own, a forward fails - and the notification goes away as soon as it does rather than
+    // sitting out the rest of the window.
     //
     // Note this never runs long enough to meet Android 15's six-hours-per-day dataSync budget,
     // which is why Service.OnTimeout isn't implemented - the cap above is two orders of
@@ -154,7 +176,9 @@ public sealed class SessionKeepAliveService : Service
             var deadline = DateTimeOffset.UtcNow + MaxLifetime;
             try
             {
-                while (!token.IsCancellationRequested)
+                // Nothing below runs at all if the app never actually went away: the service
+                // stops again with its notification still undrawn.
+                while (await WaitForBackgroundAsync(token) && !token.IsCancellationRequested)
                 {
                     await Task.Delay(PollInterval, token);
                     // This is a background thread, so it's the safe place to do the one part
@@ -187,6 +211,46 @@ public sealed class SessionKeepAliveService : Service
             }
         }, token);
         return cts;
+    }
+
+    // True once the app is actually in the background with something worth holding open, false
+    // if it turns out not to be going anywhere. Both conditions have to hold for this service
+    // to be justified, and only one of them is known when it starts.
+    //
+    // MainActivity has to start us from OnPause - past that point the platform refuses a
+    // foreground-service start - but OnPause is not "the app went to the background". It also
+    // fires for a dialog, a share sheet, our own document picker, the unfocused half of a
+    // split screen: the Activity is still on screen, the process is still held at visible
+    // importance, and no notification should be shown for any of them. OnStop is the event
+    // that means what we need, and it lands a beat later, so this waits for it.
+    //
+    // A real app switch gets there in well under a second. When nothing arrives inside the
+    // grace, the app is still up and this service is redundant - it stops, and on Android 12+
+    // (which sits on a foreground-service notification for ten seconds before drawing it) the
+    // user never sees anything at all. The other exit - the user coming straight back - is
+    // MainActivity.OnResume stopping the service outright, which cancels our token.
+    private static async Task<bool> WaitForBackgroundAsync(CancellationToken token)
+    {
+        var giveUp = DateTimeOffset.UtcNow + BackgroundGrace;
+        while (true)
+        {
+            if (token.IsCancellationRequested || LiveSessionCount() == 0)
+            {
+                return false;
+            }
+
+            if (MainActivity.IsBackgrounded)
+            {
+                return true;
+            }
+
+            if (DateTimeOffset.UtcNow >= giveUp)
+            {
+                return false;
+            }
+
+            await Task.Delay(BackgroundPollInterval, token);
+        }
     }
 
     private static int LiveSessionCount() => MainActivity.LiveConnectionCount();
