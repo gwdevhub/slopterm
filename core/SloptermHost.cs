@@ -84,6 +84,11 @@ var app = builder.Build();
 var launchToken = LaunchTokenStore.LoadOrCreate(() => Convert.ToHexString(RandomNumberGenerator.GetBytes(24)));
 var sessions = new SessionStore<TerminalSession>();
 var sftpSessions = new SessionStore<SftpSession>();
+// Session ids whose shell is genuinely over, kept for a while after the session itself is
+// gone. A terminal that was detached when its shell ended (the app was in the background)
+// comes back to an id that no longer resolves, and without this it cannot tell "finished"
+// from "expired" - see the /api/ssh/session/{id}/state endpoint. Pruned on the reaper's tick.
+var endedSessions = new ConcurrentDictionary<string, DateTimeOffset>();
 var vault = new VaultService();
 // If settings (persisted from a previous run) say a master password isn't required, this
 // transparently unlocks the vault right now - the frontend never sees an unlock prompt.
@@ -1188,6 +1193,16 @@ app.MapPost("/api/vault/appearance", (JsonElement request) =>
 
 app.MapDelete("/api/ssh/session/{sessionId}", (string sessionId) =>
 {
+    // Recorded as ended, not merely absent, so the terminal's own socket closing a beat later
+    // reads as "this session is finished" rather than "it vanished, dial a new one" - which
+    // would reconnect the very session the user just disconnected. Written before the removal
+    // because the removal disposes inline and takes a moment, and a probe landing in between
+    // would find neither the session nor the marker.
+    if (sessions.Get(sessionId) is not null)
+    {
+        endedSessions[sessionId] = DateTimeOffset.UtcNow;
+    }
+
     var removed = sessions.Remove(sessionId);
     if (removed is not null)
     {
@@ -1195,6 +1210,84 @@ app.MapDelete("/api/ssh/session/{sessionId}", (string sessionId) =>
     }
 
     return Results.NoContent();
+});
+
+// Which SSH sessions are still connected. A reloaded page uses this to find the sessions its
+// restored tabs were on and reattach to them instead of dialing fresh connections.
+// Host/port/username only: no secrets, and all three are already in the open-tabs record and
+// the connection log.
+// Ended sessions are filtered out even though they're briefly still in the store (the reaper
+// collects them on its next tick): reattaching to a shell that has already exited would mount
+// a whole terminal onto it just to watch it close again.
+app.MapGet("/api/ssh/sessions", () => Results.Ok(
+    sessions.Snapshot().Where(entry => !entry.Value.Ended).Select(entry => new
+    {
+        sessionId = entry.Key,
+        host = entry.Value.Host,
+        port = entry.Value.Port,
+        username = entry.Value.Username,
+        attached = entry.Value.IsAttached,
+    })));
+
+// The same for SFTP, so a reloaded page reattaches its file-browser tabs rather than opening
+// a second connection per tab and orphaning the first (an orphan nothing ever cleans up -
+// unlike terminals, SFTP sessions hold no socket to lose and so are never reaped).
+//
+// Disconnected ones are dropped from the store as they're found, which is the only thing that
+// ever collects them. That matters here more than it looks: an SFTP session whose SSH link
+// died while the app was backgrounded is unusable, and offering it for reattach would give
+// the user a file browser that fails on every click with no way back.
+app.MapGet("/api/sftp/sessions", () =>
+{
+    var connected = new List<KeyValuePair<string, SftpSession>>();
+    foreach (var entry in sftpSessions.Snapshot())
+    {
+        if (entry.Value.IsConnected)
+        {
+            connected.Add(entry);
+        }
+        else
+        {
+            sftpSessions.Remove(entry.Key);
+        }
+    }
+
+    return Results.Ok(connected.Select(entry => new
+    {
+        sessionId = entry.Key,
+        host = entry.Value.Host,
+        port = entry.Value.Port,
+        username = entry.Value.Username,
+        homeDirectory = entry.Value.HomeDirectory,
+    }));
+});
+
+// Why a terminal's socket died, from the session's point of view. The browser can't tell a
+// rejected upgrade from a dead network - both arrive as an anonymous close - so a reconnecting
+// terminal asks here and gets one of three answers:
+//   live    - the session is being held for you; reattach.
+//   ended   - the shell finished on its own (`exit`), or the user disconnected it, while you
+//             were away; close the tab instead of silently dialing a whole new login.
+//   unknown - never heard of it, or it aged out, or its transport died. All three mean the
+//             same thing to the client: the tab is still wanted, so dial again.
+// `ended` is why endedSessions exists at all: without it, a shell that exits while the app is
+// backgrounded is indistinguishable from one that timed out, and coming back would hand the
+// user a brand-new authenticated session they never asked for.
+app.MapGet("/api/ssh/session/{sessionId}/state", (string sessionId) =>
+{
+    if (sessions.Get(sessionId) is { Ended: false })
+    {
+        return Results.Ok(new { state = "live" });
+    }
+
+    // A session still in the store but with its shell already finished (the reaper hasn't
+    // ticked yet) counts as ended, not live - the answer shouldn't depend on timing.
+    if (sessions.Get(sessionId) is { ShellEnded: true })
+    {
+        return Results.Ok(new { state = "ended" });
+    }
+
+    return Results.Ok(new { state = endedSessions.ContainsKey(sessionId) ? "ended" : "unknown" });
 });
 
 // The browser terminal fits itself to its container, then posts the resulting size here so
@@ -1220,6 +1313,16 @@ app.MapPost("/api/ssh/{sessionId}/resize", (string sessionId, TerminalResizeRequ
     }
 });
 
+// The terminal's byte pump. Losing this socket does NOT end the SSH session: the session
+// keeps running detached (draining into its scrollback) until it's either reattached or
+// aged out by the reaper below. That distinction is the whole fix for "switching apps on
+// Android kills every connection" - a WebView that gets suspended, reclaimed or reloaded
+// drops this socket for reasons that have nothing to do with the user being done with the
+// shell, and this handler used to read every one of them as `exit`.
+//
+// `?since=` is the client's byte offset into the session's total output, so a reattach
+// replays exactly what it missed instead of the screen jumping to a fresh prompt. Omitted
+// by a client with nothing on screen (a reloaded page), which gets the retained tail.
 app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId) =>
 {
     if (!context.WebSockets.IsWebSocketRequest)
@@ -1235,33 +1338,39 @@ app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId
         return;
     }
 
+    long? since = long.TryParse(context.Request.Query["since"], out var parsedSince) && parsedSince >= 0
+        ? parsedSince
+        : null;
+
     using var socket = await context.WebSockets.AcceptWebSocketAsync();
     // ApplicationStopping is linked in so a quit unblocks this handler immediately instead of
     // the graceful stop waiting on it (it would otherwise only return when the session ends).
     using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, app.Lifetime.ApplicationStopping);
 
-    var toSocket = session.PumpToWebSocketAsync(socket, cts.Token);
-    var fromSocket = session.PumpFromWebSocketAsync(socket, cts.Token);
-    await Task.WhenAny(toSocket, fromSocket);
-    cts.Cancel();
+    // AttachAsync owns the socket for its whole life, including the close handshake - the
+    // reason it sends has to go out while its own send pump is quiesced, which only it knows.
+    var result = await session.AttachAsync(socket, since, cts.Token);
 
-    if (socket.State == WebSocketState.Open)
+    // The shell finished, or the SSH transport under it died - either way there is nothing
+    // left to reattach to, so the session goes now rather than idling out the grace period.
+    // Every other way out of AttachAsync leaves it connected and detached for the reaper to
+    // age out if nobody comes back.
+    if (result is AttachResult.ShellEnded or AttachResult.TransportLost)
     {
-        try
+        // Marked before it's removed, not after: a client whose socket died without a close
+        // frame - which is the whole reason this record exists - probes for the session's
+        // fate, and the other order leaves a window where it finds neither the session nor
+        // the marker and dials a fresh login to a host whose shell just exited.
+        if (result is AttachResult.ShellEnded)
         {
-            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "session ended", CancellationToken.None);
+            endedSessions[sessionId] = DateTimeOffset.UtcNow;
         }
-        catch (WebSocketException)
-        {
-            // A client that vanished mid-close (e.g. the app window was closed as part of a
-            // quit) can't complete the close handshake - nothing to do, we're tearing down.
-        }
-    }
 
-    var removed = sessions.Remove(sessionId);
-    if (removed is not null)
-    {
-        vault.AppendLog(new LogEntryRecord { Event = "disconnected", Host = removed.Host, Port = removed.Port, Username = removed.Username });
+        var removed = sessions.Remove(sessionId);
+        if (removed is not null)
+        {
+            vault.AppendLog(new LogEntryRecord { Event = "disconnected", Host = removed.Host, Port = removed.Port, Username = removed.Username });
+        }
     }
 });
 
@@ -1605,6 +1714,90 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
         watchCts?.Dispose();
         sendLock.Dispose();
         signal.Dispose();
+    }
+});
+
+// Detached sessions don't live forever. Once a terminal's WebSocket has been gone for the
+// whole grace window with nothing reattaching, the SSH connection is torn down and logged
+// exactly as an ended session always was - so the old "close the socket, kill the session"
+// behavior still happens, just minutes later instead of instantly.
+//
+// The window is what "keep connections open for a few minutes in the background" means in
+// practice: long enough to cover switching to another app and back, short enough that a tab
+// the user really is finished with doesn't hold a remote shell open all day. It applies on
+// every platform, so a page reload or a webview crash on the desktop is survivable too.
+//
+// SFTP sessions are deliberately not reaped: they hold no WebSocket, so there's no transport
+// to lose and nothing here would ever be able to tell an idle file browser from an abandoned
+// one. They keep their existing "live until explicitly disconnected" lifetime.
+var detachGrace = TimeSpan.FromMinutes(5);
+var endedSessionMemory = TimeSpan.FromMinutes(30);
+_ = Task.Run(async () =>
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+    try
+    {
+        while (await timer.WaitForNextTickAsync(app.Lifetime.ApplicationStopping))
+        {
+            foreach (var (id, session) in sessions.Snapshot())
+            {
+                // Claiming and removing are two steps because the claim is what settles the
+                // race with a reattach arriving in the same instant - see TryBeginReap.
+                if (!session.TryBeginReap(detachGrace))
+                {
+                    continue;
+                }
+
+                // Each teardown is best-effort and isolated: disposing a session whose TCP
+                // link is by definition suspect can throw out of SSH.NET, and appending to
+                // the log touches disk. One failure must cost that session only - if it
+                // escaped, this loop would end and nothing would ever be reaped again.
+                try
+                {
+                    if (session.ShellEnded)
+                    {
+                        endedSessions[id] = DateTimeOffset.UtcNow;
+                    }
+
+                    // Remove returns null when something else got there first (a Disconnect
+                    // click landing on this same tick), and that caller already logged - the
+                    // return value is how this stays one log entry per session, not two.
+                    if (sessions.Remove(id) is { } removed)
+                    {
+                        vault.AppendLog(new LogEntryRecord
+                        {
+                            Event = "disconnected",
+                            Host = removed.Host,
+                            Port = removed.Port,
+                            Username = removed.Username,
+                        });
+                    }
+                }
+                catch (Exception)
+                {
+                    // Same contract as SessionStore.DisposeAll: one connection failing to
+                    // tear down cleanly must not take the rest with it.
+                }
+            }
+
+            var cutoff = DateTimeOffset.UtcNow - endedSessionMemory;
+            foreach (var (id, endedAt) in endedSessions)
+            {
+                if (endedAt < cutoff)
+                {
+                    endedSessions.TryRemove(id, out _);
+                }
+            }
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        // Shutting down - DisposeAll on the quit path takes it from here.
+    }
+    catch (Exception)
+    {
+        // A backstop, not an expected path: everything inside the loop is already guarded.
+        // Better a stopped reaper than an unobserved crash on a background task.
     }
 });
 

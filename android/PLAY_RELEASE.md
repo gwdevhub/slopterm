@@ -20,7 +20,14 @@ These cannot be automated. All of them are complete as of the `0.0.1-beta` relea
 2. **Complete the store listing**: title, short/full description, icon, screenshots, content
    rating questionnaire, target audience, **privacy policy URL**, and the **Data safety** form.
    slopterm asks for `INTERNET` and sets `usesCleartextTraffic="true"` (for its own loopback
-   server), so expect the data-safety answers to get looked at.
+   server), so expect the data-safety answers to get looked at. It also declares
+   `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` and `POST_NOTIFICATIONS`: the app runs
+   a short-lived `dataSync` foreground service (`SessionKeepAliveService`) while it is in the
+   background with connections open, so those connections aren't killed by the platform
+   freezing the process. `dataSync` is a standard type and needs no separate Play declaration
+   form, but the review notes are the place to say what it's for if asked: the service only
+   exists while the user has live connections (SSH shells, SFTP channels or port forwards),
+   and stops itself as soon as those are gone or after five minutes, whichever comes first.
 3. **Create a service account** — Play Console → Setup → API access → link a Google Cloud
    project → create a service account → grant it *Release manager* (or at minimum "Release apps
    to testing tracks" plus the production track if you use it) → download a JSON key. Make sure

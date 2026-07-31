@@ -15,11 +15,15 @@ import {
   disconnect,
   getOpenTabs,
   getVaultStatus,
+  listSftpSessions,
+  listSshSessions,
   saveOpenTabs,
   saveWindowPosition,
   sftpConnect,
   sftpDisconnect,
   type ConnectRequest,
+  type LiveSftpSession,
+  type LiveSshSession,
 } from './lib/api'
 import { pullAppearanceFromVault } from './lib/appearance'
 import { onVaultUnlocked } from './lib/vaultEvents'
@@ -101,6 +105,10 @@ function requestToOpenTabRecord(tab: SessionTab) {
     secret: request.authMethod === 'password' ? request.password : request.privateKey,
     passphrase: request.authMethod === 'privateKey' ? request.passphrase : undefined,
     startupCommands: tab.startupCommands,
+    // So a reload lands back on the shell that's still running rather than opening a second
+    // connection beside it - see the restore effect, which only trusts this after checking
+    // it against the sessions the backend actually still holds.
+    sessionId: tab.sessionId ?? undefined,
   }
 }
 
@@ -265,35 +273,51 @@ function App() {
   // Restore whichever tabs were open last time, once - each starts 'connecting' and
   // reconnects itself via attemptConnectTab's retry loop rather than blocking the rest of
   // the app on every tab succeeding first.
+  //
+  // A tab whose session the backend is still holding skips that entirely and mounts straight
+  // onto the running shell. That's the same-process case - the Android WebView's renderer was
+  // reclaimed in the background and the page reloaded, or the user hit reload - where the SSH
+  // connection never went anywhere. After a real restart no id in the record matches anything
+  // live (they're per-process), so every tab takes the reconnect path exactly as before.
   useEffect(() => {
-    getOpenTabs()
-      .then((record) => {
-        const restored: SessionTab[] = record.tabs.map((t) => ({
-          id: crypto.randomUUID(),
-          sessionId: null,
-          label: t.label,
-          kind: t.kind,
-          request: {
-            host: t.host,
-            port: t.port,
-            username: t.username,
-            authMethod: t.authMethod,
-            password: t.authMethod === 'password' ? t.secret : undefined,
-            privateKey: t.authMethod === 'privateKey' ? t.secret : undefined,
-            passphrase: t.authMethod === 'privateKey' ? t.passphrase : undefined,
-            columns: 80,
-            rows: 24,
-          },
-          status: 'connecting',
-          startupCommands: t.startupCommands,
-        }))
+    Promise.all([
+      getOpenTabs(),
+      listSshSessions().catch(() => [] as LiveSshSession[]),
+      listSftpSessions().catch(() => [] as LiveSftpSession[]),
+    ])
+      .then(([record, liveSsh, liveSftp]) => {
+        const liveHomes = new Map(liveSftp.map((s) => [s.sessionId, s.homeDirectory]))
+        const liveIds = new Set<string>([...liveSsh.map((s) => s.sessionId), ...liveHomes.keys()])
+        const restored: SessionTab[] = record.tabs.map((t) => {
+          const stillLive = t.sessionId !== undefined && liveIds.has(t.sessionId)
+          return {
+            id: crypto.randomUUID(),
+            sessionId: stillLive ? (t.sessionId ?? null) : null,
+            label: t.label,
+            kind: t.kind,
+            request: {
+              host: t.host,
+              port: t.port,
+              username: t.username,
+              authMethod: t.authMethod,
+              password: t.authMethod === 'password' ? t.secret : undefined,
+              privateKey: t.authMethod === 'privateKey' ? t.secret : undefined,
+              passphrase: t.authMethod === 'privateKey' ? t.passphrase : undefined,
+              columns: 80,
+              rows: 24,
+            },
+            status: stillLive ? 'connected' : 'connecting',
+            startupCommands: t.startupCommands,
+            homeDirectory: stillLive && t.sessionId ? liveHomes.get(t.sessionId) : undefined,
+          }
+        })
 
         if (restored.length > 0) {
           setTabs(restored)
           const index = record.activeIndex
           const active = index !== null && index >= 0 && index < restored.length ? restored[index] : restored[0]
           setActiveTabId(active.id)
-          restored.forEach((tab) => void attemptConnectTab(tab))
+          restored.filter((tab) => tab.sessionId === null).forEach((tab) => void attemptConnectTab(tab))
         }
       })
       .catch(() => {})
@@ -422,6 +446,22 @@ function App() {
     removeTab(id)
   }
 
+  // The session behind this tab is gone but the tab isn't: the terminal's socket dropped and
+  // the backend no longer has that session (it aged out of its detached grace period, or was
+  // disconnected from elsewhere). Keep the tab and reconnect it - the same treatment a tab
+  // gets when the remote host reboots under it. Only handleTerminalSessionClosed above, which
+  // means the shell itself ended, still takes the tab away.
+  function handleTerminalSessionLost(id: string) {
+    const tab = tabsRef.current.find((t) => t.id === id)
+    if (!tab) return
+    // Any retry chain already running for this tab is superseded by the one below - without
+    // this, a tab that loses its session twice ends up with two chains dialling the host.
+    cancelReconnect(id)
+    const reconnecting: SessionTab = { ...tab, sessionId: null, status: 'connecting', errorMessage: undefined }
+    updateTab(id, { sessionId: null, status: 'connecting', errorMessage: undefined })
+    void attemptConnectTab(reconnecting)
+  }
+
   // A tab that isn't connected yet has no live session to lose, so closing it skips the
   // "close this session?" confirmation entirely - that dialog exists to prevent
   // accidentally dropping a real connection, which doesn't apply here.
@@ -483,6 +523,7 @@ function App() {
                         sessionId={tab.sessionId}
                         isActive={activeTabId === tab.id}
                         onSessionClosed={() => handleTerminalSessionClosed(tab.id)}
+                        onSessionLost={() => handleTerminalSessionLost(tab.id)}
                         onActivity={() => markTabUnseen(tab.id)}
                         request={tab.request}
                         startupCommands={tab.startupCommands}

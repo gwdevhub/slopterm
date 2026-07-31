@@ -12,6 +12,20 @@ public sealed class SessionStore<T> where T : class, IDisposable
 
     public T? Get(string id) => _sessions.GetValueOrDefault(id);
 
+    /// <summary>
+    /// How many connections are live. The Android head reads this on its way to the
+    /// background to decide whether keeping the process running is worth a notification
+    /// (see SessionKeepAliveService) - no sessions, no service.
+    /// </summary>
+    public int Count => _sessions.Count;
+
+    /// <summary>
+    /// A point-in-time copy, safe to iterate while other threads add and remove - used by
+    /// the detached-session reaper and by the "what's still connected" listing the frontend
+    /// consults after a reload.
+    /// </summary>
+    public KeyValuePair<string, T>[] Snapshot() => _sessions.ToArray();
+
     /// <returns>
     /// The removed session, or null if nothing was removed (e.g. a natural WS-close and an
     /// explicit disconnect call both racing to remove the same id) - callers use this to log

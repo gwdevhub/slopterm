@@ -28,6 +28,13 @@ public sealed class AgentConversation : IDisposable
     // Transcripts are capped when persisted so a long-lived host chat can't grow unbounded.
     private const int MaxPersistedMessages = 200;
 
+    // How much command output a single tool result may carry back to the model. Capped here
+    // rather than left to whatever the scrollback ring happens to hold: the ring is sized for
+    // the terminal WebSocket's replay needs, and a tool result goes into the transcript and is
+    // re-sent on every subsequent round of the turn, so one `cat` of a big file would
+    // otherwise sit in the context window for the rest of the conversation.
+    private const int MaxToolOutputBytes = 256 * 1024;
+
     private readonly TerminalSession _session;
     private readonly string _hostKey;         // "user@host:port", lowercase - groups saved chats per host
     private readonly string _legacyRecordId;  // pre-multi-chat record id (hash of _hostKey) - adopted if present
@@ -822,7 +829,7 @@ public sealed class AgentConversation : IDisposable
                 // final "\r" runs the last line - a single-line command is just "cmd\r".
                 _session.WriteToShell(ToPtyInput(command) + "\r");
                 await ReadUntilIdleAsync(ct);
-                var output = AnsiText.Strip(_session.Scrollback.SnapshotSince(before));
+                var output = AnsiText.Strip(_session.Scrollback.SnapshotSince(before, MaxToolOutputBytes));
                 return ($"ran: {OneLine(command, 80)}", output);
             }
 
@@ -869,7 +876,7 @@ public sealed class AgentConversation : IDisposable
                 var before = _session.Scrollback.TotalWritten;
                 _session.WriteToShell(keys); // no newline appended - for prompts / pagers
                 await Task.Delay(400, ct);
-                var output = AnsiText.Strip(_session.Scrollback.SnapshotSince(before));
+                var output = AnsiText.Strip(_session.Scrollback.SnapshotSince(before, MaxToolOutputBytes));
                 return ($"pressed keys: {OneLine(keys, 80)}", output);
             }
 
@@ -889,7 +896,7 @@ public sealed class AgentConversation : IDisposable
                 seconds = Math.Clamp(seconds, 1, 60);
                 var before = _session.Scrollback.TotalWritten;
                 await Task.Delay(seconds * 1000, ct);
-                var output = AnsiText.Strip(_session.Scrollback.SnapshotSince(before));
+                var output = AnsiText.Strip(_session.Scrollback.SnapshotSince(before, MaxToolOutputBytes));
                 return ($"waited {seconds}s", output);
             }
 
