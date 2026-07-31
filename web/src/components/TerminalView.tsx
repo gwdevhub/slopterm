@@ -5,7 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import { resizeTerminal, sshSessionState, sshUpload, terminalSocketUrl, type ConnectRequest } from '../lib/api'
 import { getAppearance, subscribeAppearance, terminalFontFamily } from '../lib/appearance'
 import { KeyboardToolbar } from './KeyboardToolbar'
-import { isMobileApp } from '../lib/androidBridge'
+import { isMobileApp, registerCompositionBridge } from '../lib/androidBridge'
 
 interface TerminalViewProps {
   sessionId: string
@@ -93,6 +93,10 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
   // set once the socket exists, reset to a no-op on cleanup so a stale tap after teardown
   // can't throw on a closed socket.
   const sendRawRef = useRef<(data: string) => void>(() => {})
+  // Clears the frozen composition preview (see the .composition-view handling in the terminal
+  // effect below) once real output has actually arrived - set from that effect, called from the
+  // socket effect's message handler, same cross-effect-ref pattern as sendRawRef/fitAndSyncRef.
+  const unfreezeCompositionRef = useRef<() => void>(() => {})
   // Ctrl/Alt are "sticky" one-shot modifiers for the toolbar (mobile keyboards have no
   // physical Ctrl/Alt to hold): tapping arms one, then the *next* single character the
   // terminal produces is remapped into the equivalent control code / ESC-prefixed meta byte
@@ -389,6 +393,46 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     const textarea = container.querySelector('textarea')
     textarea?.addEventListener('paste', onPaste)
 
+    // Lets the Android keyboard toolbar (see KeyboardToolbar.tsx) commit an in-progress IME
+    // composition before a button's own bytes go out, without racing xterm's own handling of
+    // the same commit. No-op off Android.
+    const disposeCompositionBridge = textarea ? registerCompositionBridge(textarea) : undefined
+
+    // Bridges the exact gap between the IME ending composition (e.g. the trailing space after
+    // a word - see CompositionHelper.compositionend in xterm) and that same word's characters
+    // reappearing once the remote shell's echo has round-tripped back. xterm hides its own
+    // composition preview (the .composition-view overlay showing the in-progress word at the
+    // cursor) the instant compositionend fires, but doesn't actually send the committed text
+    // until its own deferred setTimeout(0) runs, and the remote then has to receive and echo
+    // it back before anything real is drawn - on a real network that gap is what read as the
+    // just-typed word vanishing for a moment. Freezing that same already-positioned element in
+    // place (see the socket message handler below, which clears it once real output arrives)
+    // closes the gap without us tracking cursor/cell geometry ourselves - only xterm's own
+    // internal services have access to that.
+    const compositionView = container.querySelector<HTMLElement>('.composition-view')
+    let compositionFreezeTimeout: ReturnType<typeof setTimeout> | undefined
+    function unfreezeComposition() {
+      clearTimeout(compositionFreezeTimeout)
+      compositionFreezeTimeout = undefined
+      compositionView?.classList.remove('active')
+    }
+    unfreezeCompositionRef.current = unfreezeComposition
+    const onCompositionEnd = () => {
+      // xterm's own listener (registered first, at term.open() time - same-event listeners
+      // fire in registration order) already removed 'active' as part of hiding it; re-adding
+      // it here, synchronously after that, is what keeps the preview visible without
+      // interfering with xterm's own handling of the commit.
+      if (compositionView?.textContent) {
+        compositionView.classList.add('active')
+        // Backstop for a shell that never echoes what was typed (rare, but possible) - don't
+        // leave stale composed text on screen forever if the real echo never arrives.
+        compositionFreezeTimeout = setTimeout(unfreezeComposition, 1000)
+      }
+    }
+    const onCompositionStart = () => clearTimeout(compositionFreezeTimeout)
+    textarea?.addEventListener('compositionend', onCompositionEnd)
+    textarea?.addEventListener('compositionstart', onCompositionStart)
+
     // Drag a file from the OS onto the terminal to upload it into the shell's cwd. dragover
     // must preventDefault or the browser never fires a drop; copy is the right affordance.
     const onDragOver = (event: DragEvent) => {
@@ -488,8 +532,12 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     return () => {
       unsubscribeAppearance()
       clearTimeout(resizeTimeout)
+      clearTimeout(compositionFreezeTimeout)
       resizeObserver.disconnect()
       textarea?.removeEventListener('paste', onPaste)
+      textarea?.removeEventListener('compositionend', onCompositionEnd)
+      textarea?.removeEventListener('compositionstart', onCompositionStart)
+      disposeCompositionBridge?.()
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
       container.removeEventListener('touchend', onTouchEnd)
@@ -498,6 +546,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       termRef.current = null
       sendRawRef.current = () => {}
       fitAndSyncRef.current = () => {}
+      unfreezeCompositionRef.current = () => {}
     }
     // startupCommands is intentionally excluded - it's fixed for the lifetime of a given
     // sessionId (resolved once at tab-creation time, see App.tsx), so re-running this
@@ -586,6 +635,9 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
 
         const bytes = new Uint8Array(event.data as ArrayBuffer)
         offsetRef.current = (offsetRef.current ?? 0) + bytes.byteLength
+        // Real output has arrived - it's at least as current as any frozen composition preview
+        // (see the terminal effect above), so drop that preview before drawing over it.
+        unfreezeCompositionRef.current()
         termRef.current?.write(bytes)
         // Output landed while this tab is in the background - flag it once (until next viewed).
         if (!isActiveRef.current && !activityNotifiedRef.current) {

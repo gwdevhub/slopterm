@@ -378,23 +378,18 @@ public class MainActivity : Activity
         }
 
         // Called by the web keyboard toolbar (see KeyboardToolbar.tsx's usePressProps) right
-        // before it acts on a button press. Composing is back on (see TerminalWebView below),
-        // so whatever word the IME is still holding uncommitted needs to land in the shell
-        // *before* the button's own bytes do, or it's lost outright - the original bug this
-        // whole area exists to avoid. Blocks the bridge thread (never the UI thread) on a
-        // bounded wait so the JS caller's next line - sending the button's own bytes - is
-        // guaranteed to run after the commit actually landed, not racing it.
+        // before it acts on a button press, so whatever word the IME is still holding
+        // uncommitted lands in the shell before the button's own bytes do, rather than being
+        // torn down and lost outright. Deliberately fire-and-forget: this call returning only
+        // means the UI thread has been asked to commit, not that the page has actually
+        // processed it - the ordering guarantee that used to be attempted here by blocking the
+        // bridge thread has moved entirely to the JS side (see finishAndroidComposing() in
+        // androidBridge.ts), which waits for the real compositionend DOM event instead.
         [JavascriptInterface]
         [Export("finishComposing")]
         public void FinishComposing()
         {
-            using var committed = new System.Threading.ManualResetEventSlim(false);
-            _activity.RunOnUiThread(() =>
-            {
-                _activity._webView?.FinishComposingText();
-                committed.Set();
-            });
-            committed.Wait(200);
+            _activity.RunOnUiThread(() => _activity._webView?.FinishComposingText());
         }
     }
 
