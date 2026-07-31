@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal, type FontWeight } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { resizeTerminal, sshUpload, terminalSocketUrl, type ConnectRequest } from '../lib/api'
+import { resizeTerminal, sshSessionState, sshUpload, terminalSocketUrl, type ConnectRequest } from '../lib/api'
 import { getAppearance, subscribeAppearance, terminalFontFamily } from '../lib/appearance'
 import { KeyboardToolbar } from './KeyboardToolbar'
 import { isMobileApp } from '../lib/androidBridge'
@@ -11,6 +11,11 @@ interface TerminalViewProps {
   sessionId: string
   isActive: boolean
   onSessionClosed: () => void
+  // The session this view was attached to is gone from the backend (it aged out of its
+  // detached grace period, or was disconnected elsewhere) but the tab itself should live on
+  // and get a fresh connection. Distinct from onSessionClosed, which means the *shell*
+  // ended - `exit` - and the tab is genuinely finished.
+  onSessionLost: () => void
   // Fired the first time output arrives while this tab is in the background (inactive), so
   // App.tsx can flag it as having unseen activity (see the favicon tab badge). Fires at most
   // once per background stretch - it re-arms when the tab is next viewed.
@@ -52,10 +57,24 @@ function applyStickyModifiers(char: string, armed: { ctrl: boolean; alt: boolean
 // Renders only the terminal itself - the tab strip (App.tsx/TabBar.tsx) owns the
 // session label and close/disconnect action now that multiple sessions can be open at
 // once (issue #9), so a second "Session xxx / Disconnect" header here would be redundant.
-export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity, request, startupCommands }: TerminalViewProps) {
+export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLost, onActivity, request, startupCommands }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const onSessionClosedRef = useRef(onSessionClosed)
+  const onSessionLostRef = useRef(onSessionLost)
+  // The live socket, owned by its own effect below rather than by the terminal's - the
+  // terminal outlives any individual connection to it now, so everything that writes to the
+  // backend goes through this ref instead of closing over one particular socket.
+  const socketRef = useRef<WebSocket | null>(null)
+  // How many bytes of this session's output we've rendered. Sent as `?since=` on reattach so
+  // the backend replays exactly the gap, and updated from the attach header + every frame.
+  const offsetRef = useRef<number | undefined>(undefined)
+  const startupCommandsRef = useRef(startupCommands)
+  // fitAndSyncSize lives in the terminal effect but has to run when a socket opens.
+  const fitAndSyncRef = useRef<() => void>(() => {})
+  const [reconnecting, setReconnecting] = useState(false)
+  // Another window took this session over - see the 'session-superseded' close reason.
+  const [superseded, setSuperseded] = useState(false)
   // isActive/onActivity read from refs inside the [sessionId]-keyed socket effect below,
   // which captures its closure once; activityNotifiedRef debounces the callback to one fire
   // per background stretch (re-armed when the tab becomes active again).
@@ -135,6 +154,14 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
   useEffect(() => {
     onSessionClosedRef.current = onSessionClosed
   }, [onSessionClosed])
+
+  useEffect(() => {
+    onSessionLostRef.current = onSessionLost
+  }, [onSessionLost])
+
+  useEffect(() => {
+    startupCommandsRef.current = startupCommands
+  }, [startupCommands])
 
   useEffect(() => {
     onActivityRef.current = onActivity
@@ -217,6 +244,9 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
       lastRows = term.rows
       void resizeTerminal(sessionId, term.cols, term.rows)
     }
+    // Also called from the socket effect on every (re)attach - a reattached PTY has to be
+    // told the size again, and the size may well have changed while we were away.
+    fitAndSyncRef.current = fitAndSyncSize
 
     // Live-apply Appearance changes to the terminal font. Char cell size changes with the
     // font, so refit afterwards (which also re-syncs the PTY size to the new col/row count).
@@ -412,52 +442,12 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
     }
     container.addEventListener('touchend', onTouchEnd, { passive: false })
 
-    const socket = new WebSocket(terminalSocketUrl(sessionId))
-    socket.binaryType = 'arraybuffer'
     sendRawRef.current = (data: string) => {
-      if (socket.readyState === WebSocket.OPEN) {
+      const socket = socketRef.current
+      if (socket?.readyState === WebSocket.OPEN) {
         socket.send(new TextEncoder().encode(data))
       }
     }
-
-    const startupTimeouts: ReturnType<typeof setTimeout>[] = []
-    socket.addEventListener('open', () => {
-      term.focus()
-
-      // The shell channel is ready now, so correct the PTY from the ConnectRequest's initial
-      // 80x24 to the terminal's actual measured size (xterm has laid out by this point).
-      fitAndSyncSize()
-
-      // A short guard delay before the first one lets the shell's own banner/prompt print
-      // first, so the command text doesn't land in the middle of it; spacing the rest out
-      // the same way keeps each one from racing a slow prompt on the previous line.
-      let delay = 300
-      for (const command of startupCommands ?? []) {
-        const text = command.endsWith('\n') || command.endsWith('\r') ? command : `${command}\r`
-        startupTimeouts.push(
-          setTimeout(() => {
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(new TextEncoder().encode(text))
-            }
-          }, delay),
-        )
-        delay += 300
-      }
-    })
-    socket.addEventListener('message', (event) => {
-      term.write(new Uint8Array(event.data as ArrayBuffer))
-      // Output landed while this tab is in the background - flag it once (until next viewed).
-      if (!isActiveRef.current && !activityNotifiedRef.current) {
-        activityNotifiedRef.current = true
-        onActivityRef.current?.()
-      }
-    })
-    let disposed = false
-    socket.addEventListener('close', () => {
-      // Cleanup also closes the socket when React intentionally unmounts this view;
-      // only a close received while the view is live represents the session ending.
-      if (!disposed) onSessionClosedRef.current()
-    })
 
     const dataDisposable = term.onData((data) => {
       let payload = data
@@ -474,9 +464,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
         modifiersRef.current = { ctrl: false, alt: false }
         setModifiers({ ctrl: false, alt: false })
       }
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(new TextEncoder().encode(payload))
-      }
+      sendRawRef.current(payload)
     })
 
     // Re-fit and push the new size to the backend PTY when the container changes size.
@@ -498,9 +486,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
     resizeObserver.observe(container)
 
     return () => {
-      disposed = true
       unsubscribeAppearance()
-      startupTimeouts.forEach(clearTimeout)
       clearTimeout(resizeTimeout)
       resizeObserver.disconnect()
       textarea?.removeEventListener('paste', onPaste)
@@ -508,16 +494,218 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
       container.removeEventListener('drop', onDrop)
       container.removeEventListener('touchend', onTouchEnd)
       dataDisposable.dispose()
-      socket.close()
       term.dispose()
       termRef.current = null
       sendRawRef.current = () => {}
+      fitAndSyncRef.current = () => {}
     }
     // startupCommands is intentionally excluded - it's fixed for the lifetime of a given
     // sessionId (resolved once at tab-creation time, see App.tsx), so re-running this
     // whole effect over a prop-identity change would just tear down and recreate the same
     // live session for no reason. request is likewise stable per tab and read via a ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
+
+  // The connection to the session, deliberately separate from the terminal above: the shell
+  // now outlives any one WebSocket, so losing the socket has to be survivable without
+  // throwing away the terminal (and everything on its screen) with it.
+  //
+  // The Android case this exists for: the app goes to the background, the WebView is
+  // suspended or its renderer reclaimed, and this socket dies for reasons that say nothing
+  // about the SSH connection - which the backend now keeps detached for a few minutes. So a
+  // close is treated as "reattach", and only an explicit close reason from the server means
+  // the session is actually over.
+  useEffect(() => {
+    // A tab keeps this component across a reconnect (App.tsx keys the list by tab id, not by
+    // session), so a new session id has to start from a clean slate with nothing rendered yet.
+    offsetRef.current = undefined
+
+    let disposed = false
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    let retryDelay = 500
+    const startupTimeouts: ReturnType<typeof setTimeout>[] = []
+    // The socket this effect currently considers live. Every handler checks its own socket
+    // against it and does nothing if it isn't the current one: a retry timer, a
+    // visibilitychange and an in-flight "is the session still there?" probe can all decide to
+    // reconnect at nearly the same moment, and without this the losers of that race keep
+    // running - each opening another socket on its own close, which is a connection storm
+    // rather than a reconnect.
+    let current: WebSocket | null = null
+
+    function connect() {
+      if (disposed) return
+      clearTimeout(retryTimer)
+      retryTimer = undefined
+
+      const socket = new WebSocket(terminalSocketUrl(sessionId, offsetRef.current))
+      socket.binaryType = 'arraybuffer'
+      current = socket
+      socketRef.current = socket
+
+      socket.addEventListener('open', () => {
+        if (disposed || current !== socket) return
+        retryDelay = 500
+        setReconnecting(false)
+        setSuperseded(false)
+        termRef.current?.focus()
+
+        // The shell channel is ready now, so correct the PTY from the ConnectRequest's initial
+        // 80x24 to the terminal's actual measured size (xterm has laid out by this point) -
+        // and, on a reattach, from whatever size it had before we were interrupted.
+        fitAndSyncRef.current()
+      })
+
+      socket.addEventListener('message', (event) => {
+        if (current !== socket) return
+        // A text frame is the attach header (see TerminalSession.AttachAsync), saying where
+        // in the session's output the byte stream that follows begins. Everything else on
+        // this channel is raw PTY bytes, so the type is all the disambiguation needed. The
+        // backend also re-sends it mid-stream if this socket ever falls so far behind that
+        // the replay buffer drops output - hence resetting on `gap` here and not just on the
+        // first frame.
+        if (typeof event.data === 'string') {
+          try {
+            const header = JSON.parse(event.data) as { type?: string; offset?: number; gap?: boolean; fresh?: boolean }
+            if (header.type === 'attach' && typeof header.offset === 'number') {
+              offsetRef.current = header.offset
+              // What follows doesn't join onto what's on screen. Start clean rather than
+              // splice a hole.
+              if (header.gap) termRef.current?.reset()
+              // The backend, not this component, decides whether the host's startup snippets
+              // still need running: only it knows whether this session has ever had a client.
+              // A page reload mounts a brand-new terminal onto a shell that may have been
+              // running for minutes, and typing the startup list into that a second time is
+              // exactly the kind of thing that reruns someone's deploy script.
+              if (header.fresh) sendStartupCommands()
+            }
+          } catch {
+            // Not a header we understand - ignore it rather than feed JSON to the terminal.
+          }
+          return
+        }
+
+        const bytes = new Uint8Array(event.data as ArrayBuffer)
+        offsetRef.current = (offsetRef.current ?? 0) + bytes.byteLength
+        termRef.current?.write(bytes)
+        // Output landed while this tab is in the background - flag it once (until next viewed).
+        if (!isActiveRef.current && !activityNotifiedRef.current) {
+          activityNotifiedRef.current = true
+          onActivityRef.current?.()
+        }
+      })
+
+      socket.addEventListener('close', (event) => {
+        // Cleanup also closes the socket when React intentionally unmounts this view, and a
+        // socket that has already been superseded has nothing left to say.
+        if (disposed || current !== socket) return
+        current = null
+        socketRef.current = null
+
+        if (event.reason === 'session-ended') {
+          // The shell itself ended (`exit`) - the tab is done. Stop this effect's own
+          // machinery first: App unmounts us in response, but a visibilitychange landing in
+          // the meantime would otherwise reconnect and fire the callback a second time.
+          disposed = true
+          clearTimeout(retryTimer)
+          onSessionClosedRef.current()
+          return
+        }
+
+        if (event.reason === 'session-lost') {
+          // The SSH connection to the host died (a WiFi-to-mobile handover, the host
+          // rebooting). The user isn't finished, so keep the tab and dial again.
+          disposed = true
+          clearTimeout(retryTimer)
+          onSessionLostRef.current()
+          return
+        }
+
+        if (event.reason === 'session-superseded') {
+          // Another window attached to this same session and took it over. Reconnecting would
+          // evict that one straight back, and the two would trade the session forever, so
+          // this one stops and says so instead.
+          setSuperseded(true)
+          setReconnecting(false)
+          return
+        }
+
+        setReconnecting(true)
+        // Any other close - including the anonymous one the browser reports for both a
+        // rejected upgrade and a dead network - tells us nothing on its own, so ask.
+        void sshSessionState(sessionId).then((state) => {
+          // Something already reconnected while the question was in flight (coming back to
+          // the app doesn't wait for it) - leave that socket alone.
+          if (disposed || current !== null) return
+          if (state === 'ended') {
+            // The shell finished while we were away. Close the tab, rather than quietly
+            // opening a whole new authenticated session the user never asked for.
+            disposed = true
+            onSessionClosedRef.current()
+            return
+          }
+          if (state === 'unknown') {
+            disposed = true
+            onSessionLostRef.current()
+            return
+          }
+          retryTimer = setTimeout(connect, retryDelay)
+          // Backs off to half a minute rather than settling at a few seconds: when the answer
+          // is "live" only because the backend didn't answer at all (see sshSessionState),
+          // this is every open tab polling a server that may simply be gone, and on a phone
+          // that is a wakeup every few seconds for as long as the app is open. Coming back to
+          // the app resets it to an immediate retry, so responsiveness doesn't depend on it.
+          retryDelay = Math.min(retryDelay * 2, 30_000)
+        })
+      })
+    }
+
+    // Sends the host's startup snippets. Called only from the attach header's `fresh` flag,
+    // which is the backend saying this socket is the session's first ever client.
+    function sendStartupCommands() {
+      // A short guard delay before the first one lets the shell's own banner/prompt print
+      // first, so the command text doesn't land in the middle of it; spacing the rest out the
+      // same way keeps each one from racing a slow prompt on the previous line.
+      let delay = 300
+      for (const command of startupCommandsRef.current ?? []) {
+        const text = command.endsWith('\n') || command.endsWith('\r') ? command : `${command}\r`
+        startupTimeouts.push(setTimeout(() => sendRawRef.current(text), delay))
+        delay += 300
+      }
+    }
+
+    connect()
+
+    // Coming back to the app is the moment to retry, not whenever a backoff timer happens to
+    // fire: a backgrounded page has its timers throttled to about one a minute and a frozen
+    // one has them stopped altogether, so waiting on the timer alone would leave the user
+    // looking at a dead terminal for up to a minute after switching back. These events fire
+    // on thaw, which is exactly the right moment.
+    // Deliberately still runs when superseded: what causes the two-window ping-pong is the
+    // automatic backoff retry, which the superseded branch stops. Coming back to a window is
+    // the user saying they want this one, and two windows that are both on screen never fire
+    // this at all - so reclaiming here settles rather than oscillates.
+    function reconnectNow() {
+      if (disposed || document.visibilityState !== 'visible') return
+      if (current && (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) return
+      retryDelay = 500
+      connect()
+    }
+    document.addEventListener('visibilitychange', reconnectNow)
+    window.addEventListener('pageshow', reconnectNow)
+    window.addEventListener('online', reconnectNow)
+
+    return () => {
+      disposed = true
+      clearTimeout(retryTimer)
+      startupTimeouts.forEach(clearTimeout)
+      document.removeEventListener('visibilitychange', reconnectNow)
+      window.removeEventListener('pageshow', reconnectNow)
+      window.removeEventListener('online', reconnectNow)
+      const socket = current
+      current = null
+      socketRef.current = null
+      socket?.close()
+    }
   }, [sessionId])
 
   // Re-focus when this tab becomes the active one - it stays mounted-but-hidden while
@@ -533,6 +721,19 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onActivity,
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {/* Deliberately a thin strip rather than an overlay: the session is still there and its
+          last screen is still accurate, so it stays readable while we get the socket back. */}
+      {superseded ? (
+        <p className="shrink-0 border-b border-amber-900/60 bg-amber-950/60 px-3 py-1.5 text-sm text-amber-200">
+          This session was taken over by another slopterm window.
+        </p>
+      ) : (
+        reconnecting && (
+          <p className="shrink-0 border-b border-amber-900/60 bg-amber-950/60 px-3 py-1.5 text-sm text-amber-200">
+            Reconnecting to this session…
+          </p>
+        )
+      )}
       {uploadStatus && (
         <p
           className={`shrink-0 border-b border-slate-800 px-3 py-1.5 text-sm ${uploadStatus.error ? 'bg-red-950/60 text-red-300' : 'bg-slate-900 text-slate-300'}`}

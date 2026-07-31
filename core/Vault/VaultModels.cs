@@ -189,6 +189,14 @@ public sealed class OpenTabRecord
     // time same as the credential above - a restart replays whatever ran the first time,
     // even if the underlying snippet was since edited/deleted.
     public List<string> StartupCommands { get; set; } = [];
+
+    // The backend session id this tab was attached to. A session now outlives its terminal
+    // WebSocket by a few minutes, so a page reload in that window can reattach to the shell
+    // that's still running rather than opening a fresh connection - the frontend checks this
+    // against GET /api/ssh/sessions on restore and ignores it when it isn't listed (which is
+    // always the case after an actual restart, since ids are per-process). Not a credential:
+    // an opaque per-process GUID.
+    public string? SessionId { get; set; }
 }
 
 /// <summary>

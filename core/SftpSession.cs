@@ -16,6 +16,26 @@ public sealed class SftpSession : IDisposable
     public string Username { get; }
     public string HomeDirectory { get; }
 
+    /// <summary>
+    /// Whether the SSH link under this SFTP channel is still up. An SFTP session holds no
+    /// WebSocket, so nothing else would ever notice it going stale - and a stale one is worse
+    /// than absent, since a tab reattached to it looks connected but fails on every click.
+    /// </summary>
+    public bool IsConnected
+    {
+        get
+        {
+            try
+            {
+                return _client.IsConnected;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+    }
+
     private SftpSession(string id, SftpClient client, string host, int port, string username)
     {
         Id = id;
@@ -29,7 +49,15 @@ public sealed class SftpSession : IDisposable
     public static SftpSession Connect(ConnectRequest request)
     {
         var connectionInfo = SshConnectionInfoFactory.Create(request);
-        var client = new SftpClient(connectionInfo);
+        var client = new SftpClient(connectionInfo)
+        {
+            // A file-browsing tab is idle between clicks, and an idle SFTP channel is reaped
+            // by NAT/sshd just like an idle shell - which showed up as the first click after
+            // leaving the app sitting for a while failing. Matches ForwardingService/
+            // SyncService/TerminalSession; set on the client, since in SSH.NET the property
+            // lives on BaseClient rather than on ConnectionInfo.
+            KeepAliveInterval = TimeSpan.FromSeconds(30),
+        };
         client.Connect();
         return new SftpSession(Guid.NewGuid().ToString("N"), client, request.Host, request.Port, request.Username);
     }

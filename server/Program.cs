@@ -54,8 +54,19 @@ void Quit()
     // session happens to end. Disposal makes the shell reads throw ObjectDisposedException
     // immediately; ApplicationStopping (linked into the WS receive loops) and the 2s
     // ShutdownTimeout backstop cover everything else.
-    sessions.DisposeAll();
-    sftpSessions.DisposeAll();
+    //
+    // Time-boxed, because this runs before StopApplication and so isn't covered by that
+    // ShutdownTimeout at all: SSH.NET's channel close and disconnect are synchronous and both
+    // wait on a host that may be unreachable - which is now a likelier state for a session to
+    // be in, since a session whose transport broke sits in the store until it's reaped rather
+    // than dying with its WebSocket. Stragglers keep unwinding on their own thread; the
+    // process exiting takes care of them.
+    var teardown = Task.Run(() =>
+    {
+        sessions.DisposeAll();
+        sftpSessions.DisposeAll();
+    });
+    teardown.Wait(TimeSpan.FromSeconds(2));
     app.Lifetime.StopApplication();
 }
 

@@ -71,9 +71,69 @@ export async function sshUpload(
   return res.json()
 }
 
-export function terminalSocketUrl(sessionId: string): string {
+// `since` is how many bytes of this session's output the caller has already rendered, so a
+// reattach after the socket dropped (the Android app was in the background, the page was
+// reloaded) picks up exactly where the screen left off instead of restarting the stream.
+// Omit it when there's nothing on screen to continue from - the backend then replays the
+// whole tail it still has.
+export function terminalSocketUrl(sessionId: string, since?: number): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${window.location.host}/ws/terminal/${sessionId}`
+  const query = since === undefined ? '' : `?since=${since}`
+  return `${protocol}//${window.location.host}/ws/terminal/${sessionId}${query}`
+}
+
+export interface LiveSshSession {
+  sessionId: string
+  host: string
+  port: number
+  username: string
+  attached: boolean
+}
+
+// The SSH sessions the backend still holds. Losing the terminal WebSocket doesn't end a
+// session any more (it survives detached for a few minutes), so this is what lets a reloaded
+// page find the sessions its restored tabs were already on.
+export async function listSshSessions(): Promise<LiveSshSession[]> {
+  const res = await fetch('/api/ssh/sessions')
+  await throwOnError(res)
+  return res.json()
+}
+
+export interface LiveSftpSession {
+  sessionId: string
+  host: string
+  port: number
+  username: string
+  homeDirectory: string
+}
+
+// The SFTP equivalent, so restored file-browser tabs reattach rather than opening a second
+// connection per tab and orphaning the first.
+export async function listSftpSessions(): Promise<LiveSftpSession[]> {
+  const res = await fetch('/api/sftp/sessions')
+  await throwOnError(res)
+  return res.json()
+}
+
+//   live    - the backend is still holding this session; reattach to it.
+//   ended   - its shell finished while we were away; the tab is done.
+//   unknown - no such session; whatever it was, it's not coming back.
+export type SshSessionState = 'live' | 'ended' | 'unknown'
+
+// What became of a session, asked after the terminal's socket closed. The browser reports a
+// rejected WebSocket upgrade and a dead connection identically, so this is the only way to
+// tell "reattach", "close the tab" and "dial a new connection" apart.
+export async function sshSessionState(sessionId: string): Promise<SshSessionState> {
+  try {
+    const res = await fetch(`/api/ssh/session/${sessionId}/state`)
+    await throwOnError(res)
+    const body = (await res.json()) as { state?: SshSessionState }
+    return body.state ?? 'unknown'
+  } catch {
+    // The backend didn't answer at all - that's no evidence about the session, so report it
+    // as live and let the caller keep retrying rather than tear anything down.
+    return 'live'
+  }
 }
 
 // The AI-agent bottom bar's streaming channel - a sibling of terminalSocketUrl using the
@@ -482,6 +542,11 @@ export interface OpenTabRecord {
   secret?: string
   passphrase?: string
   startupCommands?: string[]
+  // The live backend session this tab was on, so a reload that happens while the session is
+  // still held (see listSshSessions) reattaches to the running shell instead of dialing a
+  // second connection to the same host. Meaningless across a restart - session ids are
+  // per-process - which is exactly what checking it against the live listing handles.
+  sessionId?: string
 }
 
 export interface OpenTabsRecord {
