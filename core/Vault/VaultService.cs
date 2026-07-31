@@ -314,6 +314,7 @@ public sealed class VaultService
                 throw new InvalidOperationException("Not a valid slopterm vault backup - missing vault.json.");
             }
 
+            var deviceId = ReadDeviceId();
             Lock();
             if (Directory.Exists(_vaultDir))
             {
@@ -321,6 +322,7 @@ public sealed class VaultService
             }
 
             Directory.Move(stagingDir, _vaultDir);
+            RestoreDeviceId(deviceId);
         }
         finally
         {
@@ -343,13 +345,39 @@ public sealed class VaultService
     /// </summary>
     public void ResetToDefault()
     {
+        var deviceId = ReadDeviceId();
         Lock();
         if (Directory.Exists(_vaultDir))
         {
             Directory.Delete(_vaultDir, recursive: true);
         }
 
+        RestoreDeviceId(deviceId);
         EnsureUnlockedIfPasswordNotRequired();
+    }
+
+    // device-id identifies the MACHINE, not the vault contents (see DeviceIdentity), so it
+    // survives both wipes above - it lives in the vault directory only because that's where
+    // this app's per-install state goes. Losing it would silently strand every scheduled job
+    // pinned to this device, including after restoring your own backup onto the same machine,
+    // and would leave the running process's cached id disagreeing with the file on disk.
+    // Import still can't carry one IN: ExportBackup never packages it, so a backup restored
+    // on a second machine keeps that machine's own identity.
+    private string? ReadDeviceId()
+    {
+        var path = Path.Combine(_vaultDir, "device-id");
+        return File.Exists(path) ? File.ReadAllText(path) : null;
+    }
+
+    private void RestoreDeviceId(string? deviceId)
+    {
+        if (deviceId is null)
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(_vaultDir);
+        File.WriteAllText(Path.Combine(_vaultDir, "device-id"), deviceId);
     }
 
     private void WriteMetadata(byte[] salt, byte[] key)
@@ -647,6 +675,103 @@ public sealed class VaultService
         ListRecords<SyncRuleRecord>("sync-rules");
     public string SaveSyncRule(string? id, SyncRuleRecord record) => SaveRecord("sync-rules", id, record);
     public bool DeleteSyncRule(string id) => DeleteRecord("sync-rules", id);
+
+    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, JobRecord Record)> ListJobs() =>
+        ListRecords<JobRecord>("jobs");
+    public string SaveJob(string? id, JobRecord record) => SaveRecord("jobs", id, record);
+
+    /// <summary>Drops the job's run history along with it - nothing else references it.</summary>
+    public bool DeleteJob(string id)
+    {
+        DeleteRecord(JobRunsFolder, id);
+        return DeleteRecord("jobs", id);
+    }
+
+    private const string JobRunsFolder = "job-runs";
+    private const int MaxJobRuns = 20;
+    private const int MaxRunOutputChars = 8_000;
+
+    /// <summary>Newest-first, empty if locked/missing/corrupt - never throws (the scheduler polls this).</summary>
+    public IReadOnlyList<JobRunRecord> ListJobRuns(string jobId)
+    {
+        if (!IsUnlocked)
+        {
+            return [];
+        }
+
+        try
+        {
+            var path = Path.Combine(_vaultDir, JobRunsFolder, $"{jobId}.json");
+            if (!File.Exists(path))
+            {
+                return [];
+            }
+
+            var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
+            if (envelope is null)
+            {
+                return [];
+            }
+
+            var json = VaultCrypto.Decrypt(_key!, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
+            return JsonSerializer.Deserialize<JobRunHistoryRecord>(json)?.Runs ?? [];
+        }
+        catch
+        {
+            return []; // a corrupt/unreadable history reads as "no runs recorded"
+        }
+    }
+
+    /// <summary>
+    /// Prepends a run to the job's history, truncating its captured output and evicting
+    /// everything past MaxJobRuns. Best-effort like AppendLog: a locked vault (or a failed
+    /// write) means the run isn't recorded, never that the run itself fails.
+    /// </summary>
+    public void AppendJobRun(string jobId, JobRunRecord run)
+    {
+        if (!IsUnlocked)
+        {
+            return;
+        }
+
+        try
+        {
+            var truncated = run.Truncated;
+            run.Output = Truncate(run.Output, ref truncated);
+            run.ErrorOutput = Truncate(run.ErrorOutput, ref truncated);
+            run.Truncated = truncated;
+
+            var history = new JobRunHistoryRecord { Runs = [run, .. ListJobRuns(jobId).Take(MaxJobRuns - 1)] };
+            SaveRecord(JobRunsFolder, jobId, history);
+        }
+        catch
+        {
+            // best-effort - a failed history write must never break the run that triggered it
+        }
+    }
+
+    public void ClearJobRuns(string jobId)
+    {
+        try
+        {
+            DeleteRecord(JobRunsFolder, jobId);
+        }
+        catch
+        {
+            // best-effort
+        }
+    }
+
+    private static string? Truncate(string? text, ref bool truncated)
+    {
+        if (text is null || text.Length <= MaxRunOutputChars)
+        {
+            return text;
+        }
+
+        truncated = true;
+        return text[..MaxRunOutputChars];
+    }
 
     public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, LogEntryRecord Record)> ListLogs() =>
         ListRecords<LogEntryRecord>("logs").OrderByDescending(l => l.UpdatedAt).ToList();

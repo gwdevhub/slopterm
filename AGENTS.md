@@ -4,7 +4,7 @@
 
 ## Architecture constraints
 
-- **Frontend**: Mobile-first responsive design. Sidebar always visible (Hosts, Keychain, Snippets, Port Forwarding, Logs, Settings). Host cards with SSH/SFTP/Edit buttons. Multi-session tabs with reconnect on restart.
+- **Frontend**: Mobile-first responsive design. Sidebar always visible (Hosts, Keychain, Port Forwarding, Folder Sync, Scheduled Jobs, Snippets, Logs, Appearance, Settings). Host cards with SSH/SFTP/Edit buttons. Multi-session tabs with reconnect on restart.
 - **Backend**: Serve built React bundle + WebSocket PTY via Kestrel. Never bind `0.0.0.0` without opt-in.
 - **Vault**: Per-item AES-GCM + Argon2id encryption. Optional master password (auto-unlock with fixed seed when disabled).
 - **No bundled browser**: Photino for native window (WebView2/WebKitGTK/WKWebView), fallback to external browser.
@@ -18,7 +18,7 @@
 
 ## Testing
 
-- **Mandatory**: Build `win-x64` and run under Wine against a real SSH server. Known Wine gap: no ECDH support.
+- **Mandatory**: Build `win-x64` and run under Wine against a real SSH server. Wine's CNG has no working ECDH (X25519 *or* NIST curves), so `SshConnectionInfoFactory` detects Wine (the `wine_get_version` ntdll export) and negotiates classical Diffie-Hellman instead, which SSH.NET does in managed code. This means the Wine build connects to any default-config OpenSSH server, but *not* to one hardened to ECC-only key exchange - that's a limit of Wine's crypto, not the client.
 - Test all OS targets before committing.
 
 ## Security

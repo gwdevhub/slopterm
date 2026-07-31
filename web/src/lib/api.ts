@@ -396,6 +396,122 @@ export async function stopSyncRule(id: string): Promise<void> {
   await fetch(`/api/sync/rules/${id}/stop`, { method: 'POST' })
 }
 
+// A command run against a saved host on a schedule (backend SchedulerService). The schedule
+// lives in this app, so a job only fires while slopterm is running - the section says so.
+export interface JobRecord {
+  hostId: string
+  name: string
+  // Exactly one of the two - a snippet is resolved to its current text at run time.
+  command?: string
+  snippetId?: string
+  scheduleKind: 'interval' | 'daily'
+  intervalMinutes: number
+  dailyTime: string // "HH:mm", local time
+  enabled: boolean
+  runOnStart: boolean
+  overlapPolicy: 'skip' | 'queue' | 'kill'
+  timeoutSeconds: number
+  failurePattern?: string
+  // null = run on any device; otherwise only the install with this id schedules it (see
+  // the backend's DeviceIdentity - it's what stops a synced job running twice).
+  ownerDeviceId?: string | null
+}
+
+export interface SavedJob {
+  id: string
+  updatedAt: string
+  job: JobRecord
+}
+
+export interface JobRun {
+  startedUtc: string
+  finishedUtc: string
+  // 'success' (exit 0), 'failed' (non-zero exit or a failure-pattern match), or 'error'
+  // (never ran to completion: couldn't connect, timed out, cancelled).
+  outcome: 'success' | 'failed' | 'error'
+  exitCode?: number | null
+  error?: string | null
+  output?: string | null
+  errorOutput?: string | null
+  truncated: boolean
+}
+
+// Unlike forwarding/sync status, EVERY saved job has an entry - 'disabled' and 'otherDevice'
+// are real states to show, so a missing entry only ever means the job was deleted.
+export interface JobStatus {
+  jobId: string
+  hostId: string
+  state: 'waiting' | 'running' | 'disabled' | 'otherDevice'
+  nextRunUtc?: string | null
+  lastRun?: {
+    startedUtc: string
+    finishedUtc: string
+    outcome: JobRun['outcome']
+    exitCode?: number | null
+    error?: string | null
+  } | null
+}
+
+export async function listJobs(): Promise<SavedJob[]> {
+  const res = await fetch('/api/vault/jobs')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function createJob(job: JobRecord): Promise<{ id: string }> {
+  const res = await fetch('/api/vault/jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(job),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function updateJob(id: string, job: JobRecord): Promise<void> {
+  const res = await fetch(`/api/vault/jobs/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(job),
+  })
+  await throwOnError(res)
+}
+
+export async function deleteJob(id: string): Promise<void> {
+  await fetch(`/api/vault/jobs/${id}`, { method: 'DELETE' })
+}
+
+export async function getJobStatus(): Promise<JobStatus[]> {
+  const res = await fetch('/api/jobs/status')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function getDeviceId(): Promise<string> {
+  const res = await fetch('/api/jobs/device-id')
+  await throwOnError(res)
+  return (await res.json()).deviceId
+}
+
+export async function listJobRuns(id: string): Promise<JobRun[]> {
+  const res = await fetch(`/api/jobs/${id}/runs`)
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function clearJobRuns(id: string): Promise<void> {
+  await fetch(`/api/jobs/${id}/runs`, { method: 'DELETE' })
+}
+
+export async function runJobNow(id: string): Promise<void> {
+  const res = await fetch(`/api/jobs/${id}/run`, { method: 'POST' })
+  await throwOnError(res)
+}
+
+export async function cancelJobRun(id: string): Promise<void> {
+  await fetch(`/api/jobs/${id}/cancel`, { method: 'POST' })
+}
+
 export interface SnippetRecord {
   name: string
   command: string

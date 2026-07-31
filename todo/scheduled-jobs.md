@@ -1,75 +1,93 @@
 # Scheduled jobs
 
-**Status: idea only. Nothing here is implemented, and nothing here is decided.** This file
-exists so the thinking isn't lost, not as a spec to build from.
+**Status: shipped (option 1, in-app).** The Scheduled Jobs section runs a saved command
+against a saved host on a schedule and keeps the result. This file is now the record of
+which questions got answered which way, and what's deliberately still open.
 
-Run a command against a saved host on a schedule, from slopterm, and keep the result.
+Backend: `core/SchedulerService.cs`, `JobRecord`/`JobRunRecord` in `core/Vault/VaultModels.cs`.
+Frontend: `web/src/components/JobsSection.tsx`. Covered end-to-end by
+`e2e/tests/scheduled-jobs.spec.ts`, which runs a real job against the disposable sshd and
+asserts its actual stdout comes back.
 
-The pieces are all already here: a host with credentials, snippets that are exactly
-"a command worth keeping", a service layer that already owns long-lived background SSH
-connections (`ForwardingService`, `SyncService`), and vault-encrypted per-record storage.
-"Run this snippet against this host every morning at 6" is a small step from what exists.
+## Where the schedule lives
 
-Motivating cases: a nightly backup script, a cert-expiry check, disk space before it bites,
-pulling a log summary before you sit down.
+**In the app** (option 1 of the three below), and it says so: the section leads with a line
+telling you a job only runs while slopterm is open. That was the whole condition on picking
+this option - best-effort is fine, quietly not running is not.
 
-## The actual question: where does the schedule live?
+1. **In the app.** ← shipped. A single background loop inside the running slopterm process.
+   Cheapest to build, and a job is idle between runs by definition, so there was nothing
+   per-job to keep alive. But a job only runs while the app is running - a laptop that was
+   closed at 6am simply didn't do it, and on Android "in the background at a fixed time" is
+   not something the platform reliably grants at all.
+2. **On the host.** Write the schedule into the target's own cron/systemd timer. Still not
+   built, still the right answer for a job that has to survive the app being closed - the
+   section's banner points at it in words. The costs that kept it out of the first cut are
+   unchanged: writing into a user's crontab is surprising and messy to reconcile if they
+   edit it by hand, and capturing output means agreeing on a log-file convention.
+3. **Both.** Where this still probably lands. It's two features; this was the first one.
 
-Everything else is detail. Three answers, and they're not exclusive:
+## What it actually does
 
-1. **In the app.** A background task per job inside the running slopterm process, exactly
-   like a port forward or a sync rule. Cheapest to build and it reuses a pattern that already
-   works. But a job only runs while the app is running - a laptop that was closed at 6am
-   simply didn't do it, and on Android "in the background at a fixed time" is not something
-   the platform reliably grants at all. Best-effort, and it has to *say* it's best-effort
-   rather than quietly not running.
-2. **On the host.** Write the schedule into the target's own cron/systemd timer and let the
-   machine that's already up 24/7 do the work. Durable, correct, and it keeps running when
-   slopterm never starts again. The costs are real though: we'd be writing into a user's
-   crontab (surprising, and messy to clean up or reconcile if they edit it by hand), and
-   capturing output means agreeing on a convention - a log file we later read back.
-3. **Both.** In-app for "while I'm here", plus an explicit "install this on the host" action
-   for the jobs that have to survive the app being closed. Probably where this lands, but it
-   is two features, so it shouldn't be the first cut.
+- `JobRecord` in `jobs/{id}.json`: `HostId`, a command **or** a `SnippetId` (resolved at run
+  time like startup snippets, so editing the snippet changes the next run), the schedule,
+  `Enabled`, and the answers to the questions below.
+- `SchedulerService` owns ONE loop for every job rather than a task per job the way
+  `ForwardingService`/`SyncService` do - there's no per-job connection to keep alive, and a
+  single loop is the only place that has to know what's due next. Every iteration is wrapped
+  so it can never die: the bug `ForwardingService`'s monitor loop actually had, not
+  re-learned.
+- The loop **re-reads the job records every pass** instead of being told about changes. So
+  there's no start/stop call at all (enabling a job is a plain record edit), live state can't
+  drift from what's saved, and a locked vault is just a pass that finds no jobs - jobs start
+  on their own within one poll of an unlock, with no unlock hook anywhere.
+- `/api/vault/jobs` CRUD + `/api/jobs/status` + `/api/jobs/{id}/run|cancel|runs`, and a
+  `JobsSection` alongside Port Forwarding and Folder Sync.
+- Runs use an SSH **exec** channel, not the interactive PTY the terminal tabs use: a job
+  wants an exit code and clean stdout/stderr, not a shell prompt and escape sequences.
+- Each run opens its own connection and closes it again — deliberately *not* the sketch's
+  shared per-host `SshClient`. An hourly (or nightly) job would otherwise hold an idle
+  connection open between runs purely to save a handshake, and inherit the whole "did this
+  connection die while we weren't looking" retry problem for nothing.
 
-## Shape it would take (option 1, sketched)
+## The open questions, answered
 
-Deliberately mirrors `ForwardingService` / `SyncService`, because a third variation on
-"vault record + background loop + status endpoint + section UI" would be the odd one out:
+- **Where does output go?** A capped, vault-encrypted run history per job
+  (`job-runs/{jobId}.json`, newest first): 20 runs, 8 000 characters of output each, with a
+  "truncated" flag rather than a silent cut. Vault-encrypted because command output can
+  contain anything the session could see. It is **not** in the connection log: that's a
+  connection log (connected/failed/disconnected) and a wall of command output would drown it.
+  A job's history is its own stream, reachable from the card.
+- **What is failure?** Non-zero exit, plus the thing people ask for immediately afterwards:
+  an optional `FailurePattern` regex matched against the run's output, where a match marks
+  the run failed even if it exited 0. A third outcome, `error`, is for "it never ran to
+  completion at all" - couldn't connect, no credential, timed out, cancelled - because that
+  isn't the command saying no, and conflating the two makes both less useful.
+- **Notifications.** The card shows the state (a red dot once the last run failed, amber
+  while one is in flight) and the history modal has the detail. No desktop notification and
+  no tray change: on Android that machinery doesn't reliably exist anyway, and the section is
+  where you'd go to act on it. If this proves too quiet, the Settings dot pattern in
+  `Sidebar.tsx` is the cheap next step.
+- **Catch-up.** Skip, per-job overridable. A schedule that came due while the app was closed
+  is simply skipped and the next run is the next scheduled time - nobody wants two days of
+  missed backups firing at once on launch. `RunOnStart` opts into systemd's `Persistent=true`
+  convention for the people who do expect the missed run to still happen.
+- **Overlap.** All three, per job: `skip` (default - leave the running one alone), `queue`
+  (start the next one the moment it finishes, at most one queued so a slow job can't build a
+  backlog), or `kill` (cancel the running one and start fresh).
+- **Schedule format.** "Every N minutes" or "daily at HH:mm local", not cron. A cron parser
+  would have to be hand-rolled (the no-dependency rule) and the expressiveness nobody uses
+  drags in a pile of edge cases. Daily takes its UTC offset at the *target* instant, so the
+  runs either side of a DST change still land at 6am local.
+- **Two devices, one job.** An owner-device flag: `OwnerDeviceId`, matched against a stable
+  per-install id (`DeviceIdentity`, kept as plain text in the vault directory - it identifies
+  a machine, not a person). **New jobs pin to the creating device by default**, so the moment
+  vault sync lands, a synced backup script doesn't start running on the phone too. Unpinning
+  is a checkbox. The id is never packaged into an exported backup (restoring onto a second
+  machine must produce a second identity) but *is* preserved across import/reset on the same
+  machine, so restoring your own backup doesn't strand every job you pinned.
 
-- `JobRecord` in `jobs/{id}.json`: `HostId`, a command (or `SnippetId` - resolve the text at
-  run time like startup snippets do, so editing the snippet changes the next run), schedule,
-  `Enabled`, and last-run status.
-- `SchedulerService` owning the timers, reusing one background `SshClient` per host across
-  that host's jobs. Every loop iteration wrapped in a try/catch that can never let the loop
-  die - the bug `ForwardingService`'s monitor loop actually had; don't re-learn it.
-- `/api/vault/jobs` CRUD + `/api/jobs/status` + run-now/stop, and a `JobsSection` alongside
-  Port Forwarding and Folder Sync.
-- Runs use an SSH **exec** channel, not the interactive PTY the terminal tabs use: a job wants
-  an exit code and clean stdout/stderr, not a shell prompt and escape sequences.
-
-## Open questions
-
-- **Where does output go?** A capped, vault-encrypted run history per job (like `ai-chats/`),
-  since command output can contain anything the session could see. How much to keep, and is
-  the connection log the right place for "job failed" or is that a separate stream?
-- **What is failure?** Non-zero exit is the obvious answer; "output matched this pattern"
-  is the one people actually ask for next.
-- **Notifications.** The app badge and tray already exist. Does a failed job deserve a
-  desktop notification, and what does that mean on Android?
-- **Catch-up.** The app was closed for two days: does a daily job run once on startup, or
-  skip to the next scheduled time? (Skip is the safer default; `systemd`'s `Persistent=true`
-  is the other convention and people expect it.)
-- **Overlap.** A run still going when the next one is due - skip, queue, or kill?
-- **Schedule format.** A cron expression is familiar but needs a parser (a small one, hand
-  rolled - the dependency rule) and drags in timezone/DST questions. A plain interval avoids
-  all of that and covers most of the cases.
-- **Two devices, one job.** Once vault sync exists, the same job record lives on the laptop
-  *and* the phone, and both could fire it. Needs an owner-device flag or a lease in the synced
-  record - worth deciding before jobs and sync ship together, not after someone's backup
-  script runs twice.
-
-## Non-goals for a first cut
+## Non-goals, still
 
 Job chaining/dependencies, output parsing into structured results, per-job notification
 routing, and running against a whole group of hosts at once. All reasonable later; none of
