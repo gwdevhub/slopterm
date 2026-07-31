@@ -71,15 +71,84 @@ export async function saveFileViaAndroid(blob: Blob, fileName: string, mimeType:
   return true
 }
 
+// Whether the IME is currently holding a word in its composing region (set from the real
+// compositionstart/compositionend events on xterm's own textarea - see
+// registerCompositionBridge). Lets finishAndroidComposing() skip the native round trip
+// entirely on the (overwhelming) majority of toolbar taps where nothing is composing, rather
+// than pay a wait on every single press.
+let composing = false
+// Every in-flight finishAndroidComposing() call's resolver, fulfilled together once the real
+// compositionend is actually observed - a list, not a single slot, because two toolbar taps
+// landing close together (a fast double-tap, or one button's repeat timer firing while an
+// earlier tap's wait is still pending) both need to hear about the same eventual commit
+// rather than the second one silently displacing the first's resolver and leaving it hanging.
+let pendingFinishResolvers: Array<() => void> = []
+// Whether a native finishComposing() request is already outstanding, so a second overlapping
+// call queues onto the same commit instead of asking the IME to finish twice.
+let finishRequestInFlight = false
+
+// Wires up xterm's own input textarea so finishAndroidComposing() can tell a real commit
+// apart from "nothing was composing" and know when one has actually landed. Call once per
+// terminal instance (see TerminalView, alongside the other raw textarea listeners it already
+// attaches) and dispose the returned cleanup on teardown.
+export function registerCompositionBridge(textarea: HTMLTextAreaElement): () => void {
+  const onStart = () => {
+    composing = true
+  }
+  const onEnd = () => {
+    composing = false
+    finishRequestInFlight = false
+    // xterm's own compositionend listener runs first (registered at term.open() time, well
+    // before this one - same-event listeners fire in registration order) and, for a normal
+    // commit like a trailing space, only *schedules* turning the composed word into a real
+    // onData/socket send via its own setTimeout(0) rather than sending it here and now (see
+    // CompositionHelper._finalizeComposition's waitForPropagation branch). Scheduling our own
+    // resolution the same way lands it strictly after that one in the macrotask queue, so
+    // whatever a toolbar button sends next is guaranteed to reach the socket after the
+    // composed word, not before it - the actual mechanism behind "left arrow moves before
+    // -al commits".
+    setTimeout(() => {
+      const resolvers = pendingFinishResolvers
+      pendingFinishResolvers = []
+      resolvers.forEach((resolve) => resolve())
+    }, 0)
+  }
+  textarea.addEventListener('compositionstart', onStart)
+  textarea.addEventListener('compositionend', onEnd)
+  return () => {
+    textarea.removeEventListener('compositionstart', onStart)
+    textarea.removeEventListener('compositionend', onEnd)
+  }
+}
+
 // Commits any word the on-screen keyboard is still composing (underlined, not yet sent to the
-// shell) as if the user had finished typing it normally. Composing is on for real now (see
-// MainActivity's TerminalWebView) so it feels instant to type - xterm.js renders the in-progress
-// word itself right at the cursor - but a toolbar button acting mid-composition would otherwise
-// tear that word down and lose it (the bug that used to make composing get disabled outright).
-// The toolbar calls this synchronously right before it acts, so the commit always lands first.
-// No-op off Android (desktop/browser input never holds a separate composing region this way).
-export function finishAndroidComposing(): void {
-  androidBridge()?.finishComposing()
+// shell) as if the user had finished typing it normally, and resolves only once that commit
+// has actually reached the terminal - not just once the request asking for it returned.
+// MainActivity's native FinishComposing posts the commit into the WebView and returns as soon
+// as that post succeeds, well before the page has actually processed it and fired
+// compositionend - a caller that treated the bridge call itself as the signal could still send
+// its own bytes ahead of the composed word reaching the shell. Resolves immediately, with no
+// native round trip at all, when nothing is composing (nearly every toolbar tap), so this can't
+// reintroduce the lag the toolbar's pointerdown-based repeat exists to avoid.
+export function finishAndroidComposing(): Promise<void> {
+  const bridge = androidBridge()
+  if (!bridge || !composing) return Promise.resolve()
+  return new Promise((resolve) => {
+    pendingFinishResolvers.push(resolve)
+    if (!finishRequestInFlight) {
+      finishRequestInFlight = true
+      bridge.finishComposing()
+    }
+    // Backstop: some IME/WebView combinations could finish composing without ever firing a
+    // real compositionend - don't hang a toolbar button forever waiting for an event that
+    // isn't coming.
+    setTimeout(() => {
+      const index = pendingFinishResolvers.indexOf(resolve)
+      if (index === -1) return
+      pendingFinishResolvers.splice(index, 1)
+      resolve()
+    }, 250)
+  })
 }
 
 function blobToBase64(blob: Blob): Promise<string> {

@@ -104,8 +104,10 @@ const HOLD_REPEAT_INTERVAL_MS = 60
 // the word being typed in a composing region until it's finished normally, and a toolbar press
 // is exactly the kind of "something else happened" that would otherwise tear that composition
 // down mid-word - which is why tapping the left arrow after typing "ls -al" used to wipe out the
-// "-al" instead of moving the cursor. Committing it into the shell first, synchronously, before
-// the button's own bytes go out keeps the two in the right order.
+// "-al" instead of moving the cursor. It returns a promise that only resolves once that commit
+// has actually reached the terminal (see androidBridge.ts) - awaiting it before the button's own
+// bytes go out is what keeps the two in the right order; resolving synchronously whenever
+// nothing was composing means this doesn't add any wait to the common case.
 //
 // `repeat` is for keys a real keyboard would auto-repeat while held (arrows, Del, ...) - not
 // for toggles (Ctrl/Alt, the panel switches, a snippet pick), where firing the action twice a
@@ -132,12 +134,13 @@ function usePressProps(action: () => void, repeat = false) {
   return {
     onPointerDown: (event: PointerEvent) => {
       event.preventDefault()
-      finishAndroidComposing()
-      action()
-      if (!repeat) return
-      timeoutRef.current = setTimeout(() => {
-        intervalRef.current = setInterval(action, HOLD_REPEAT_INTERVAL_MS)
-      }, HOLD_REPEAT_DELAY_MS)
+      void finishAndroidComposing().then(() => {
+        action()
+        if (!repeat) return
+        timeoutRef.current = setTimeout(() => {
+          intervalRef.current = setInterval(action, HOLD_REPEAT_INTERVAL_MS)
+        }, HOLD_REPEAT_DELAY_MS)
+      })
     },
     onPointerUp: stopRepeat,
     onPointerLeave: stopRepeat,
