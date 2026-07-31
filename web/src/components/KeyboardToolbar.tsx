@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent, PointerEvent, ReactElement, SVGProps } from 'react'
 import { ArrowDownIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, MoreHorizontalIcon, SnippetsIcon } from './icons'
 import { listSnippets, type SavedSnippet } from '../lib/api'
@@ -85,6 +85,12 @@ interface KeyboardToolbarProps {
   onPasteText: (text: string) => void
 }
 
+// Matches the real on-screen keyboard's own feel for a key held down: a short pause so a
+// normal tap never double-fires, then repeat fast enough to be useful for walking the cursor
+// across a line without turning into a machine-gun.
+const HOLD_REPEAT_DELAY_MS = 450
+const HOLD_REPEAT_INTERVAL_MS = 60
+
 // Fires on press instead of on click, and - the important half - keeps the press from moving
 // focus off xterm's hidden textarea.
 //
@@ -95,12 +101,41 @@ interface KeyboardToolbarProps {
 // wiped out the "-al" instead of moving the cursor (with a trailing space the word had already
 // been committed, so there was nothing left to lose, and the arrow behaved). Handling
 // pointerdown rather than click also drops the wait for the tap to complete.
-function pressProps(action: () => void) {
+//
+// `repeat` is for keys a real keyboard would auto-repeat while held (arrows, Del, ...) - not
+// for toggles (Ctrl/Alt, the panel switches, a snippet pick), where firing the action twice a
+// second would just be wrong. A hook rather than a plain function since it needs to remember
+// the pending timers across the separate pointerdown/pointerup events on the same button.
+function usePressProps(action: () => void, repeat = false) {
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  function stopRepeat() {
+    if (timeoutRef.current !== null) {
+      clearTimeout(timeoutRef.current)
+      timeoutRef.current = null
+    }
+    if (intervalRef.current !== null) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+  }
+
+  // In case the button (e.g. a panel toggling closed) unmounts while still held.
+  useEffect(() => stopRepeat, [])
+
   return {
     onPointerDown: (event: PointerEvent) => {
       event.preventDefault()
       action()
+      if (!repeat) return
+      timeoutRef.current = setTimeout(() => {
+        intervalRef.current = setInterval(action, HOLD_REPEAT_INTERVAL_MS)
+      }, HOLD_REPEAT_DELAY_MS)
     },
+    onPointerUp: stopRepeat,
+    onPointerLeave: stopRepeat,
+    onPointerCancel: stopRepeat,
     // Belt and braces: cancelling pointerdown's default is supposed to suppress the
     // compatibility mouse events a tap synthesizes, but not every engine honors that, and a
     // mousedown that gets through would focus the button after all.
@@ -117,17 +152,22 @@ function KeyCap({
   armed,
   onClick,
   className = '',
+  // Off for the two sticky-modifier toggles (Ctrl/Alt), which pass this explicitly - holding
+  // one down would just flip it back and forth. On for everything else here: a fixed byte
+  // sequence a real keyboard would happily auto-repeat too.
+  repeat = true,
 }: {
   label: string
   name?: string
   armed?: boolean
   onClick: () => void
   className?: string
+  repeat?: boolean
 }) {
   return (
     <button
       type="button"
-      {...pressProps(onClick)}
+      {...usePressProps(onClick, repeat)}
       aria-label={name ?? label}
       aria-pressed={armed}
       className={`flex h-9 min-w-0 items-center justify-center overflow-hidden rounded px-0.5 text-[11px] font-medium whitespace-nowrap touch-manipulation ${
@@ -147,17 +187,21 @@ function IconKeyCap({
   active,
   onClick,
   expanded,
+  // Off by default (the two panel toggles use it as-is); the arrows opt in below since holding
+  // one is exactly how a user walks the cursor across a line.
+  repeat = false,
 }: {
   name: string
   Icon: (props: SVGProps<SVGSVGElement>) => ReactElement
   active?: boolean
   onClick: () => void
   expanded?: boolean
+  repeat?: boolean
 }) {
   return (
     <button
       type="button"
-      {...pressProps(onClick)}
+      {...usePressProps(onClick, repeat)}
       aria-label={name}
       aria-expanded={expanded}
       className={`flex h-9 min-w-0 items-center justify-center rounded touch-manipulation ${
@@ -165,6 +209,23 @@ function IconKeyCap({
       }`}
     >
       <Icon aria-hidden="true" className="h-4 w-4" />
+    </button>
+  )
+}
+
+// One entry in the snippet picker. A real component (not an inline button in the .map() below)
+// because it needs its own usePressProps call, and hooks can't be called from inside a loop
+// body - repeat is left off, same as before: pasting a snippet twice a second while held would
+// just be wrong.
+function SnippetButton({ name, command, onPick }: { name: string; command: string; onPick: () => void }) {
+  return (
+    <button
+      type="button"
+      {...usePressProps(onPick)}
+      className="flex w-full flex-col items-start gap-0.5 border-b border-slate-800/60 px-3 py-2 text-left touch-manipulation active:bg-slate-800"
+    >
+      <span className="text-xs font-medium text-slate-200">{name}</span>
+      <span className="w-full truncate font-mono text-[11px] text-slate-400">{command}</span>
     </button>
   )
 }
@@ -223,7 +284,7 @@ export function KeyboardToolbar({
       <div role="group" aria-label="Terminal keys" className="grid grid-cols-9 gap-1 p-1.5">
         <KeyCap label="Esc" name="Escape" onClick={() => onSendKey('\x1b')} />
         <KeyCap label="Tab" onClick={() => onSendKey('\t')} />
-        <KeyCap label="Ctrl" armed={ctrlArmed} onClick={onToggleCtrl} />
+        <KeyCap label="Ctrl" armed={ctrlArmed} onClick={onToggleCtrl} repeat={false} />
         <IconKeyCap
           name="Snippets"
           Icon={SnippetsIcon}
@@ -231,10 +292,10 @@ export function KeyboardToolbar({
           expanded={panel === 'snippets'}
           onClick={() => togglePanel('snippets')}
         />
-        <IconKeyCap name="Left" Icon={ArrowLeftIcon} onClick={() => onSendKey('\x1b[D')} />
-        <IconKeyCap name="Right" Icon={ArrowRightIcon} onClick={() => onSendKey('\x1b[C')} />
-        <IconKeyCap name="Up" Icon={ArrowUpIcon} onClick={() => onSendKey('\x1b[A')} />
-        <IconKeyCap name="Down" Icon={ArrowDownIcon} onClick={() => onSendKey('\x1b[B')} />
+        <IconKeyCap name="Left" Icon={ArrowLeftIcon} onClick={() => onSendKey('\x1b[D')} repeat />
+        <IconKeyCap name="Right" Icon={ArrowRightIcon} onClick={() => onSendKey('\x1b[C')} repeat />
+        <IconKeyCap name="Up" Icon={ArrowUpIcon} onClick={() => onSendKey('\x1b[A')} repeat />
+        <IconKeyCap name="Down" Icon={ArrowDownIcon} onClick={() => onSendKey('\x1b[B')} repeat />
         <IconKeyCap
           name="More keys"
           Icon={MoreHorizontalIcon}
@@ -247,7 +308,7 @@ export function KeyboardToolbar({
       {panel === 'keys' && (
         <div className="flex flex-col gap-1 border-t border-slate-800 p-1.5">
           <div className="grid grid-cols-9 gap-1">
-            <KeyCap label="Alt" armed={altArmed} onClick={onToggleAlt} />
+            <KeyCap label="Alt" armed={altArmed} onClick={onToggleAlt} repeat={false} />
             {EXTRA_ROWS[0].map((key) => (
               <KeyCap
                 key={key.label}
@@ -276,18 +337,15 @@ export function KeyboardToolbar({
             </p>
           ) : (
             snippets.map((entry) => (
-              <button
+              <SnippetButton
                 key={entry.id}
-                type="button"
-                {...pressProps(() => {
+                name={entry.snippet.name}
+                command={entry.snippet.command}
+                onPick={() => {
                   onPasteText(entry.snippet.command)
                   setPanel('none')
-                })}
-                className="flex w-full flex-col items-start gap-0.5 border-b border-slate-800/60 px-3 py-2 text-left touch-manipulation active:bg-slate-800"
-              >
-                <span className="text-xs font-medium text-slate-200">{entry.snippet.name}</span>
-                <span className="w-full truncate font-mono text-[11px] text-slate-400">{entry.snippet.command}</span>
-              </button>
+                }}
+              />
             ))
           )}
         </div>

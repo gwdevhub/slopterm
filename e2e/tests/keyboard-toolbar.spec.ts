@@ -89,6 +89,33 @@ test.describe('with touch emulation', () => {
     await deleteHost(page, 'toolbar arrow test host')
   })
 
+  test('holding the Left arrow button repeats the keypress like a physical key', async ({ page }) => {
+    await connectHost(page, 'toolbar repeat test host')
+
+    await page.keyboard.type('ab')
+    const leftButton = page.getByRole('button', { name: 'Left' })
+    const box = (await leftButton.boundingBox())!
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    await page.mouse.down()
+    // Long enough to clear the initial hold delay and fire several repeats (see
+    // HOLD_REPEAT_DELAY_MS/HOLD_REPEAT_INTERVAL_MS in KeyboardToolbar) - a single press would
+    // only move the cursor left by one.
+    await page.waitForTimeout(700)
+    await page.mouse.up()
+
+    await page.keyboard.type('X')
+    await page.keyboard.press('Enter')
+    // A single left-press would insert X between "a" and "b" ("aXb"); a held button that
+    // actually repeats walks the cursor all the way back to the start of the line instead.
+    await expect(async () => {
+      expect(await terminalText(page)).toContain('Xab')
+    }).toPass({ timeout: 10_000 })
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'toolbar repeat test host')
+  })
+
   test('arming Ctrl and typing "c" sends a real interrupt to a running command', async ({ page }) => {
     await connectHost(page, 'toolbar ctrl test host')
 
