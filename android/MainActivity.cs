@@ -63,6 +63,10 @@ public class MainActivity : Activity
     private IValueCallback? _filePathCallback;
     private byte[]? _pendingSaveBytes;
 
+    // Kept so the JS bridge (see SaveFileBridge.FinishComposing below) can reach the live
+    // InputConnection through it.
+    private TerminalWebView? _webView;
+
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
@@ -83,6 +87,7 @@ public class MainActivity : Activity
         Window?.SetSoftInputMode(SoftInput.AdjustResize);
 
         var webView = new TerminalWebView(this);
+        _webView = webView;
         webView.Settings.JavaScriptEnabled = true;
         webView.Settings.DomStorageEnabled = true;
         webView.Settings.AllowFileAccess = true;
@@ -371,6 +376,26 @@ public class MainActivity : Activity
         {
             return _activity.GetKeyboardHeight();
         }
+
+        // Called by the web keyboard toolbar (see KeyboardToolbar.tsx's usePressProps) right
+        // before it acts on a button press. Composing is back on (see TerminalWebView below),
+        // so whatever word the IME is still holding uncommitted needs to land in the shell
+        // *before* the button's own bytes do, or it's lost outright - the original bug this
+        // whole area exists to avoid. Blocks the bridge thread (never the UI thread) on a
+        // bounded wait so the JS caller's next line - sending the button's own bytes - is
+        // guaranteed to run after the commit actually landed, not racing it.
+        [JavascriptInterface]
+        [Export("finishComposing")]
+        public void FinishComposing()
+        {
+            using var committed = new System.Threading.ManualResetEventSlim(false);
+            _activity.RunOnUiThread(() =>
+            {
+                _activity._webView?.FinishComposingText();
+                committed.Set();
+            });
+            committed.Wait(200);
+        }
     }
 
     private NotificationManager? _notificationManager;
@@ -436,31 +461,41 @@ public class MainActivity : Activity
     // A WebView that tells the IME this is a terminal, not a message box. Gboard (and every
     // other keyboard) otherwise shows its suggestion/emoji strip above the keys - useless for
     // shell input, and it steals the row the web app's own key toolbar needs - and feeds every
-    // keystroke into its personalized dictionary.
+    // keystroke into its personalized dictionary. TextFlagNoSuggestions is exactly the flag
+    // for this: it turns the strip and autocorrect off without also touching composing, unlike
+    // the TextVariationVisiblePassword this used to also carry.
     //
-    // The variation matters more than it looks: a keyboard in its normal text mode holds the
-    // word being typed in a *composing region* and only commits it later, so the shell hasn't
-    // actually received "-al" while it's still on screen - Tab has nothing to complete, and
-    // anything that tears the composition down (an arrow key, a focus change) takes those
-    // characters with it. TextVariationVisiblePassword is the long-standing way to opt out of
-    // composing entirely and have each character committed as it's typed; it's what Android
-    // terminal apps use, and it means "no autocorrect/suggestions", not "show a password".
-    // Every text field in this app is a hostname, a key, a command or a password, so none of
-    // them wanted autocorrect anyway.
+    // Composing is deliberately left on now (previously disabled here). A keyboard in normal
+    // text mode holds the word being typed in a *composing region*, and while it's live xterm.js
+    // renders it itself right at the terminal cursor (see the .composition-view class it ships,
+    // used for exactly this) - which is what typing actually looked instantaneous from, not the
+    // shell echoing it back over the WebSocket. Turning composing off (the previous fix here)
+    // silenced that local preview along with it, and every keystroke started waiting on a real
+    // network round trip to appear at all. The bug composing off was actually fixing - the shell
+    // never receiving "-al" because it was still uncommitted when the toolbar's Left arrow tore
+    // the composition down - is fixed directly instead: SaveFileBridge.FinishComposing (called
+    // from the web toolbar right before it acts, see KeyboardToolbar.tsx) commits whatever's
+    // still composing into the shell first, so the toolbar's own bytes never race ahead of it.
     private sealed class TerminalWebView : WebView
     {
+        private IInputConnection? _connection;
+
         public TerminalWebView(Context context) : base(context) { }
 
         public override IInputConnection? OnCreateInputConnection(EditorInfo? outAttrs)
         {
-            var connection = base.OnCreateInputConnection(outAttrs);
+            _connection = base.OnCreateInputConnection(outAttrs);
             if (outAttrs is not null)
             {
-                outAttrs.InputType = InputTypes.ClassText | InputTypes.TextVariationVisiblePassword | InputTypes.TextFlagNoSuggestions;
+                outAttrs.InputType = InputTypes.ClassText | InputTypes.TextFlagNoSuggestions;
                 outAttrs.ImeOptions |= ImeFlags.NoExtractUi | ImeFlags.NoFullscreen | ImeFlags.NoPersonalizedLearning;
             }
-            return connection;
+            return _connection;
         }
+
+        // Commits any text the IME is still composing, as if the user had finished typing it
+        // normally - must run on the UI thread, same as the InputConnection it's calling into.
+        public void FinishComposingText() => _connection?.FinishComposingText();
     }
 
     // Insets the view by the space the system bars + any display cutout occupy, detected at
