@@ -93,6 +93,47 @@ test.describe('with touch emulation', () => {
     await deleteHost(page, 'composition freeze test host')
   })
 
+  test('a composed word stays visible when committed by pressing Enter, not just Space', async ({ page }) => {
+    await connectHost(page, 'composition freeze enter test host')
+
+    const compositionView = page.locator('.composition-view')
+
+    await page.evaluate(() => {
+      const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      ta.value = ''
+      ta.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }))
+      ta.value = 'hello'
+      ta.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'hello' }))
+    })
+    await expect(compositionView).toHaveClass(/active/)
+    await expect(compositionView).toHaveText('hello')
+
+    // Enter mid-composition doesn't go through a compositionend event at all - xterm's
+    // CompositionHelper.keydown finalizes the composition right there, synchronously, so the
+    // composed word reaches the shell before Enter runs the command (see
+    // CompositionHelper._finalizeComposition's non-waitForPropagation branch). That hides the
+    // composition-view with no compositionend event to hang a freeze off of, which is exactly
+    // what let this regress even after the Space case (PR #103) was fixed. Same
+    // same-evaluate-call rationale as the compositionend assertion above: nothing here should
+    // depend on how fast the real echo comes back.
+    const immediatelyAfterEnter = await page.evaluate(() => {
+      const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      ta.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 13, bubbles: true, cancelable: true }))
+      const view = document.querySelector('.composition-view')!
+      return { active: view.classList.contains('active'), text: view.textContent }
+    })
+    expect(immediatelyAfterEnter).toEqual({ active: true, text: 'hello' })
+
+    await expect(async () => {
+      const stillActive = await compositionView.evaluate((el) => el.classList.contains('active'))
+      expect(stillActive).toBe(false)
+    }).toPass({ timeout: 5_000 })
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'composition freeze enter test host')
+  })
+
   test('a toolbar button waits for a delayed native composition commit before acting', async ({ page }) => {
     // Stands in for MainActivity's real SloptermAndroid.finishComposing() - which, in the real
     // bug, posts the commit into the WebView and returns well before the page has actually

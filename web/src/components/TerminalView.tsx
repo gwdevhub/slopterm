@@ -411,17 +411,20 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     // internal services have access to that.
     const compositionView = container.querySelector<HTMLElement>('.composition-view')
     let compositionFreezeTimeout: ReturnType<typeof setTimeout> | undefined
+    // Mirrors CompositionHelper's own _isComposing - compositionend (below) clears it, but so
+    // does the keydown case just below it, which is the whole reason this exists as a separate
+    // ref rather than reading xterm's private state.
+    const isComposingRef = { current: false }
     function unfreezeComposition() {
       clearTimeout(compositionFreezeTimeout)
       compositionFreezeTimeout = undefined
       compositionView?.classList.remove('active')
     }
     unfreezeCompositionRef.current = unfreezeComposition
-    const onCompositionEnd = () => {
-      // xterm's own listener (registered first, at term.open() time - same-event listeners
-      // fire in registration order) already removed 'active' as part of hiding it; re-adding
-      // it here, synchronously after that, is what keeps the preview visible without
-      // interfering with xterm's own handling of the commit.
+    // Re-freezes the composition-view preview immediately after something else has just hidden
+    // it (see the two call sites below), and arms the backstop that clears it again once real
+    // output (or 1s) supersedes it.
+    function freezeComposition() {
       if (compositionView?.textContent) {
         compositionView.classList.add('active')
         // Backstop for a shell that never echoes what was typed (rare, but possible) - don't
@@ -429,9 +432,44 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         compositionFreezeTimeout = setTimeout(unfreezeComposition, 1000)
       }
     }
-    const onCompositionStart = () => clearTimeout(compositionFreezeTimeout)
+    const onCompositionEnd = () => {
+      isComposingRef.current = false
+      // xterm's own listener (registered first, at term.open() time - same-event listeners
+      // fire in registration order) already removed 'active' as part of hiding it; re-adding
+      // it here, synchronously after that, is what keeps the preview visible without
+      // interfering with xterm's own handling of the commit.
+      freezeComposition()
+    }
+    const onCompositionStart = () => {
+      isComposingRef.current = true
+      clearTimeout(compositionFreezeTimeout)
+    }
+    // A real compositionend DOM event isn't the only way a composition finishes: pressing
+    // Enter mid-word makes CompositionHelper.keydown finalize it right there, synchronously,
+    // via its "don't wait for propagation" branch (so the composed text reaches the shell
+    // before Enter runs the command) - hiding the composition-view with no compositionend event
+    // at all, since none needs to fire for xterm's own purposes. Without this, that path skipped
+    // the freeze above entirely, which is why committing a word with Space stopped flickering
+    // (PR #103) but committing the same word by pressing Enter still did.
+    //
+    // Registered capture:true (and after term.open(), so still after xterm's own listener in
+    // registration order) rather than the default bubble: xterm's own keydown listener on this
+    // same textarea is itself capture:true and calls stopPropagation() as part of ordinary key
+    // handling, which - on the very same element - keeps a bubble-phase listener from ever
+    // running at all, not merely from seeing ancestors. A bubble listener here would silently
+    // never fire for any key xterm considers fully handled, Enter included, which is exactly the
+    // one this needs to catch. The keyCode exclusions match CompositionHelper.keydown's own
+    // "still composing" cases (CapsLock/Enter's 229/Shift/Ctrl/Alt) so this only fires for a
+    // keydown that actually finalized the composition.
+    const onKeyDownDuringComposition = (event: KeyboardEvent) => {
+      if (!isComposingRef.current) return
+      if ([16, 17, 18, 20, 229].includes(event.keyCode)) return
+      isComposingRef.current = false
+      freezeComposition()
+    }
     textarea?.addEventListener('compositionend', onCompositionEnd)
     textarea?.addEventListener('compositionstart', onCompositionStart)
+    textarea?.addEventListener('keydown', onKeyDownDuringComposition, true)
 
     // Drag a file from the OS onto the terminal to upload it into the shell's cwd. dragover
     // must preventDefault or the browser never fires a drop; copy is the right affordance.
@@ -537,6 +575,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       textarea?.removeEventListener('paste', onPaste)
       textarea?.removeEventListener('compositionend', onCompositionEnd)
       textarea?.removeEventListener('compositionstart', onCompositionStart)
+      textarea?.removeEventListener('keydown', onKeyDownDuringComposition, true)
       disposeCompositionBridge?.()
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
