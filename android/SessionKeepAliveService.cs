@@ -56,8 +56,6 @@ namespace Slopterm.Mobile;
     ForegroundServiceType = ForegroundService.TypeDataSync)]
 public sealed class SessionKeepAliveService : Service
 {
-    // Not 1: MainActivity's app-badge notification already owns that id, and reusing it would
-    // replace the badge with this one.
     private const int NotificationId = 2;
     private const string ChannelId = "slopterm_sessions_channel";
 
