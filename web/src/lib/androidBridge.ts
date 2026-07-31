@@ -3,6 +3,7 @@
 // a normal browser), so callers fall back to the standard web behavior when this returns false.
 interface AndroidBridge {
   saveFile(base64Data: string, fileName: string, mimeType: string): void
+  finishComposing(): void
 }
 
 function androidBridge(): AndroidBridge | undefined {
@@ -68,6 +69,17 @@ export async function saveFileViaAndroid(blob: Blob, fileName: string, mimeType:
   if (!bridge?.saveFile) return false
   bridge.saveFile(await blobToBase64(blob), fileName, mimeType)
   return true
+}
+
+// Commits any word the on-screen keyboard is still composing (underlined, not yet sent to the
+// shell) as if the user had finished typing it normally. Composing is on for real now (see
+// MainActivity's TerminalWebView) so it feels instant to type - xterm.js renders the in-progress
+// word itself right at the cursor - but a toolbar button acting mid-composition would otherwise
+// tear that word down and lose it (the bug that used to make composing get disabled outright).
+// The toolbar calls this synchronously right before it acts, so the commit always lands first.
+// No-op off Android (desktop/browser input never holds a separate composing region this way).
+export function finishAndroidComposing(): void {
+  androidBridge()?.finishComposing()
 }
 
 function blobToBase64(blob: Blob): Promise<string> {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent, PointerEvent, ReactElement, SVGProps } from 'react'
 import { ArrowDownIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, MoreHorizontalIcon, SnippetsIcon } from './icons'
 import { listSnippets, type SavedSnippet } from '../lib/api'
+import { finishAndroidComposing } from '../lib/androidBridge'
 
 // One tappable key: the label the user reads, and the exact bytes it puts on the wire.
 interface KeyDef {
@@ -95,12 +96,16 @@ const HOLD_REPEAT_INTERVAL_MS = 60
 // focus off xterm's hidden textarea.
 //
 // A toolbar button that takes focus makes Android tear the keyboard's input connection down and
-// build it back up on every single tap. That is what the half-second lag between tapping a key
-// and the shell reacting actually was, and it also destroyed whatever the keyboard was still
-// holding in its composing region - which is why tapping the left arrow after typing "ls -al"
-// wiped out the "-al" instead of moving the cursor (with a trailing space the word had already
-// been committed, so there was nothing left to lose, and the arrow behaved). Handling
-// pointerdown rather than click also drops the wait for the tap to complete.
+// build it back up on every single tap - that was the half-second lag between tapping a key and
+// the shell reacting. Handling pointerdown rather than click also drops the wait for the tap to
+// complete.
+//
+// finishAndroidComposing() runs first, ahead of everything else: the on-screen keyboard holds
+// the word being typed in a composing region until it's finished normally, and a toolbar press
+// is exactly the kind of "something else happened" that would otherwise tear that composition
+// down mid-word - which is why tapping the left arrow after typing "ls -al" used to wipe out the
+// "-al" instead of moving the cursor. Committing it into the shell first, synchronously, before
+// the button's own bytes go out keeps the two in the right order.
 //
 // `repeat` is for keys a real keyboard would auto-repeat while held (arrows, Del, ...) - not
 // for toggles (Ctrl/Alt, the panel switches, a snippet pick), where firing the action twice a
@@ -127,6 +132,7 @@ function usePressProps(action: () => void, repeat = false) {
   return {
     onPointerDown: (event: PointerEvent) => {
       event.preventDefault()
+      finishAndroidComposing()
       action()
       if (!repeat) return
       timeoutRef.current = setTimeout(() => {
