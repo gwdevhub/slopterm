@@ -122,8 +122,10 @@ See [e2e/README.md](./e2e/README.md). CI (`.github/workflows/ci.yml`) runs the s
 
 Whenever `server/` code changes, `AGENTS.md`'s Testing section requires building the
 win-x64 exe and actually running it under Wine before considering the change done (a real
-bug - inconsistent Windows CNG support for Curve25519 - was only caught this way, invisible
-on Linux). `Dockerfile.wine-test` packages everything that step needs (.NET SDK, Node,
+bug - inconsistent Windows CNG support for Curve25519, and Wine having no working CNG ECDH
+at all - was only caught this way, invisible on Linux; `SshConnectionInfoFactory` falls back
+to classical Diffie-Hellman when it detects Wine). `Dockerfile.wine-test` packages
+everything that step needs (.NET SDK, Node,
 Wine, Xvfb for the tray icon's virtual display) so it never has to be reinstalled from
 scratch:
 

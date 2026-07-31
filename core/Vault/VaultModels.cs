@@ -114,6 +114,86 @@ public sealed class SyncRuleRecord
     public bool SkipUnchanged { get; set; } = true;
 }
 
+/// <summary>
+/// A command run against a saved host (HostId) on a schedule - see SchedulerService. Runs
+/// are best-effort by construction: the schedule lives in this app, so a job only fires
+/// while slopterm is running (the UI says so). Installing the schedule into the host's own
+/// cron/systemd is a separate, deliberately-not-built feature - see todo/scheduled-jobs.md.
+/// </summary>
+public sealed class JobRecord
+{
+    public required string HostId { get; set; }
+    public required string Name { get; set; }
+
+    // Exactly one of the two: literal text, or a SnippetRecord id resolved to that snippet's
+    // CURRENT command at run time (same reasoning as HostRecord.StartupSnippetIds - editing
+    // the snippet changes the next run instead of freezing whatever it said when attached).
+    public string? Command { get; set; }
+    public string? SnippetId { get; set; }
+
+    // "interval" (every IntervalMinutes) or "daily" (at DailyTime, in the machine's local
+    // time). Deliberately not cron: a parser would have to be hand-rolled (the no-dependency
+    // rule) and the expressiveness nobody uses drags in a pile of timezone/DST edge cases -
+    // see todo/scheduled-jobs.md.
+    public string ScheduleKind { get; set; } = "interval";
+    public int IntervalMinutes { get; set; } = 60;
+    public string DailyTime { get; set; } = "06:00"; // "HH:mm", local time
+
+    public bool Enabled { get; set; } = true;
+
+    // Off (the default) = a job whose time passed while the app was closed is simply skipped,
+    // and the next run is the next scheduled time. On = run once as soon as the scheduler
+    // picks the job up, which is systemd's Persistent=true convention and what people who
+    // expect a missed nightly job to still happen are asking for.
+    public bool RunOnStart { get; set; }
+
+    // What to do when a run is still going and the next one comes due: "skip" (leave the
+    // running one alone, do nothing), "queue" (start the next one the moment it finishes -
+    // at most one is ever queued), or "kill" (cancel the running one and start fresh).
+    public string OverlapPolicy { get; set; } = "skip";
+
+    // Hard ceiling on one run. A job that hangs forever otherwise holds a connection and,
+    // under "skip", silently stops the schedule dead.
+    public int TimeoutSeconds { get; set; } = 300;
+
+    // Optional .NET regex matched against the run's combined stdout+stderr. A match marks
+    // the run failed even when the command exited 0 - "output said something bad" is the
+    // failure definition people reach for immediately after "non-zero exit".
+    public string? FailurePattern { get; set; }
+
+    // Which install owns this job, or null for "any device may run it". Set to the creating
+    // device by default (see DeviceIdentity): once the vault syncs, the same job record
+    // exists on the laptop AND the phone, and an unpinned backup script would run twice.
+    public string? OwnerDeviceId { get; set; }
+}
+
+/// <summary>One completed run of a JobRecord, kept in that job's JobRunHistoryRecord.</summary>
+public sealed class JobRunRecord
+{
+    public required DateTimeOffset StartedUtc { get; set; }
+    public required DateTimeOffset FinishedUtc { get; set; }
+
+    // "success" (exit 0, no FailurePattern match), "failed" (non-zero exit or a pattern
+    // match - the command ran and said no), or "error" (it never ran to completion at all:
+    // couldn't connect, no credential, timed out, cancelled).
+    public required string Outcome { get; set; }
+    public int? ExitCode { get; set; }
+    public string? Error { get; set; } // only for "error" - why it never produced an exit code
+    public string? Output { get; set; }
+    public string? ErrorOutput { get; set; }
+    public bool Truncated { get; set; }
+}
+
+/// <summary>
+/// job-runs/{jobId}.json - a capped, newest-first history of one job's runs. Vault-encrypted
+/// like every other record because it quotes command output, which can contain anything the
+/// session could see (the same reasoning as AiChatRecord).
+/// </summary>
+public sealed class JobRunHistoryRecord
+{
+    public List<JobRunRecord> Runs { get; set; } = [];
+}
+
 /// <summary>A saved, reusable command - copyable into a terminal (see AGENTS.md's Snippets note).</summary>
 public sealed class SnippetRecord
 {

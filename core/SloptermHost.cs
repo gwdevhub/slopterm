@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Collections.Concurrent;
@@ -8,6 +9,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.FileProviders;
@@ -28,7 +30,8 @@ public sealed record SloptermHostContext(
     SessionStore<TerminalSession> Sessions,
     SessionStore<SftpSession> SftpSessions,
     ForwardingService Forwarding,
-    SyncService Sync);
+    SyncService Sync,
+    SchedulerService Scheduler);
 
 // Builds, configures and starts the Kestrel web app + every endpoint, then returns the
 // running app and the loopback launch URL. Free of any desktop-window/tray coupling so a
@@ -96,6 +99,7 @@ vault.EnsureUnlockedIfPasswordNotRequired();
 CrashLogger.LogPhase("vault + settings loaded");
 var forwarding = new ForwardingService(vault);
 var sync = new SyncService(vault);
+var scheduler = new SchedulerService(vault);
 
 // Best-effort cleanup of a previous update's backup - see UpdateService.ApplyAsync. Not
 // fatal if this fails (e.g. the old process briefly still holds it on Windows); it'll just
@@ -1120,6 +1124,121 @@ app.MapPost("/api/sync/rules/{id}/stop", (string id) =>
     return Results.NoContent();
 });
 
+// --- Scheduled jobs: the job records (persisted config) plus live status/run history. ---
+// Every mutation pokes the scheduler so it reconciles immediately rather than on its next
+// poll; it re-reads the records itself, so there's no separate "apply this change" call.
+
+app.MapGet("/api/vault/jobs", () =>
+{
+    try
+    {
+        var jobs = vault.ListJobs().Select(j => new { id = j.Id, updatedAt = j.UpdatedAt, job = j.Record });
+        return Results.Ok(jobs);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPost("/api/vault/jobs", (JobRecord request) =>
+{
+    try
+    {
+        if (ValidateJob(request) is { } problem)
+        {
+            return Results.BadRequest(new { error = problem });
+        }
+
+        var id = vault.SaveJob(null, request);
+        scheduler.Poke();
+        return Results.Ok(new { id });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPut("/api/vault/jobs/{id}", (string id, JobRecord request) =>
+{
+    try
+    {
+        if (ValidateJob(request) is { } problem)
+        {
+            return Results.BadRequest(new { error = problem });
+        }
+
+        vault.SaveJob(id, request);
+        scheduler.Poke();
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapDelete("/api/vault/jobs/{id}", (string id) =>
+{
+    try
+    {
+        scheduler.CancelRun(id);
+        var deleted = vault.DeleteJob(id);
+        scheduler.Poke();
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+// Covers every saved job, not just the scheduled ones - "disabled" and "otherDevice" are
+// states the UI shows, so an absence here means the job is gone, nothing subtler.
+app.MapGet("/api/jobs/status", () => Results.Ok(scheduler.GetStatus()));
+
+// Which install this is, so the UI can say whether a job pinned to a device is pinned to
+// THIS one. Non-secret (see DeviceIdentity) and readable with the vault locked.
+app.MapGet("/api/jobs/device-id", () => Results.Ok(new { deviceId = DeviceIdentity.Current }));
+
+app.MapGet("/api/jobs/{id}/runs", (string id) =>
+{
+    try
+    {
+        return Results.Ok(vault.ListJobRuns(id));
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapDelete("/api/jobs/{id}/runs", (string id) =>
+{
+    vault.ClearJobRuns(id);
+    return Results.NoContent();
+});
+
+app.MapPost("/api/jobs/{id}/run", (string id) =>
+{
+    try
+    {
+        scheduler.RunNow(id);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+app.MapPost("/api/jobs/{id}/cancel", (string id) =>
+{
+    scheduler.CancelRun(id);
+    return Results.NoContent();
+});
+
 app.MapGet("/api/vault/logs", () =>
 {
     try
@@ -1813,9 +1932,52 @@ CrashLogger.LogPhase("auto port-forwards started");
 sync.StartAutoSyncs();
 CrashLogger.LogPhase("auto sync rules started");
 
+// The scheduler polls the vault for jobs itself, so unlike the two above there's nothing to
+// re-trigger on unlock - a locked vault just means its first passes find no jobs.
+scheduler.Start();
+CrashLogger.LogPhase("job scheduler started");
+
 var addressesFeature = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
 var boundPort = new Uri(addressesFeature?.Addresses.First() ?? "http://127.0.0.1:0").Port;
 var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
-        return new SloptermHostContext(app, launchUrl, vault, sessions, sftpSessions, forwarding, sync);
+        return new SloptermHostContext(app, launchUrl, vault, sessions, sftpSessions, forwarding, sync, scheduler);
+    }
+
+    /// <summary>
+    /// Rejects a job the scheduler couldn't act on sensibly, at save time rather than as a
+    /// mystery failed run hours later. Returns null when the job is fine.
+    /// </summary>
+    private static string? ValidateJob(JobRecord job)
+    {
+        if (string.IsNullOrWhiteSpace(job.Command) && string.IsNullOrWhiteSpace(job.SnippetId))
+        {
+            return "A job needs either a command or a snippet to run.";
+        }
+
+        if (job.ScheduleKind == "daily")
+        {
+            if (!TimeSpan.TryParseExact(job.DailyTime, @"hh\:mm", CultureInfo.InvariantCulture, out _))
+            {
+                return "Daily time must be HH:mm (24-hour), e.g. 06:00.";
+            }
+        }
+        else if (job.IntervalMinutes < 1)
+        {
+            return "The interval must be at least one minute.";
+        }
+
+        if (!string.IsNullOrEmpty(job.FailurePattern))
+        {
+            try
+            {
+                _ = new Regex(job.FailurePattern);
+            }
+            catch (ArgumentException ex)
+            {
+                return $"The failure pattern isn't a valid regular expression: {ex.Message}";
+            }
+        }
+
+        return null;
     }
 }

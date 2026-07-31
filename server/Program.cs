@@ -32,6 +32,7 @@ var sessions = host.Sessions;
 var sftpSessions = host.SftpSessions;
 var forwarding = host.Forwarding;
 var sync = host.Sync;
+var scheduler = host.Scheduler;
 
 void OpenWindow() => AppWindowManager.EnsureWindowOpen(launchUrl);
 
@@ -109,6 +110,7 @@ await app.WaitForShutdownAsync();
 CrashLogger.LogPhase("shut down cleanly");
 forwarding.Dispose(); // tears down every background forwarding connection cleanly
 sync.Dispose(); // tears down every background sync watcher/connection cleanly
+scheduler.Dispose(); // stops the job loop and cancels any run still in flight
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
     trayIcon?.Dispose();
