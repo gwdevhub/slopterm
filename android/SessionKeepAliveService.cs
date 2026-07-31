@@ -110,18 +110,22 @@ public sealed class SessionKeepAliveService : Service
         else
         {
 #pragma warning disable CA1422 // the channel-less builder is the correct one below API 26
-            builder = new Notification.Builder(this).SetPriority((int)NotificationPriority.Low);
+            builder = new Notification.Builder(this);
+            builder.SetPriority((int)NotificationPriority.Low);
 #pragma warning restore CA1422
         }
 
-        var notification = builder
-            .SetSmallIcon(Resource.Drawable.ic_launcher)
-            .SetContentTitle("slopterm")
-            .SetContentText(text)
-            .SetContentIntent(contentIntent)
-            .SetOngoing(true)
-            .SetOnlyAlertOnce(true)
-            .Build();
+        // Called as statements rather than chained: every one of these returns
+        // Notification.Builder? in the bindings, so a fluent chain is a string of
+        // dereferences the compiler can't prove safe. They all mutate and return the same
+        // builder, so discarding the result costs nothing.
+        builder.SetSmallIcon(Resource.Drawable.ic_launcher);
+        builder.SetContentTitle("slopterm");
+        builder.SetContentText(text);
+        builder.SetContentIntent(contentIntent);
+        builder.SetOngoing(true);
+        builder.SetOnlyAlertOnce(true);
+        var notification = builder.Build();
 
         if (OperatingSystem.IsAndroidVersionAtLeast(29))
         {
@@ -164,7 +168,9 @@ public sealed class SessionKeepAliveService : Service
                     break;
                 }
             }
-            catch (OperationCanceledException)
+            // Qualified: Android.OS has an OperationCanceledException of its own, and
+            // `using Android.OS;` above makes the bare name ambiguous with System's.
+            catch (System.OperationCanceledException)
             {
                 return;
             }
