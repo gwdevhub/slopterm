@@ -44,16 +44,23 @@ async function connectHost(page: import('@playwright/test').Page, name: string) 
 
 // Playwright has no real IME to drive, so these dispatch the same compositionstart/update/end
 // events a mobile on-screen keyboard would - the actual behavior under test (TerminalView's
-// .composition-view freeze, androidBridge.ts's finishAndroidComposing ordering) is standard
+// .composition-echo snapshot, androidBridge.ts's finishAndroidComposing ordering) is standard
 // DOM composition handling underneath, not anything Android-bridge-specific for the freeze
 // half, and the bridge half is exercised via a mocked window.SloptermAndroid below.
+//
+// Two overlays share the .composition-view class: xterm's own live preview and TerminalView's
+// .composition-echo snapshot of it, which is the one that has to survive the commit - hence the
+// :not() on every locator meaning "xterm's".
+const LIVE_PREVIEW = '.composition-view:not(.composition-echo)'
+const FROZEN_PREVIEW = '.composition-echo'
 test.describe('with touch emulation', () => {
   test.use({ hasTouch: true })
 
   test('a composed word stays visible through compositionend instead of flashing blank', async ({ page }) => {
     await connectHost(page, 'composition freeze test host')
 
-    const compositionView = page.locator('.composition-view')
+    const compositionView = page.locator(LIVE_PREVIEW)
+    const frozenPreview = page.locator(FROZEN_PREVIEW)
 
     // Hold "hello" in a composing region, the way a real keyboard does mid-word - xterm
     // renders it via this overlay well before anything reaches the shell.
@@ -76,7 +83,7 @@ test.describe('with touch emulation', () => {
     const immediatelyAfterEnd = await page.evaluate(() => {
       const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
       ta.dispatchEvent(new CompositionEvent('compositionend', { data: 'hello' }))
-      const view = document.querySelector('.composition-view')!
+      const view = document.querySelector('.composition-echo')!
       return { active: view.classList.contains('active'), text: view.textContent }
     })
     expect(immediatelyAfterEnd).toEqual({ active: true, text: 'hello' })
@@ -84,7 +91,7 @@ test.describe('with touch emulation', () => {
     // ...but it must not stay frozen forever either - once the shell's real echo (or, failing
     // that, the fixed backstop timeout) supersedes it, the preview has to actually clear.
     await expect(async () => {
-      const stillActive = await compositionView.evaluate((el) => el.classList.contains('active'))
+      const stillActive = await frozenPreview.evaluate((el) => el.classList.contains('active'))
       expect(stillActive).toBe(false)
     }).toPass({ timeout: 5_000 })
 
@@ -96,7 +103,8 @@ test.describe('with touch emulation', () => {
   test('a composed word stays visible when committed by pressing Enter, not just Space', async ({ page }) => {
     await connectHost(page, 'composition freeze enter test host')
 
-    const compositionView = page.locator('.composition-view')
+    const compositionView = page.locator(LIVE_PREVIEW)
+    const frozenPreview = page.locator(FROZEN_PREVIEW)
 
     await page.evaluate(() => {
       const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
@@ -119,19 +127,76 @@ test.describe('with touch emulation', () => {
     const immediatelyAfterEnter = await page.evaluate(() => {
       const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
       ta.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 13, bubbles: true, cancelable: true }))
-      const view = document.querySelector('.composition-view')!
+      const view = document.querySelector('.composition-echo')!
       return { active: view.classList.contains('active'), text: view.textContent }
     })
     expect(immediatelyAfterEnter).toEqual({ active: true, text: 'hello' })
 
     await expect(async () => {
-      const stillActive = await compositionView.evaluate((el) => el.classList.contains('active'))
+      const stillActive = await frozenPreview.evaluate((el) => el.classList.contains('active'))
       expect(stillActive).toBe(false)
     }).toPass({ timeout: 5_000 })
 
     await closeTab(page, tabLabel)
     await gotoSection(page, 'Hosts')
     await deleteHost(page, 'composition freeze enter test host')
+  })
+
+  test('a committed word survives the IME immediately opening the next composition', async ({ page }) => {
+    await connectHost(page, 'composition restart test host')
+
+    const frozenPreview = page.locator(FROZEN_PREVIEW)
+
+    // Commit "hello", then let the IME open a fresh composition right away - what an Android
+    // keyboard does the moment Enter starts a new line, and (before this was a snapshot of its
+    // own) what silently emptied the frozen word: CompositionHelper.compositionstart blanks
+    // .composition-view's textContent, so re-activating that same element left an empty box on
+    // screen until the echo arrived. Everything asserted inside one evaluate() so the result
+    // can't depend on how fast the real echo comes back.
+    const afterRestart = await page.evaluate(() => {
+      const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      ta.value = ''
+      ta.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }))
+      ta.value = 'hello'
+      ta.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'hello' }))
+      ta.dispatchEvent(new CompositionEvent('compositionend', { data: 'hello' }))
+      ta.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }))
+      const frozen = document.querySelector('.composition-echo')!
+      const live = document.querySelector('.composition-view:not(.composition-echo)')!
+      return {
+        frozen: { active: frozen.classList.contains('active'), text: frozen.textContent },
+        liveText: live.textContent,
+      }
+    })
+    // liveText pins down the old failure mode rather than any behavior of ours: xterm's own
+    // overlay really is blank-but-active at this point, so the previous fix's re-activation of
+    // it showed an empty box where the word had been.
+    expect(afterRestart).toEqual({ frozen: { active: true, text: 'hello' }, liveText: '' })
+
+    // It does have to yield to the next word actually being previewed, though - both overlays
+    // sit on the same cursor cell until the echo moves it, so leaving the old one up would
+    // draw the two on top of each other.
+    const afterNextWordPreviewed = await page.evaluate(() => {
+      const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      // Appended, not replaced: the textarea accumulates across compositions, and xterm reads
+      // the committed text back out of it by offset (CompositionHelper._compositionPosition).
+      ta.value = 'helloworld'
+      ta.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'world' }))
+      return document.querySelector('.composition-echo')!.classList.contains('active')
+    })
+    expect(afterNextWordPreviewed).toBe(false)
+
+    await page.evaluate(() => {
+      const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      ta.dispatchEvent(new CompositionEvent('compositionend', { data: 'world' }))
+    })
+    await expect(async () => {
+      expect(await terminalText(page)).toContain('helloworld')
+    }).toPass({ timeout: 10_000 })
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'composition restart test host')
   })
 
   test('a toolbar button waits for a delayed native composition commit before acting', async ({ page }) => {
@@ -167,7 +232,7 @@ test.describe('with touch emulation', () => {
       ta.value += 'al'
       ta.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'al' }))
     })
-    await expect(page.locator('.composition-view')).toHaveText('al')
+    await expect(page.locator(LIVE_PREVIEW)).toHaveText('al')
 
     // Left arrow, with nothing committed yet - correct behavior waits for the (artificially
     // delayed) native commit to actually land before the arrow's own bytes go out. Pipe right
