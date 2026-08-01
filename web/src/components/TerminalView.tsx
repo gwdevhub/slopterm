@@ -6,6 +6,7 @@ import { resizeTerminal, sshSessionState, sshUpload, terminalSocketUrl, type Con
 import { getAppearance, subscribeAppearance, terminalFontFamily } from '../lib/appearance'
 import { KeyboardToolbar } from './KeyboardToolbar'
 import { finishAndroidComposing, isMobileApp, registerCompositionBridge } from '../lib/androidBridge'
+import { registerTerminalTouch, type TouchSelection } from '../lib/terminalTouch'
 
 interface TerminalViewProps {
   sessionId: string
@@ -88,6 +89,10 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
   const requestRef = useRef(request)
   const [uploadStatus, setUploadStatus] = useState<{ message: string; error?: boolean } | null>(null)
   const uploadIdRef = useRef(0)
+  // The floating "Copy" bubble over a touch selection, positioned by the gesture handler (see
+  // terminalTouch.ts) and null whenever there's nothing selected. A phone has no Ctrl+C and no
+  // right-click, so this is the only way selected text gets to the clipboard there.
+  const [touchSelection, setTouchSelection] = useState<TouchSelection | null>(null)
   // Lets KeyboardToolbar (rendered outside the [sessionId] effect below, which owns the
   // actual live WebSocket) push raw bytes into the same connection term.onData writes to -
   // set once the socket exists, reset to a no-op on cleanup so a stale tap after teardown
@@ -152,6 +157,19 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
   // keystrokes the shell would start executing line by line.
   function pasteText(text: string) {
     termRef.current?.paste(text)
+    refocusTerminal()
+  }
+
+  // The touch selection's only exit that isn't "throw it away": copy it, drop the selection, and
+  // hand focus back to the terminal so typing carries straight on. Driven from pointerdown with
+  // its default cancelled (the same trick the key toolbar uses) so the press never moves focus off
+  // xterm's textarea - Android tears the keyboard's input connection down and rebuilds it when it
+  // does, and a press is a user gesture as far as the clipboard is concerned either way.
+  function copyTouchSelection() {
+    const text = touchSelection?.text
+    if (text) void navigator.clipboard.writeText(text)
+    termRef.current?.clearSelection()
+    setTouchSelection(null)
     refocusTerminal()
   }
 
@@ -529,41 +547,19 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     container.addEventListener('dragover', onDragOver)
     container.addEventListener('drop', onDrop)
 
-    // Double-tap the terminal itself to send Tab, the way Termius does - completion is the key
-    // a shell session reaches for most, and it shouldn't need aiming at a ~36px cap in the
-    // toolbar every time. Deliberately built on touch events rather than the `dblclick` a
-    // browser synthesizes from them, so a desktop mouse's double-click still means only what it
-    // has always meant here: xterm selecting the word under the cursor.
-    const DOUBLE_TAP_MS = 400
-    const DOUBLE_TAP_SLOP_PX = 30
-    let lastTapAt = 0
-    let lastTapX = 0
-    let lastTapY = 0
-    const onTouchEnd = (event: TouchEvent) => {
-      // Ignore anything multi-touch (pinch-zoom, a stray second finger) - only a clean
-      // one-finger tap counts.
-      if (event.touches.length > 0 || event.changedTouches.length !== 1) return
-      const touch = event.changedTouches[0]
-      const isDoubleTap =
-        event.timeStamp - lastTapAt < DOUBLE_TAP_MS &&
-        Math.abs(touch.clientX - lastTapX) < DOUBLE_TAP_SLOP_PX &&
-        Math.abs(touch.clientY - lastTapY) < DOUBLE_TAP_SLOP_PX
-      // A third tap must not pair with the second one and fire again, so a match resets the
-      // clock rather than carrying this tap's time forward.
-      lastTapAt = isDoubleTap ? 0 : event.timeStamp
-      lastTapX = touch.clientX
-      lastTapY = touch.clientY
-      if (!isDoubleTap) return
-
-      // Suppressing the compatibility mouse events this tap would otherwise synthesize is what
-      // keeps xterm from selecting the word underneath as a side effect of asking for
-      // completion (and stops the browser's double-tap zoom, belt-and-braces with the
-      // touch-manipulation style on the container).
-      event.preventDefault()
-      sendRawRef.current('\t')
-      term.focus()
-    }
-    container.addEventListener('touchend', onTouchEnd, { passive: false })
+    // Everything the terminal answers to on a touchscreen - drag to scroll the scrollback, long
+    // press to select (then drag to extend), double tap for Tab, the way Termius does - lives in
+    // one gesture handler, since all three start from the same touchstart. Deliberately built on
+    // touch events rather than the mouse events a browser synthesizes from them, so a desktop
+    // mouse keeps meaning exactly what it always has here: xterm's own selection and wheel.
+    const disposeTouch = registerTerminalTouch(term, container, {
+      onDoubleTap: () => {
+        sendRawRef.current('\t')
+        term.focus()
+      },
+      onSelectionChange: setTouchSelection,
+      onSendKey: (data) => sendRawRef.current(data),
+    })
 
     sendRawRef.current = (data: string) => {
       const socket = socketRef.current
@@ -631,7 +627,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       disposeCompositionBridge?.()
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
-      container.removeEventListener('touchend', onTouchEnd)
+      disposeTouch()
+      setTouchSelection(null)
       dataDisposable.dispose()
       term.dispose()
       termRef.current = null
@@ -893,16 +890,46 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
           {uploadStatus.message}
         </p>
       )}
-      {/* overflow-hidden so this container's own box can never be nudged by xterm's rendered
-          content (e.g. a fractional cell-size rounding mismatch) - it must stay purely
-          parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size.
-          On mobile we need overflow-y-auto to allow scrolling when keyboard is open. */}
-      {/* touch-manipulation: no double-tap-to-zoom, so a double tap is free to mean Tab
-          (see onTouchEnd above) and single taps land without the browser's 300ms wait. */}
-      <div
-        ref={containerRef}
-        className="min-h-0 flex-1 touch-manipulation bg-black p-1 sm:p-2 overflow-y-auto sm:overflow-hidden"
-      />
+      {/* The wrapper only exists to position the touch selection's Copy bubble against the
+          terminal without putting a React-managed child inside the element xterm.js owns. */}
+      <div className="relative min-h-0 flex-1">
+        {/* overflow-hidden so this container's own box can never be nudged by xterm's rendered
+            content (e.g. a fractional cell-size rounding mismatch) - it must stay purely
+            parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size.
+            On mobile we need overflow-y-auto to allow scrolling when keyboard is open. */}
+        {/* touch-none on a touchscreen: every gesture over the terminal is one of ours (see
+            terminalTouch.ts), and letting the browser start a pan of its own first would leave a
+            drag scrolling this container instead of the scrollback. Elsewhere,
+            touch-manipulation still buys a double tap free of double-tap-to-zoom, and taps that
+            land without the browser's 300ms wait. */}
+        <div
+          ref={containerRef}
+          className={`h-full w-full bg-black p-1 sm:p-2 overflow-y-auto sm:overflow-hidden ${
+            isMobileApp() ? 'touch-none' : 'touch-manipulation'
+          }`}
+        />
+        {touchSelection && (
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              event.preventDefault()
+              copyTouchSelection()
+            }}
+            onMouseDown={(event) => event.preventDefault()}
+            style={{
+              left: `${touchSelection.left}px`,
+              top: `${touchSelection.top}px`,
+              transform:
+                touchSelection.placement === 'above'
+                  ? 'translate(-50%, calc(-100% - 6px))'
+                  : 'translate(-50%, 6px)',
+            }}
+            className="absolute z-10 rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-white shadow-lg active:bg-slate-600"
+          >
+            Copy
+          </button>
+        )}
+      </div>
       {/* Keyboard toolbar for Android/mobile - special keys mobile keyboards don't expose.
           Every button is wired to sendKey/toggleModifier above, which push bytes into the
           same live WebSocket term.onData writes to - not into termRef, which has no such
