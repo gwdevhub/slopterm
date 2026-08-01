@@ -93,9 +93,9 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
   // set once the socket exists, reset to a no-op on cleanup so a stale tap after teardown
   // can't throw on a closed socket.
   const sendRawRef = useRef<(data: string) => void>(() => {})
-  // Clears the frozen composition preview (see the .composition-view handling in the terminal
-  // effect below) once real output has actually arrived - set from that effect, called from the
-  // socket effect's message handler, same cross-effect-ref pattern as sendRawRef/fitAndSyncRef.
+  // Clears the frozen composition preview (see the .composition-echo handling in the terminal
+  // effect below) once real output has actually been drawn - set from that effect, called from
+  // the socket effect's message handler, same cross-effect-ref pattern as sendRawRef.
   const unfreezeCompositionRef = useRef<() => void>(() => {})
   // Ctrl/Alt are "sticky" one-shot modifiers for the toolbar (mobile keyboards have no
   // physical Ctrl/Alt to hold): tapping arms one, then the *next* single character the
@@ -405,11 +405,23 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     // cursor) the instant compositionend fires, but doesn't actually send the committed text
     // until its own deferred setTimeout(0) runs, and the remote then has to receive and echo
     // it back before anything real is drawn - on a real network that gap is what read as the
-    // just-typed word vanishing for a moment. Freezing that same already-positioned element in
-    // place (see the socket message handler below, which clears it once real output arrives)
-    // closes the gap without us tracking cursor/cell geometry ourselves - only xterm's own
-    // internal services have access to that.
+    // just-typed word vanishing for a moment. Copying that already-positioned element into an
+    // overlay of our own closes the gap without us tracking cursor/cell geometry ourselves -
+    // only xterm's own internal services have access to that.
+    //
+    // A copy rather than re-activating xterm's own element (what this did until now): xterm
+    // keeps mutating .composition-view for its own purposes, and the very next compositionstart
+    // blanks its textContent outright (CompositionHelper.compositionstart) while re-marking it
+    // active - so the frozen word silently became an empty box. Committing with Enter is
+    // exactly when a mobile IME immediately opens a fresh composition on the new line, which is
+    // why the Space case looked fixed (PR #103/#106) while Enter kept flickering. Nothing but
+    // the code below ever touches this element, so no amount of xterm-side churn can blank it.
     const compositionView = container.querySelector<HTMLElement>('.composition-view')
+    const echoPreview = document.createElement('div')
+    // Same class (identical geometry/styling/stacking as the real preview it stands in for)
+    // plus a marker of our own, which is also what the e2e tests key off.
+    echoPreview.classList.add('composition-view', 'composition-echo')
+    compositionView?.parentElement?.appendChild(echoPreview)
     let compositionFreezeTimeout: ReturnType<typeof setTimeout> | undefined
     // Mirrors CompositionHelper's own _isComposing - compositionend (below) clears it, but so
     // does the keydown case just below it, which is the whole reason this exists as a separate
@@ -418,32 +430,37 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     function unfreezeComposition() {
       clearTimeout(compositionFreezeTimeout)
       compositionFreezeTimeout = undefined
-      compositionView?.classList.remove('active')
+      echoPreview.classList.remove('active')
     }
     unfreezeCompositionRef.current = unfreezeComposition
-    // Re-freezes the composition-view preview immediately after something else has just hidden
-    // it (see the two call sites below), and arms the backstop that clears it again once real
-    // output (or 1s) supersedes it.
+    // Snapshots the word xterm is about to stop previewing, at the position xterm had already
+    // computed for it (see the two call sites below), and arms the backstop that drops the
+    // snapshot again if real output never supersedes it.
     function freezeComposition() {
-      if (compositionView?.textContent) {
-        compositionView.classList.add('active')
-        // Backstop for a shell that never echoes what was typed (rare, but possible) - don't
-        // leave stale composed text on screen forever if the real echo never arrives.
-        compositionFreezeTimeout = setTimeout(unfreezeComposition, 1000)
-      }
+      if (!compositionView?.textContent) return
+      echoPreview.style.cssText = compositionView.style.cssText
+      echoPreview.textContent = compositionView.textContent
+      echoPreview.classList.add('active')
+      // Backstop for a shell that never echoes what was typed (rare, but possible) - don't
+      // leave stale composed text on screen forever if the real echo never arrives.
+      compositionFreezeTimeout = setTimeout(unfreezeComposition, 1000)
     }
     const onCompositionEnd = () => {
       isComposingRef.current = false
       // xterm's own listener (registered first, at term.open() time - same-event listeners
-      // fire in registration order) already removed 'active' as part of hiding it; re-adding
-      // it here, synchronously after that, is what keeps the preview visible without
-      // interfering with xterm's own handling of the commit.
+      // fire in registration order) has already hidden its preview as part of handling the
+      // commit; taking the snapshot here, synchronously after that, is what keeps the word on
+      // screen without interfering with that handling.
       freezeComposition()
     }
     const onCompositionStart = () => {
       isComposingRef.current = true
-      clearTimeout(compositionFreezeTimeout)
     }
+    // A new word being previewed lands on top of the frozen one (same cursor cell, since the
+    // echo that would have moved the cursor hasn't arrived yet), so the snapshot has to go the
+    // moment there's real preview text to replace it - on the update, not on the start, or
+    // typing ahead of a slow echo would blank the previous word again.
+    const onCompositionUpdate = () => unfreezeComposition()
     // A real compositionend DOM event isn't the only way a composition finishes: pressing
     // Enter mid-word makes CompositionHelper.keydown finalize it right there, synchronously,
     // via its "don't wait for propagation" branch (so the composed text reaches the shell
@@ -469,6 +486,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     }
     textarea?.addEventListener('compositionend', onCompositionEnd)
     textarea?.addEventListener('compositionstart', onCompositionStart)
+    textarea?.addEventListener('compositionupdate', onCompositionUpdate)
     textarea?.addEventListener('keydown', onKeyDownDuringComposition, true)
 
     // Drag a file from the OS onto the terminal to upload it into the shell's cwd. dragover
@@ -575,7 +593,9 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       textarea?.removeEventListener('paste', onPaste)
       textarea?.removeEventListener('compositionend', onCompositionEnd)
       textarea?.removeEventListener('compositionstart', onCompositionStart)
+      textarea?.removeEventListener('compositionupdate', onCompositionUpdate)
       textarea?.removeEventListener('keydown', onKeyDownDuringComposition, true)
+      echoPreview.remove()
       disposeCompositionBridge?.()
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
@@ -675,9 +695,18 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         const bytes = new Uint8Array(event.data as ArrayBuffer)
         offsetRef.current = (offsetRef.current ?? 0) + bytes.byteLength
         // Real output has arrived - it's at least as current as any frozen composition preview
-        // (see the terminal effect above), so drop that preview before drawing over it.
-        unfreezeCompositionRef.current()
-        termRef.current?.write(bytes)
+        // (see the terminal effect above), so that preview goes now. Handing it to write()'s
+        // own completion callback rather than dropping it here first is what keeps the swap
+        // invisible: write() is asynchronous (xterm parses off a macrotask via WriteBuffer and
+        // only then schedules a render), so clearing the preview up front hands the browser a
+        // window in which it can paint the old row with the preview already gone and the echo
+        // not yet drawn - one flicker of exactly the blank this whole mechanism exists to
+        // prevent, and a much wider one for Enter, whose echo comes back as a burst (the line,
+        // the newline, the command's output, a fresh prompt) rather than a single small chunk.
+        // The callback fires right after the parse that draws the echo and before the render it
+        // schedules, so both land in the same frame.
+        const clearFrozenComposition = unfreezeCompositionRef.current
+        termRef.current?.write(bytes, clearFrozenComposition)
         // Output landed while this tab is in the background - flag it once (until next viewed).
         if (!isActiveRef.current && !activityNotifiedRef.current) {
           activityNotifiedRef.current = true
