@@ -45,6 +45,21 @@ const EXTRA_ROWS: KeyDef[][] = [
     { label: '^K', send: '\x0b', name: 'Ctrl+K' },
     { label: '^W', send: '\x17', name: 'Ctrl+W' },
   ],
+  // A second row of them, weighted towards the ones a full-screen editor puts in its own footer
+  // (nano: ^O write out, ^X exit, ^G help, ^U paste) plus the readline cursor/history keys that
+  // share the same letters. ^S/^Q are deliberately absent: on a terminal that still honors flow
+  // control they freeze the session, which from a key panel looks exactly like a crash.
+  [
+    { label: '^O', send: '\x0f', name: 'Ctrl+O' },
+    { label: '^X', send: '\x18', name: 'Ctrl+X' },
+    { label: '^G', send: '\x07', name: 'Ctrl+G' },
+    { label: '^U', send: '\x15', name: 'Ctrl+U' },
+    { label: '^Y', send: '\x19', name: 'Ctrl+Y' },
+    { label: '^N', send: '\x0e', name: 'Ctrl+N' },
+    { label: '^P', send: '\x10', name: 'Ctrl+P' },
+    { label: '^F', send: '\x06', name: 'Ctrl+F' },
+    { label: '^B', send: '\x02', name: 'Ctrl+B' },
+  ],
   [
     { label: '|', send: '|', name: 'Pipe' },
     { label: '~', send: '~', name: 'Tilde' },

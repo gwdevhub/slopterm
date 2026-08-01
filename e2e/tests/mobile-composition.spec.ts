@@ -253,4 +253,50 @@ test.describe('with touch emulation', () => {
     await gotoSection(page, 'Hosts')
     await deleteHost(page, 'toolbar composition race test host')
   })
+
+  test('an armed Ctrl applies to a character the IME is still composing', async ({ page }) => {
+    // Same stand-in for MainActivity's SloptermAndroid.finishComposing() as the test above:
+    // it commits whatever the IME is holding, which the page then sees as a real
+    // compositionend. Without one of these the composed character never reaches the terminal
+    // as its own single character at all - which is the bug: Ctrl+O in nano sat in the
+    // composing region, so nano got nothing and the toolbar's Ctrl stayed armed.
+    await page.addInitScript(() => {
+      ;(window as unknown as { SloptermAndroid: unknown }).SloptermAndroid = {
+        saveFile: () => {},
+        finishComposing: () => {
+          const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
+          setTimeout(() => ta?.dispatchEvent(new CompositionEvent('compositionend', { data: '' })), 20)
+        },
+      }
+    })
+
+    await connectHost(page, 'ctrl composition test host')
+
+    // A command line deliberately left un-run: Ctrl+C has to abandon it.
+    await page.keyboard.type('echo CTRL_C_SHOULD_KILL_THIS')
+    const ctrl = page.getByRole('button', { name: 'Ctrl', exact: true })
+    await ctrl.click()
+    await expect(ctrl).toHaveAttribute('aria-pressed', 'true')
+
+    // "c" typed on an on-screen keyboard: held in the composing region, not handed to the
+    // terminal, exactly as Gboard does it.
+    await page.evaluate(() => {
+      const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      ta.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }))
+      ta.value += 'c'
+      ta.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'c' }))
+    })
+
+    // The shell echoes the interrupt as "^C" and drops the line - a literal "c" (the bug)
+    // would just extend the command instead.
+    await expect(async () => {
+      expect(await terminalText(page)).toContain('CTRL_C_SHOULD_KILL_THIS^C')
+    }).toPass({ timeout: 10_000 })
+    // One-shot: having been applied, the modifier disarms itself.
+    await expect(ctrl).toHaveAttribute('aria-pressed', 'false')
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'ctrl composition test host')
+  })
 })
