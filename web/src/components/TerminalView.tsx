@@ -5,7 +5,7 @@ import '@xterm/xterm/css/xterm.css'
 import { resizeTerminal, sshSessionState, sshUpload, terminalSocketUrl, type ConnectRequest } from '../lib/api'
 import { getAppearance, subscribeAppearance, terminalFontFamily } from '../lib/appearance'
 import { KeyboardToolbar } from './KeyboardToolbar'
-import { isMobileApp, registerCompositionBridge } from '../lib/androidBridge'
+import { finishAndroidComposing, isMobileApp, registerCompositionBridge } from '../lib/androidBridge'
 
 interface TerminalViewProps {
   sessionId: string
@@ -427,6 +427,9 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     // does the keydown case just below it, which is the whole reason this exists as a separate
     // ref rather than reading xterm's private state.
     const isComposingRef = { current: false }
+    // True only for the tick in which an IME commit's text is handed to onData, so the sticky
+    // modifier there can tell a committed word apart from a paste or an escape sequence.
+    let compositionCommitPending = false
     function unfreezeComposition() {
       clearTimeout(compositionFreezeTimeout)
       compositionFreezeTimeout = undefined
@@ -447,6 +450,14 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     }
     const onCompositionEnd = () => {
       isComposingRef.current = false
+      // The commit xterm is about to send is the one onData turns into a control code, and a
+      // control code isn't echoed back as the letter it was composed from - freezing the
+      // preview would leave a phantom "o" sitting on screen for the backstop second.
+      compositionCommitPending = true
+      setTimeout(() => {
+        compositionCommitPending = false
+      }, 0)
+      if (modifiersRef.current.ctrl || modifiersRef.current.alt) return
       // xterm's own listener (registered first, at term.open() time - same-event listeners
       // fire in registration order) has already hidden its preview as part of handling the
       // commit; taking the snapshot here, synchronously after that, is what keeps the word on
@@ -460,7 +471,19 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     // echo that would have moved the cursor hasn't arrived yet), so the snapshot has to go the
     // moment there's real preview text to replace it - on the update, not on the start, or
     // typing ahead of a slow echo would blank the previous word again.
-    const onCompositionUpdate = () => unfreezeComposition()
+    const onCompositionUpdate = () => {
+      unfreezeComposition()
+      // A sticky modifier can only apply to a character the terminal actually receives, and a
+      // composing IME hands nothing over until the word is finished - so with Ctrl armed the
+      // "o" of Ctrl+O just sat in the composing region while nano waited, and whatever finally
+      // committed it arrived as a whole word rather than the single character onData applies
+      // the modifier to. That's the "Ctrl+O in nano types a literal o and leaves Ctrl lit"
+      // report. Committing the moment the IME starts holding text puts that first character
+      // through on its own, with the modifier still armed for it. Only while one is armed:
+      // ending every composition early would take the local preview (the whole reason
+      // composing is on, see MainActivity's TerminalWebView) away from normal typing.
+      if (modifiersRef.current.ctrl || modifiersRef.current.alt) void finishAndroidComposing()
+    }
     // A real compositionend DOM event isn't the only way a composition finishes: pressing
     // Enter mid-word makes CompositionHelper.keydown finalize it right there, synchronously,
     // via its "don't wait for propagation" branch (so the composed text reaches the shell
@@ -553,16 +576,25 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       let payload = data
       // One shot: a sticky modifier armed in the toolbar applies to the next single character
       // and then disarms, whether that character came from a physical keystroke or an IME
-      // commit. Anything longer (a paste, an escape sequence from an arrow key) isn't "the
-      // next character", so it passes through and leaves the modifier armed.
+      // commit. Anything else (a paste, an escape sequence from an arrow key) isn't "the next
+      // character", so it passes through and leaves the modifier armed.
       const armed = modifiersRef.current
-      if ((armed.ctrl || armed.alt) && data.length === 1) {
-        payload = applyStickyModifiers(data, armed)
-        // The ref is written directly as well as through state: two characters arriving in
-        // the same tick would both still see the armed value otherwise, since the ref only
-        // catches up on the next render.
-        modifiersRef.current = { ctrl: false, alt: false }
-        setModifiers({ ctrl: false, alt: false })
+      if (armed.ctrl || armed.alt) {
+        // A committed word arriving whole is the fallback path: off the Android app there's no
+        // bridge to end the composition after its first character (see onCompositionUpdate),
+        // so the modifier applies to the first character and the rest lands as typed - better
+        // than dropping the combination outright and leaving the modifier armed forever. Only
+        // for an IME commit; a paste or an arrow key's escape sequence still passes through
+        // untouched. Array.from, not [0]/slice, so a surrogate pair stays one character.
+        const characters = data.length === 1 || compositionCommitPending ? Array.from(data) : []
+        if (characters.length > 0) {
+          payload = applyStickyModifiers(characters[0], armed) + characters.slice(1).join('')
+          // The ref is written directly as well as through state: two characters arriving in
+          // the same tick would both still see the armed value otherwise, since the ref only
+          // catches up on the next render.
+          modifiersRef.current = { ctrl: false, alt: false }
+          setModifiers({ ctrl: false, alt: false })
+        }
       }
       sendRawRef.current(payload)
     })
