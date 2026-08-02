@@ -1239,6 +1239,32 @@ app.MapPost("/api/jobs/{id}/cancel", (string id) =>
     return Results.NoContent();
 });
 
+// "When would this actually run?" for the job form, answered before anything is saved - the
+// only practical way to tell whether a cron expression says what you meant. Takes the schedule
+// fields of an unsaved job (nothing else about it is needed) and returns real instants from the
+// same code the loop uses, so the preview can't promise a schedule the scheduler won't keep.
+// Needs no vault access, hence no unlock/404 path here.
+app.MapPost("/api/jobs/schedule-preview", (SchedulePreviewRequest request) =>
+{
+    if (request.ScheduleKind == "cron" && SchedulerService.ValidateCronExpression(request.CronExpression) is { } error)
+    {
+        return Results.Ok(new { runs = Array.Empty<DateTimeOffset>(), error });
+    }
+
+    var probe = new JobRecord
+    {
+        // Placeholders: PreviewNextRuns only ever reads the schedule fields below.
+        HostId = string.Empty,
+        Name = string.Empty,
+        ScheduleKind = request.ScheduleKind,
+        IntervalMinutes = request.IntervalMinutes,
+        DailyTime = request.DailyTime,
+        CronExpression = request.CronExpression,
+    };
+
+    return Results.Ok(new { runs = SchedulerService.PreviewNextRuns(probe, 3), error = (string?)null });
+});
+
 app.MapGet("/api/vault/logs", () =>
 {
     try
@@ -1954,7 +1980,14 @@ var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
             return "A job needs either a command or a snippet to run.";
         }
 
-        if (job.ScheduleKind == "daily")
+        if (job.ScheduleKind == "cron")
+        {
+            if (SchedulerService.ValidateCronExpression(job.CronExpression) is { } cronError)
+            {
+                return cronError;
+            }
+        }
+        else if (job.ScheduleKind == "daily")
         {
             if (!TimeSpan.TryParseExact(job.DailyTime, @"hh\:mm", CultureInfo.InvariantCulture, out _))
             {

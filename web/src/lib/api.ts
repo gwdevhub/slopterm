@@ -404,9 +404,13 @@ export interface JobRecord {
   // Exactly one of the two - a snippet is resolved to its current text at run time.
   command?: string
   snippetId?: string
-  scheduleKind: 'interval' | 'daily'
+  scheduleKind: 'interval' | 'daily' | 'cron'
   intervalMinutes: number
   dailyTime: string // "HH:mm", local time
+  // Standard 5-field cron, evaluated in the machine's local time. Only read when
+  // scheduleKind is 'cron'; the two simpler kinds stay because cron can't express them
+  // ("every 90 minutes" has no cron form).
+  cronExpression?: string | null
   enabled: boolean
   runOnStart: boolean
   overlapPolicy: 'skip' | 'queue' | 'kill'
@@ -510,6 +514,27 @@ export async function runJobNow(id: string): Promise<void> {
 
 export async function cancelJobRun(id: string): Promise<void> {
   await fetch(`/api/jobs/${id}/cancel`, { method: 'POST' })
+}
+
+// The next few times a not-yet-saved schedule would fire, from the same code the scheduler
+// runs on - the only real way to check a cron expression says what you meant. `error` is a
+// message about the expression itself, not a failed request, so it comes back 200 with an
+// empty `runs` rather than as a thrown error.
+export interface SchedulePreview {
+  runs: string[] // ISO UTC instants
+  error?: string | null
+}
+
+export async function previewSchedule(
+  schedule: Pick<JobRecord, 'scheduleKind' | 'intervalMinutes' | 'dailyTime' | 'cronExpression'>,
+): Promise<SchedulePreview> {
+  const res = await fetch('/api/jobs/schedule-preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(schedule),
+  })
+  await throwOnError(res)
+  return res.json()
 }
 
 export interface SnippetRecord {

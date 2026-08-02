@@ -125,6 +125,47 @@ test('scheduled jobs: a non-zero exit is recorded as a failed run', async ({ pag
   await page.evaluate(async (id) => { await fetch(`/api/vault/hosts/${id}`, { method: 'DELETE' }) }, hostId)
 })
 
+test('scheduled jobs: a cron schedule previews its next runs, rejects a bad expression, and saves', async ({ page }) => {
+  await page.goto(ctx.baseUrl)
+  await gotoSection(page, 'Hosts')
+  await ensureVaultUnlocked(page)
+  const hostId = await seedHost(page, 'jobs-e2e-host')
+
+  await openJobsSection(page)
+  await page.getByRole('button', { name: 'New job' }).click()
+  await page.fill('#job-name', 'jobs-e2e-cron')
+  await page.selectOption('#job-host', { label: 'jobs-e2e-host' })
+  await page.fill('#job-command', 'true')
+  await page.selectOption('#job-schedule', 'cron')
+
+  // Nonsense first: the preview is the thing that tells you before you save, so it has to
+  // say so on its own, without a submit.
+  await page.fill('#job-cron', 'every tuesday please')
+  await expect(page.getByText(/isn't a valid cron expression/)).toBeVisible({ timeout: 10_000 })
+
+  // Parses, but matches no real date - a job that would sit there looking scheduled forever.
+  await page.fill('#job-cron', '0 0 30 2 *')
+  await expect(page.getByText(/never matches a real date/)).toBeVisible({ timeout: 10_000 })
+
+  // A real expression resolves to actual instants. 03:00 on the 1st of each month is far
+  // enough from any plausible test-run time that nothing fires during the suite.
+  await page.fill('#job-cron', '0 3 1 * *')
+  await expect(page.getByText(/^Next runs: /)).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText(/isn't a valid cron expression/)).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Add job' }).click()
+
+  // The card shows the expression verbatim - deliberately not a prose translation.
+  const card = page.locator('li', { hasText: 'jobs-e2e-cron' })
+  await expect(card).toBeVisible()
+  await expect(card.getByText('0 3 1 * * on jobs-e2e-host')).toBeVisible()
+  // And the scheduler itself accepted it, i.e. it computed a real next-run time.
+  await expect(card.getByText(/Next \d/)).toBeVisible({ timeout: 10_000 })
+
+  await deleteJob(page, 'jobs-e2e-cron')
+  await page.evaluate(async (id) => { await fetch(`/api/vault/hosts/${id}`, { method: 'DELETE' }) }, hostId)
+})
+
 test('scheduled jobs: the form surfaces a backend validation error', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')

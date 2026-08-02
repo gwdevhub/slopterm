@@ -131,13 +131,21 @@ public sealed class JobRecord
     public string? Command { get; set; }
     public string? SnippetId { get; set; }
 
-    // "interval" (every IntervalMinutes) or "daily" (at DailyTime, in the machine's local
-    // time). Deliberately not cron: a parser would have to be hand-rolled (the no-dependency
-    // rule) and the expressiveness nobody uses drags in a pile of timezone/DST edge cases -
-    // see todo/scheduled-jobs.md.
+    // "interval" (every IntervalMinutes), "daily" (at DailyTime), or "cron" (at every instant
+    // matching CronExpression) - all in the machine's local time. The two simple kinds stay
+    // because cron genuinely can't express them: there's no cron for "every 90 minutes", and
+    // "every N minutes" measured from the last run is a different thing from a fixed grid.
+    // Cron covers everything the other two can't (weekdays only, several times a day, monthly).
     public string ScheduleKind { get; set; } = "interval";
     public int IntervalMinutes { get; set; } = 60;
     public string DailyTime { get; set; } = "06:00"; // "HH:mm", local time
+
+    // Standard 5-field cron (minute hour day-of-month month day-of-week), plus the @daily /
+    // @weekly / @hourly macros - parsed by Cronos, see SchedulerService.NextRunUtcAfter. Only
+    // read when ScheduleKind is "cron". Empty is invalid there and rejected on save, rather
+    // than silently defaulted: a job that quietly runs on some other schedule than the one
+    // typed is worse than one that won't save.
+    public string? CronExpression { get; set; }
 
     public bool Enabled { get; set; } = true;
 

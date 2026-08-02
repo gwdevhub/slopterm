@@ -75,10 +75,24 @@ this option - best-effort is fine, quietly not running is not.
 - **Overlap.** All three, per job: `skip` (default - leave the running one alone), `queue`
   (start the next one the moment it finishes, at most one queued so a slow job can't build a
   backlog), or `kill` (cancel the running one and start fresh).
-- **Schedule format.** "Every N minutes" or "daily at HH:mm local", not cron. A cron parser
-  would have to be hand-rolled (the no-dependency rule) and the expressiveness nobody uses
-  drags in a pile of edge cases. Daily takes its UTC offset at the *target* instant, so the
-  runs either side of a DST change still land at 6am local.
+- **Schedule format.** Three kinds: "every N minutes", "daily at HH:mm local", and cron.
+  The first cut deliberately left cron out on the grounds that a parser would have to be
+  hand-rolled; that reasoning didn't survive contact with the gap it left. There is no way to
+  say "weekdays at 09:00" or "every 15 minutes on the quarter hour" with the other two - and
+  `intervalMinutes` is measured from the last run, so it drifts and re-anchors on every edit,
+  meaning "every hour *on the hour*" wasn't expressible at all. Cron went in via **Cronos**
+  (small, no transitive deps, netstandard2.0 so Android takes it): the DST rules alone are
+  worth not hand-rolling, and the "no dependencies" premise was never a real rule here -
+  SSH.NET and Argon2 predate it. The two simple kinds stay, because cron can't express them
+  either: there is no cron for "every 90 minutes".
+  Daily takes its UTC offset at the *target* instant, so the runs either side of a DST change
+  still land at 6am local; Cronos does the equivalent for cron, firing a skipped
+  spring-forward time at the jump and the repeated autumn hour once.
+- **Checking a schedule before saving it.** `POST /api/jobs/schedule-preview` returns the next
+  three real instants for an unsaved schedule, walking the same `NextRunUtcAfter` the loop
+  uses so the preview can't promise something the scheduler won't do. This is the answer to
+  "does this cron expression mean what I think": the form shows those three times live under
+  the field, and links to crontab.guru for the people who'd rather read it in English.
 - **Two devices, one job.** An owner-device flag: `OwnerDeviceId`, matched against a stable
   per-install id (`DeviceIdentity`, kept as plain text in the vault directory - it identifies
   a machine, not a person). **New jobs pin to the creating device by default**, so the moment

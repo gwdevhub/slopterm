@@ -50,6 +50,20 @@ public sealed class ImportHostShareRequest
     public required string Token { get; set; }
 }
 
+/// <summary>
+/// The schedule half of a job the user is still editing, for /api/jobs/schedule-preview. A
+/// separate type from JobRecord rather than reusing it: the form asks for this while the
+/// command, host and name may all still be empty, and none of them affect the answer.
+/// Defaults mirror JobRecord's so an omitted field previews what saving would actually do.
+/// </summary>
+public sealed class SchedulePreviewRequest
+{
+    public string ScheduleKind { get; set; } = "interval";
+    public int IntervalMinutes { get; set; } = 60;
+    public string DailyTime { get; set; } = "06:00";
+    public string? CronExpression { get; set; }
+}
+
 public sealed class SetGithubTokenRequest
 {
     // Null/empty clears it.
