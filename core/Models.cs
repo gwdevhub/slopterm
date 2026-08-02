@@ -21,6 +21,14 @@ public sealed class ConnectRequest
     /// ForwardingService.
     /// </summary>
     public string? HostId { get; set; }
+
+    /// <summary>
+    /// Which of the host's credentials to use, when it has more than one. Only meaningful
+    /// alongside HostId, and only when the request carries no secret of its own - the
+    /// backend then resolves it (see CredentialResolver), which is what lets the frontend
+    /// hold no host secrets at all.
+    /// </summary>
+    public string? CredentialId { get; set; }
 }
 
 public sealed class VaultPasswordRequest
@@ -48,6 +56,49 @@ public sealed class SetShowSshConfigHostsRequest
 public sealed class ImportHostShareRequest
 {
     public required string Token { get; set; }
+}
+
+/// <summary>
+/// Create/update a collection. Every field except Name is nullable on update and means
+/// "leave it alone" - which is what lets the edit form show a password field it never
+/// fills in, and still save the rest of the form without wiping the stored password.
+/// </summary>
+public sealed class CollectionRequest
+{
+    public string? Name { get; set; }
+    public string? RemoteUrl { get; set; }
+    public string? Username { get; set; }
+    public string? Password { get; set; }
+    public List<string>? Scopes { get; set; }
+    public bool? Enabled { get; set; }
+}
+
+public sealed class JoinCollectionRequest
+{
+    public required string Token { get; set; }
+    public string? Passphrase { get; set; }
+}
+
+/// <summary>
+/// Removing members and re-keying. RemoveMemberIds may be empty - rotating with nobody
+/// removed is the "that token got pasted into the wrong chat" case.
+/// </summary>
+public sealed class RotateCollectionRequest
+{
+    public List<string> RemoveMemberIds { get; set; } = [];
+}
+
+public sealed class LeaveCollectionRequest
+{
+    // On by default: leaving a team collection must not silently take every host it carried
+    // off this device too.
+    public bool KeepRecordsLocally { get; set; } = true;
+}
+
+/// <summary>Moves one record between collections - "share this host with the team".</summary>
+public sealed class MoveRecordRequest
+{
+    public required string CollectionId { get; set; }
 }
 
 public sealed class SetGithubTokenRequest

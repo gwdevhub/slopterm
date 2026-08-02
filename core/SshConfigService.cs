@@ -30,6 +30,39 @@ public static class SshConfigService
     // own default identity list (minus the legacy DSA key, which SSH.NET doesn't support).
     private static readonly string[] DefaultIdentityFileNames = ["id_ed25519", "id_ecdsa", "id_rsa"];
 
+    /// <summary>
+    /// The user's normal SSH key, if they have one: the first of OpenSSH's default identity
+    /// filenames that exists in ~/.ssh. Used by CredentialResolver as the last step before
+    /// giving up, so a host that names a credential resolves against "my usual key" without
+    /// anyone having to make a keychain entry for it first.
+    /// </summary>
+    public static (string PrivateKey, string Path)? TryReadDefaultIdentity()
+    {
+        if (OperatingSystem.IsAndroid())
+        {
+            return null;
+        }
+
+        try
+        {
+            var sshDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh");
+            foreach (var name in DefaultIdentityFileNames)
+            {
+                var candidate = Path.Combine(sshDir, name);
+                if (File.Exists(candidate))
+                {
+                    return (File.ReadAllText(candidate), candidate);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort, like every other lookup here - an unreadable ~/.ssh is "no key".
+        }
+
+        return null;
+    }
+
     public static string GetConfigPath()
     {
         // Lets e2e tests point this at a fixture file instead of a real developer's own
