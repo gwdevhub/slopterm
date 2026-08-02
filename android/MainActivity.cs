@@ -66,6 +66,10 @@ public class MainActivity : Activity
     // InputConnection through it.
     private TerminalWebView? _webView;
 
+    // Whether the IME was visible as of the last inset change, so OnImeVisibilityChanged only
+    // acts on an actual hide, not every inset callback (rotation, nav bar, ...).
+    private bool _imeWasVisible;
+
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
@@ -108,7 +112,7 @@ public class MainActivity : Activity
         root.SetBackgroundColor(Color.ParseColor("#0f172b"));
         root.AddView(webView, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
-        root.SetOnApplyWindowInsetsListener(new SafeAreaInsetsListener());
+        root.SetOnApplyWindowInsetsListener(new SafeAreaInsetsListener(OnImeVisibilityChanged));
         SetContentView(root);
 
         RequestNotificationPermissionIfNeeded();
@@ -414,6 +418,24 @@ public class MainActivity : Activity
         }
     }
 
+    // The IME can go away without the page ever hearing about it - the system back gesture and
+    // a keyboard's own "hide" chevron both dismiss it without blurring whatever was focused, so
+    // xterm's hidden textarea (or any input) stays the DOM's activeElement. WebView then
+    // restores focus to that same element on the very next touch anywhere in it - a toolbar
+    // button included, even though its own pointerdown handler cancels the DOM-level default
+    // specifically to avoid taking focus (see usePressProps in KeyboardToolbar.tsx) - and
+    // Chromium reopens the IME as part of that restore. Blurring here, right as the keyboard
+    // closes, leaves nothing for that restore to reattach to; tapping the terminal itself still
+    // focuses it and brings the keyboard back on purpose.
+    private void OnImeVisibilityChanged(bool imeVisible)
+    {
+        if (_imeWasVisible && !imeVisible)
+        {
+            _webView?.EvaluateJavascript("document.activeElement && document.activeElement.blur();", null);
+        }
+        _imeWasVisible = imeVisible;
+    }
+
     private int GetKeyboardHeight()
     {
         if (Window?.DecorView?.RootView is View rootView)
@@ -472,6 +494,13 @@ public class MainActivity : Activity
     // nav, landscape) rather than hard-coded.
     private sealed class SafeAreaInsetsListener : Java.Lang.Object, View.IOnApplyWindowInsetsListener
     {
+        private readonly Action<bool> _onImeVisibilityChanged;
+
+        public SafeAreaInsetsListener(Action<bool> onImeVisibilityChanged)
+        {
+            _onImeVisibilityChanged = onImeVisibilityChanged;
+        }
+
         public WindowInsets OnApplyWindowInsets(View view, WindowInsets insets)
         {
             if (OperatingSystem.IsAndroidVersionAtLeast(30))
@@ -486,6 +515,7 @@ public class MainActivity : Activity
                 // useVisualViewportHeight). Max, not sum: while the keyboard is up it covers the
                 // nav bar's strip anyway.
                 var ime = insets.GetInsets(WindowInsets.Type.Ime());
+                _onImeVisibilityChanged(ime.Bottom > 0);
                 view.SetPadding(bars.Left, bars.Top, bars.Right, Math.Max(bars.Bottom, ime.Bottom));
                 return WindowInsets.Consumed;
             }
