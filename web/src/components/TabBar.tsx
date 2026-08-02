@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ConnectRequest } from '../lib/api'
 import { ContextMenu } from './ContextMenu'
-import { CloseIcon, SftpTabIcon, TerminalTabIcon } from './icons'
+import { CloseIcon, LocalTerminalTabIcon, SftpTabIcon, TerminalTabIcon } from './icons'
 
 export interface SessionTab {
   // Stable client-generated key for the tab's whole lifetime - independent of the backend
@@ -10,13 +10,15 @@ export interface SessionTab {
   id: string
   sessionId: string | null
   label: string
-  kind: 'ssh' | 'sftp'
+  kind: 'ssh' | 'sftp' | 'local'
   // Only set for 'sftp' tabs - the remote pane's starting directory (see SftpView).
   homeDirectory?: string
   // Kept alongside the tab so it can be persisted (see App.tsx's saveOpenTabs effect) and
   // retried without the user re-entering anything - restoring tabs across restarts is the
   // whole reason a tab needs to remember its own ConnectRequest at all.
-  request: ConnectRequest
+  // Undefined for a 'local' tab, which has no destination to dial and nothing to retry -
+  // opening another one is always just "start a shell here".
+  request?: ConnectRequest
   status: 'connecting' | 'connected' | 'error'
   errorMessage?: string
   // Resolved from the saved host's attached snippets at the moment this tab was created
@@ -75,7 +77,8 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onRename }: TabBarPr
   return (
     <div className="flex h-[42px] shrink-0 items-center gap-1 overflow-x-auto border-b border-slate-800 bg-slate-900 px-1">
       {tabs.map((tab) => {
-        const TabIcon = tab.kind === 'sftp' ? SftpTabIcon : TerminalTabIcon
+        const TabIcon =
+          tab.kind === 'sftp' ? SftpTabIcon : tab.kind === 'local' ? LocalTerminalTabIcon : TerminalTabIcon
         const isEditing = editingId === tab.id
         return (
           <div

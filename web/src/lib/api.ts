@@ -84,6 +84,9 @@ export function terminalSocketUrl(sessionId: string, since?: number): string {
 
 export interface LiveSshSession {
   sessionId: string
+  // Local shells share this store (and every route past the connect) with SSH sessions, so a
+  // restored tab has to check this as well as the id before reattaching.
+  kind: 'ssh' | 'local'
   host: string
   port: number
   username: string
@@ -95,6 +98,43 @@ export interface LiveSshSession {
 // page find the sessions its restored tabs were already on.
 export async function listSshSessions(): Promise<LiveSshSession[]> {
   const res = await fetch('/api/ssh/sessions')
+  await throwOnError(res)
+  return res.json()
+}
+
+export interface LocalShellSupport {
+  supported: boolean
+  // Why not, when supported is false - shown instead of the launch button rather than
+  // discovered by pressing one that always fails.
+  reason: string | null
+  // "Linux" / "Windows" / "macOS" / "Android", and the shell that would be launched.
+  platform: string
+  shell: string | null
+}
+
+// Whether this machine can open a shell on itself, asked once so the entry point can be
+// hidden where it can't. Never throws: a failure here is treated as "not supported", which
+// is the same thing from the UI's point of view.
+export async function getLocalShellSupport(): Promise<LocalShellSupport> {
+  const res = await fetch('/api/local/shell')
+  await throwOnError(res)
+  return res.json()
+}
+
+export interface LocalShellResponse {
+  sessionId: string
+  shell: string
+  platform: string
+}
+
+// Opens a shell on the machine slopterm is running on. The session it returns is attached to,
+// resized, listed and disconnected through exactly the same routes an SSH session uses.
+export async function connectLocalShell(request: { columns: number; rows: number; shell?: string }): Promise<LocalShellResponse> {
+  const res = await fetch('/api/local/shell/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
   await throwOnError(res)
   return res.json()
 }
@@ -649,7 +689,10 @@ export async function upsertRecentConnection(connection: RecentConnectionRecord)
 }
 
 export interface OpenTabRecord {
-  kind: 'ssh' | 'sftp'
+  // A 'local' tab carries no destination and no credential; host/username hold the machine
+  // and shell it ran ("Linux"/"bash") purely so the record's shape - which the vault has
+  // always stored with these fields required - stays the same one it has always been.
+  kind: 'ssh' | 'sftp' | 'local'
   label: string
   host: string
   port: number

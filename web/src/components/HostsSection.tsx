@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   getHostShareToken,
+  getLocalShellSupport,
   getSettings,
   listHosts,
   listSnippets,
@@ -27,6 +28,7 @@ import type { ConnectionFormValues } from './ConnectionForm'
 interface HostsSectionProps {
   onConnect: (request: ConnectRequest, startupCommands?: string[]) => Promise<boolean>
   onConnectSftp: (request: ConnectRequest, label: string) => Promise<boolean>
+  onConnectLocal: () => Promise<boolean>
   errorMessage: string | null
   isConnecting: boolean
 }
@@ -36,7 +38,13 @@ interface HostsSectionProps {
 // (see HostModal's doc comment for why), so this is the only "what's showing" state left.
 type HostModalState = 'new' | SavedHost | null
 
-export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnecting }: HostsSectionProps) {
+export function HostsSection({
+  onConnect,
+  onConnectSftp,
+  onConnectLocal,
+  errorMessage,
+  isConnecting,
+}: HostsSectionProps) {
   const [hosts, setHosts] = useState<SavedHost[]>([])
   const [snippets, setSnippets] = useState<SavedSnippet[]>([])
   const [hostModal, setHostModal] = useState<HostModalState>(null)
@@ -47,6 +55,9 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
   const [shareToken, setShareToken] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [showSshConfigHosts, setShowSshConfigHosts] = useState(false)
+  // Null until the support probe answers, and left null where the answer is no - see
+  // HostGrid's localShell prop.
+  const [localShell, setLocalShell] = useState<{ platform: string; shell: string } | null>(null)
 
   useEffect(() => {
     refreshHosts()
@@ -56,6 +67,9 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
     getSettings()
       .then((s) => setShowSshConfigHosts(s.showSshConfigHosts))
       .catch(() => setShowSshConfigHosts(false))
+    getLocalShellSupport()
+      .then((s) => setLocalShell(s.supported && s.shell ? { platform: s.platform, shell: s.shell } : null))
+      .catch(() => setLocalShell(null))
   }, [])
 
   // Auto-dismiss the transient "Copied…" pill.
@@ -179,6 +193,8 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
           hosts={hosts}
           onNewHost={() => setHostModal('new')}
           onQuickConnect={() => setQuickConnectOpen(true)}
+          onLocalShell={() => void onConnectLocal()}
+          localShell={localShell}
           onImport={() => setImportOpen(true)}
           onSsh={handleSsh}
           onSftp={handleSftp}
