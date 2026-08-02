@@ -90,8 +90,8 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     // Create the native window immediately so Windows gives the running application a
     // taskbar button as well as its tray icon. The window already uses the embedded app
     // icon (AppWindowManager.SetIconFile). Closing it quits the app by default; only when
-    // the user opts into CloseToTray does the close handler minimize-and-keep-running
-    // instead, leaving the taskbar/tray entry available for the rest of the process life.
+    // the user opts into CloseToTray does the close handler hide-and-keep-running instead,
+    // dropping the taskbar button so the tray icon is the only entry left.
     OpenWindow();
     CrashLogger.LogPhase("window opened");
 }

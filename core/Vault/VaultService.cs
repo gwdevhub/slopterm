@@ -148,7 +148,7 @@ public sealed class VaultService
     }
 
     /// <summary>
-    /// Persists whether closing the app window minimizes it to the tray (leaving the app
+    /// Persists whether closing the app window hides it to the tray (leaving the app
     /// running) instead of quitting outright. A plain settings.json write - unlike
     /// RequireMasterPassword it changes no encryption key, so there's nothing to re-key,
     /// and it needs no unlock (settings.json is always plaintext/readable).
