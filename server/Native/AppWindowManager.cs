@@ -16,9 +16,9 @@ namespace Slopterm.Server.Native;
 /// never gave us a window handle to reliably single-instance or reposition.
 ///
 /// The single PhotinoWindow instance is created once and kept alive for the rest of the
-/// process's lifetime - "closing" it (the X button, or the tray icon reopening it later)
-/// minimizes it instead of destroying it. This isn't just a UX choice: creating a
-/// *second* PhotinoWindow instance after a first one is actually destroyed reliably
+/// process's lifetime - "closing" it with CloseToTray on hides it instead of destroying it
+/// (and the tray icon shows that same window again later). This isn't just a UX choice:
+/// creating a *second* PhotinoWindow instance after a first one is actually destroyed reliably
 /// crashes the whole process natively (a silent, unrecoverable process death - no
 /// catchable .NET exception, confirmed by reproducing it directly: the process was
 /// consistently gone within ~1s of the second window's Load() call completing). Never
@@ -66,10 +66,15 @@ public static class AppWindowManager
     // asks for the current state via wc:ready when it mounts.
     private static volatile bool _webviewReady;
 
+    // The taskbar frame currently hidden by "close to tray", or Zero when the window is
+    // shown. Written on the window thread (a close) and read on the tray thread (a click),
+    // hence the interlocked/volatile access.
+    private static nint _hiddenWindowHandle;
+
     /// <summary>
-    /// Wires up what closing the window does: minimize it to the tray (keeping the app
-    /// running) when <paramref name="closeToTray"/> reports true, or quit outright (the
-    /// default) via <paramref name="onQuit"/>. Call once at startup before the first window
+    /// Wires up what closing the window does: hide it to the tray (keeping the app running,
+    /// with no taskbar button left behind) when <paramref name="closeToTray"/> reports true,
+    /// or quit outright (the default) via <paramref name="onQuit"/>. Call once at startup before the first window
     /// is opened. The predicate is evaluated at each close, not captured, so a Settings
     /// toggle applies without a restart.
     /// </summary>
@@ -208,7 +213,8 @@ public static class AppWindowManager
             // windowing APIs fire spurious move/resize events while minimizing or tearing a
             // window down (classic Win32 reports a minimized window at (-32000,-32000)),
             // which would otherwise overwrite a perfectly good saved position with garbage.
-            //   - CloseToTray on: minimize and leave the app running behind its tray icon.
+            //   - CloseToTray on: hide the window and leave the app running behind its tray
+            //     icon only (see HideToTray).
             //   - CloseToTray off (default): quit slopterm outright. The window is never
             //     destroyed here - _onQuit stops the process, and letting process exit tear
             //     it down is the one destruction path proven safe (see the class doc).
@@ -217,7 +223,7 @@ public static class AppWindowManager
                 SavePosition(w);
                 if (_closeToTray?.Invoke() == true)
                 {
-                    w.SetMinimized(true);
+                    HideToTray(w);
                 }
                 else
                 {
@@ -388,10 +394,78 @@ public static class AppWindowManager
         }
     }
 
+    /// <summary>
+    /// Closing with CloseToTray on must leave the app reachable from the tray icon and
+    /// *nowhere else* - so hide the window outright instead of minimizing it. A minimized
+    /// window still owns its taskbar button, which is precisely the entry the setting is
+    /// meant to get rid of; only ShowWindow(SW_HIDE) actually takes it off the taskbar.
+    ///
+    /// The window itself is still never destroyed (see the class doc) - hiding is purely a
+    /// visibility change, and ShowIfHidden puts it back exactly as it was.
+    /// </summary>
+    private static void HideToTray(PhotinoWindow window)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var frame = ResolveTaskbarWindow(window);
+            if (frame != nint.Zero)
+            {
+                // Remembered because the lookup below can never find this window again once
+                // it's hidden (it only matches visible windows) - this handle is the only way
+                // back. Stored before the hide so a tray click racing it still finds it.
+                Volatile.Write(ref _hiddenWindowHandle, frame);
+                ShowWindow(frame, SwHide);
+                return;
+            }
+        }
+
+        // Non-Windows (no tray icon there yet anyway), or a frame we couldn't locate:
+        // minimizing is all Photino itself offers, and the app keeps running either way.
+        window.SetMinimized(true);
+    }
+
+    /// <summary>
+    /// The top-level frame that owns the taskbar button. Photino's own WindowHandle isn't it
+    /// (see WindowsTaskbarIdentity, which enumerates the process's windows to find the real
+    /// one - reused here); GA_ROOTOWNER off the Photino handle is the fallback for the case
+    /// where that enumeration comes up empty.
+    /// </summary>
+    [SupportedOSPlatform("windows")]
+    private static nint ResolveTaskbarWindow(PhotinoWindow window)
+    {
+        var frame = WindowsTaskbarIdentity.FindMainTaskbarWindow();
+        if (frame != nint.Zero)
+        {
+            return frame;
+        }
+
+        return window.WindowHandle != nint.Zero ? GetAncestor(window.WindowHandle, GaRootOwner) : nint.Zero;
+    }
+
+    /// <summary>
+    /// Undoes HideToTray. SW_SHOW restores the window in whatever state it was hidden in
+    /// (including maximized) and hands the taskbar its button back. Needed as its own step
+    /// because a hidden window isn't a minimized one - un-minimizing wouldn't reveal it.
+    /// </summary>
+    private static void ShowIfHidden()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var hwnd = Interlocked.Exchange(ref _hiddenWindowHandle, nint.Zero);
+        if (hwnd != nint.Zero)
+        {
+            ShowWindow(hwnd, SwShow);
+        }
+    }
+
     private static void RestoreAndFocus(PhotinoWindow window)
     {
         try
         {
+            ShowIfHidden();
             if (window.Minimized)
             {
                 window.SetMinimized(false);
@@ -460,6 +534,18 @@ public static class AppWindowManager
     [SupportedOSPlatform("windows")]
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(nint hWnd);
+
+    private const int SwHide = 0;
+    private const int SwShow = 5;
+    private const uint GaRootOwner = 3;
+
+    [SupportedOSPlatform("windows")]
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(nint hWnd, int nCmdShow);
+
+    [SupportedOSPlatform("windows")]
+    [DllImport("user32.dll")]
+    private static extern nint GetAncestor(nint hWnd, uint gaFlags);
 
     private const int SmCxScreen = 0;
     private const int SmCyScreen = 1;

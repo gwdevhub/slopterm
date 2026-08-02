@@ -96,8 +96,12 @@ internal static class WindowsTaskbarIdentity
     /// owns the taskbar button. Deliberately skips the tray's message-only helper window
     /// and the invisible IME windows the runtime creates, neither of which is on the
     /// taskbar. Returns Zero if the window isn't up yet (the caller retries).
+    ///
+    /// Also used by AppWindowManager to find the window whose taskbar button "close to tray"
+    /// has to make go away - note the visibility filter: this only ever finds a window that
+    /// is currently shown, so a caller that hides one must remember the handle itself.
     /// </summary>
-    private static nint FindMainTaskbarWindow()
+    internal static nint FindMainTaskbarWindow()
     {
         if (!OperatingSystem.IsWindows())
         {
