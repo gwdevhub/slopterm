@@ -23,8 +23,9 @@ interface TerminalViewProps {
   onActivity?: () => void
   // The tab's own connect info - an SSH tab holds only an interactive shell server-side,
   // not an SFTP channel, so paste/drag-to-upload (below) opens a fresh one-shot SFTP
-  // connection from this same request rather than reusing the shell.
-  request: ConnectRequest
+  // connection from this same request rather than reusing the shell. Undefined for a local
+  // tab, where there is no remote side to upload to and dropping a file is just a paste.
+  request?: ConnectRequest
   // Sent to the shell, in order, right after the socket opens (see the host's attached
   // snippets in HostModal/ConnectionForm) - only meaningful the first time a given
   // session id is seen, same as everything else keyed on [sessionId] below.
@@ -199,6 +200,15 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
   async function uploadFiles(files: File[]) {
     if (files.length === 0) return
 
+    // A local shell already has the file - there is nowhere to send it, and the SFTP upload
+    // this would otherwise open has no destination to open against.
+    const uploadRequest = requestRef.current
+    if (!uploadRequest) {
+      setUploadStatus({ message: 'This shell is on this machine - the file is already here.' })
+      setTimeout(() => setUploadStatus(null), 4000)
+      return
+    }
+
     let remoteDir = remoteCwdRef.current
     if (!remoteDir) {
       // The shell isn't reporting its cwd (no OSC 7 shell integration) - ask rather than
@@ -215,7 +225,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       const name = uploadFileName(file)
       setUploadStatus({ message: `Uploading ${name}…` })
       try {
-        const { remotePath } = await sshUpload(requestRef.current, remoteDir, name, file)
+        const { remotePath } = await sshUpload(uploadRequest, remoteDir, name, file)
         if (uploadIdRef.current === thisUploadId) {
           setUploadStatus({ message: `Uploaded to ${remotePath}` })
         }

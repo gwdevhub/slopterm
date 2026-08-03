@@ -1,5 +1,4 @@
 using System.Net.WebSockets;
-using Renci.SshNet;
 using Slopterm.Server.Ai;
 
 namespace Slopterm.Server;
@@ -44,8 +43,7 @@ public enum AttachResult
 
 public sealed class TerminalSession : IDisposable
 {
-    private readonly SshClient _client;
-    private readonly ShellStream _shell;
+    private readonly IShellChannel _channel;
     private readonly object _writeLock = new();
 
     // Guards everything about attach/detach/teardown state below it. Held only for
@@ -70,12 +68,6 @@ public sealed class TerminalSession : IDisposable
     private volatile bool _readerStopped;
     private bool _everAttached;
 
-    // Set from ShellStream.Closed, which SSH.NET raises only when the shell CHANNEL closes -
-    // never when the SSH session disconnects. That distinction is the whole basis for telling
-    // `exit` apart from a dead transport. Deliberately never disposed: the reader may still
-    // be waiting on it while teardown runs, and a disposed wait handle throws.
-    private readonly ManualResetEventSlim _channelClosed = new(false);
-
     // Completed (and swapped for a fresh one) each time the reader appends output, so an
     // attached writer can park until there is something to send. A plain SemaphoreSlim would
     // accumulate one count per read while nothing is attached; this collapses to "there is
@@ -83,6 +75,15 @@ public sealed class TerminalSession : IDisposable
     private TaskCompletionSource _outputSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public string Id { get; }
+
+    /// <summary>"ssh" for a remote shell, "local" for one on this machine.</summary>
+    public string Kind { get; }
+
+    /// <summary>
+    /// Where this shell is. For an SSH session that's the destination it dialled; for a local
+    /// one it's a description of this machine and the shell that was launched, so the tab
+    /// list, the connection log and the reattach listing all read the same for both kinds.
+    /// </summary>
     public string Host { get; }
     public int Port { get; }
     public string Username { get; }
@@ -116,11 +117,11 @@ public sealed class TerminalSession : IDisposable
         }
     }
 
-    private TerminalSession(string id, SshClient client, ShellStream shell, string host, int port, string username)
+    private TerminalSession(string id, string kind, IShellChannel channel, string host, int port, string username)
     {
         Id = id;
-        _client = client;
-        _shell = shell;
+        Kind = kind;
+        _channel = channel;
         Host = host;
         Port = port;
         Username = username;
@@ -132,43 +133,33 @@ public sealed class TerminalSession : IDisposable
         DetachedAtUtc = DateTimeOffset.UtcNow;
     }
 
-    public static TerminalSession Connect(ConnectRequest request)
+    public static TerminalSession Connect(ConnectRequest request) =>
+        Start("ssh", SshShellChannel.Connect(request), request.Host, request.Port, request.Username);
+
+    /// <summary>
+    /// A shell on the machine slopterm itself is running on - the desktop's own PC, or the
+    /// phone. Everything past this point is the SSH path verbatim, because the session layer
+    /// only ever deals in an <see cref="IShellChannel"/>.
+    /// </summary>
+    public static TerminalSession StartLocal(LocalShellRequest request)
     {
-        var connectionInfo = SshConnectionInfoFactory.Create(request);
-        var client = new SshClient(connectionInfo)
-        {
-            // An interactive shell can sit idle for hours emitting nothing at all, and a
-            // silent TCP flow is exactly what carrier NAT and sshd's ClientAlive timers reap.
-            // Matches ForwardingService/SyncService, which have always set this - the
-            // interactive paths were the ones missing it. Set on the client, not on
-            // ConnectionInfo: in SSH.NET the property lives on BaseClient.
-            KeepAliveInterval = TimeSpan.FromSeconds(30),
-        };
-        client.Connect();
+        var channel = LocalShellChannel.Start(request);
+        return Start("local", channel, LocalShell.PlatformName(), 0, channel.ShellName);
+    }
 
-        var shell = client.CreateShellStream(
-            terminalName: "xterm-256color",
-            columns: (uint)request.Columns,
-            rows: (uint)request.Rows,
-            width: 0,
-            height: 0,
-            bufferSize: 4096);
-
-        var session = new TerminalSession(Guid.NewGuid().ToString("N"), client, shell, request.Host, request.Port, request.Username);
-        // Subscribed before the reader starts, because this is the only reliable signal for
-        // "the shell exited" - see ShellClosedCleanly.
-        shell.Closed += (_, _) => session._channelClosed.Set();
+    private static TerminalSession Start(string kind, IShellChannel channel, string host, int port, string username)
+    {
+        var session = new TerminalSession(Guid.NewGuid().ToString("N"), kind, channel, host, port, username);
         session.StartReader();
         session.StartTransportWatch();
         return session;
     }
 
-    // Sends a window-change request so the remote PTY (and programs reading COLUMNS/LINES,
-    // e.g. `systemctl status`, pagers, editors) match the browser terminal's real size. The
-    // frontend fits xterm to its container and posts the resulting cols/rows here - both on
-    // first mount (the initial ConnectRequest hard-codes 80x24, before xterm has measured
-    // itself) and on every subsequent window resize. Pixel width/height are 0: character
-    // cells are what matter, and the server derives nothing from the pixel dims.
+    // Tells the shell's PTY (and programs reading COLUMNS/LINES, e.g. `systemctl status`,
+    // pagers, editors) the browser terminal's real size. The frontend fits xterm to its
+    // container and posts the resulting cols/rows here - both on first mount (the initial
+    // request hard-codes 80x24, before xterm has measured itself) and on every subsequent
+    // window resize.
     public void Resize(uint columns, uint rows)
     {
         if (columns == 0 || rows == 0)
@@ -176,7 +167,7 @@ public sealed class TerminalSession : IDisposable
             return;
         }
 
-        _shell.ChangeWindowSize(columns, rows, 0, 0);
+        _channel.Resize(columns, rows);
     }
 
     /// <summary>
@@ -198,7 +189,7 @@ public sealed class TerminalSession : IDisposable
                 int read;
                 try
                 {
-                    read = _shell.Read(buffer, 0, buffer.Length);
+                    read = _channel.Read(buffer, 0, buffer.Length);
                 }
                 catch (Exception)
                 {
@@ -235,54 +226,11 @@ public sealed class TerminalSession : IDisposable
         });
     }
 
-    /// <summary>
-    /// Whether the EOF the reader just saw was the shell channel closing (the user typed
-    /// <c>exit</c>) rather than the SSH session going away underneath it.
-    ///
-    /// This deliberately does NOT go by whether the client still reports itself connected.
-    /// SSH.NET tears things down in an order that makes that answer a coin flip: on a
-    /// server-sent disconnect it disposes the ShellStream - waking this reader - BEFORE it
-    /// shuts the socket down, so the client can still look connected; and on a real
-    /// <c>exit</c> the listener thread often runs straight on into closing the transport
-    /// before this reader is scheduled at all, so the client can already look disconnected.
-    /// Either way round the guess is wrong half the time, and each way costs the user
-    /// something: one closes a tab whose connection merely blipped, the other silently opens
-    /// a fresh authenticated session for a shell they just exited.
-    ///
-    /// <c>ShellStream.Closed</c> has no such ambiguity - SSH.NET raises it only from its
-    /// channel-closed handler and never on session disconnect. It arrives on another thread
-    /// just after the stream is disposed, though, so this reader can get here first; the
-    /// short wait is what turns that into a definite answer instead of another race. Timing
-    /// out is read as a transport loss, which is the safer way to be wrong: the tab
-    /// reconnects rather than disappearing.
-    /// </summary>
-    private bool ShellClosedCleanly()
-    {
-        try
-        {
-            return _channelClosed.Wait(TimeSpan.FromSeconds(1), _lifetime.Token);
-        }
-        catch (Exception)
-        {
-            // Cancelled (we're being disposed) or already torn down - not a clean exit.
-            return false;
-        }
-    }
-
-    // Whether the SSH connection under the shell is still up. Wrapped because IsConnected
-    // reaches into a session object that may be being torn down underneath us, and a throw
-    // here would be read as "still connected" by callers that can't afford to guess.
-    private bool IsTransportUp()
-    {
-        try
-        {
-            return _client.IsConnected;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
+    // Whether the EOF the reader just saw was the shell finishing (the user typed `exit`)
+    // rather than whatever carries it going away underneath. Delegated to the channel because
+    // the answer is entirely transport-specific - see SshShellChannel, where it is a genuinely
+    // hard question, and LocalShellChannel, where an EOF can only ever be the shell exiting.
+    private bool ShellClosedCleanly() => _channel.ShellClosedCleanly(TimeSpan.FromSeconds(1), _lifetime.Token);
 
     /// <summary>
     /// Notices an SSH connection that died without telling anyone. SSH.NET's abrupt-failure
@@ -294,11 +242,19 @@ public sealed class TerminalSession : IDisposable
     /// arrives - and which the reaper can never claim, because a client keeps reattaching and
     /// resetting the detach clock.
     ///
-    /// Disposing the shell is what unparks the reader; it then finds the transport down and
+    /// Aborting the read is what unparks the reader; it then finds the transport down and
     /// reports the session lost, so the tab reconnects instead of hanging.
+    ///
+    /// Not started at all for a local shell: it has no transport that can fail independently
+    /// of the shell, so this would be a timer that can never do anything.
     /// </summary>
     private void StartTransportWatch()
     {
+        if (!_channel.CanLoseTransport)
+        {
+            return;
+        }
+
         _ = Task.Run(async () =>
         {
             try
@@ -306,20 +262,12 @@ public sealed class TerminalSession : IDisposable
                 while (!_lifetime.IsCancellationRequested && !_readerStopped)
                 {
                     await Task.Delay(TimeSpan.FromSeconds(5), _lifetime.Token);
-                    if (IsTransportUp() || _readerStopped || _lifetime.IsCancellationRequested)
+                    if (_channel.IsTransportUp || _readerStopped || _lifetime.IsCancellationRequested)
                     {
                         continue;
                     }
 
-                    try
-                    {
-                        _shell.Dispose();
-                    }
-                    catch (Exception)
-                    {
-                        // Already gone; the reader will notice either way.
-                    }
-
+                    _channel.AbortRead();
                     return;
                 }
             }
@@ -650,8 +598,7 @@ public sealed class TerminalSession : IDisposable
             {
                 lock (_writeLock)
                 {
-                    _shell.Write(buffer, 0, result.Count);
-                    _shell.Flush();
+                    _channel.Write(buffer, 0, result.Count);
                 }
             }
         }
@@ -694,8 +641,7 @@ public sealed class TerminalSession : IDisposable
         var bytes = System.Text.Encoding.UTF8.GetBytes(text);
         lock (_writeLock)
         {
-            _shell.Write(bytes, 0, bytes.Length);
-            _shell.Flush();
+            _channel.Write(bytes, 0, bytes.Length);
         }
     }
 
@@ -719,15 +665,13 @@ public sealed class TerminalSession : IDisposable
         // disposing the source out from under that link throws on the link's own disposal.
         _lifetime.Cancel();
 
-        // Every step is isolated, because this runs on connections that are by definition
+        // Both steps are isolated, because this runs on connections that are by definition
         // suspect - the reaper's whole job is collecting sessions whose transport broke - and
-        // SSH.NET throws out of both the channel close and the disconnect when the link is
-        // already dead. Unguarded, the first throw would skip the rest and strand the
-        // SshClient (and its transport thread) for the life of the process, with no way back:
-        // the teardown claim above is one-shot, so nothing would ever retry.
+        // a throw out of either would skip the rest with no way back: the teardown claim
+        // above is one-shot, so nothing would ever retry.
         try
         {
-            // Cancel any running agent turn before the shell/client tear down underneath it.
+            // Cancel any running agent turn before the shell tears down underneath it.
             Agent.Dispose();
         }
         catch (Exception) { }
@@ -735,22 +679,7 @@ public sealed class TerminalSession : IDisposable
         try
         {
             // This is also what unparks the reader thread's blocking Read.
-            _shell.Dispose();
-        }
-        catch (Exception) { }
-
-        try
-        {
-            if (_client.IsConnected)
-            {
-                _client.Disconnect();
-            }
-        }
-        catch (Exception) { }
-
-        try
-        {
-            _client.Dispose();
+            _channel.Dispose();
         }
         catch (Exception) { }
 

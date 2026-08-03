@@ -23,6 +23,19 @@ public sealed class ConnectRequest
     public string? HostId { get; set; }
 }
 
+/// <summary>Open a shell on the machine slopterm itself is running on.</summary>
+public sealed class LocalShellRequest
+{
+    /// <summary>
+    /// Which shell to run. Null or empty means the OS default - see LocalShell.Resolve, which
+    /// is also where $SHELL and the SLOPTERM_LOCAL_SHELL override are honoured.
+    /// </summary>
+    public string? Shell { get; set; }
+
+    public int Columns { get; set; } = 80;
+    public int Rows { get; set; } = 24;
+}
+
 public sealed class VaultPasswordRequest
 {
     public required string MasterPassword { get; set; }

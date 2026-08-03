@@ -12,6 +12,7 @@ import { isDesktopApp } from './lib/photino'
 import {
   checkForUpdate,
   connect,
+  connectLocalShell,
   disconnect,
   getOpenTabs,
   getVaultStatus,
@@ -95,6 +96,25 @@ function useSuppressBrowserContextMenu() {
 
 function requestToOpenTabRecord(tab: SessionTab) {
   const { request } = tab
+  // A local tab has no destination and no credential. The stored record requires all four of
+  // host/port/username/authMethod, so rather than change a schema every existing vault
+  // already holds, they carry a description of what was opened - which is also what makes a
+  // restored local tab recognisable as one.
+  if (!request) {
+    return {
+      kind: tab.kind,
+      label: tab.label,
+      host: 'local',
+      port: 0,
+      username: 'shell',
+      authMethod: 'password' as const,
+      secret: undefined,
+      passphrase: undefined,
+      startupCommands: tab.startupCommands,
+      sessionId: tab.sessionId ?? undefined,
+    }
+  }
+
   return {
     kind: tab.kind,
     label: tab.label,
@@ -236,7 +256,21 @@ function App() {
   async function attemptConnectTab(tab: SessionTab) {
     updateTab(tab.id, { status: 'connecting', errorMessage: undefined })
     try {
-      if (tab.kind === 'ssh') {
+      if (tab.kind === 'local') {
+        // Nothing to dial and nothing to authenticate - "reconnecting" a local tab is just
+        // starting a fresh shell, which is why this one can't meaningfully fail twice.
+        const response = await connectLocalShell({ columns: 80, rows: 24 })
+        if (!tabsRef.current.some((t) => t.id === tab.id)) {
+          void disconnect(response.sessionId)
+          return
+        }
+        updateTab(tab.id, { sessionId: response.sessionId, status: 'connected' })
+      } else if (!tab.request) {
+        // Only a local tab is allowed to have no request, and it was handled above - a
+        // remote tab without one has nothing to dial, so retrying forever would be a loop
+        // that could never succeed.
+        updateTab(tab.id, { status: 'error', errorMessage: 'This tab has no saved connection details.' })
+      } else if (tab.kind === 'ssh') {
         const response = await connect(tab.request)
         if (!tabsRef.current.some((t) => t.id === tab.id)) {
           void disconnect(response.sessionId) // closed while the connect was in flight
@@ -287,25 +321,33 @@ function App() {
     ])
       .then(([record, liveSsh, liveSftp]) => {
         const liveHomes = new Map(liveSftp.map((s) => [s.sessionId, s.homeDirectory]))
-        const liveIds = new Set<string>([...liveSsh.map((s) => s.sessionId), ...liveHomes.keys()])
+        const liveKinds = new Map(liveSsh.map((s) => [s.sessionId, s.kind]))
         const restored: SessionTab[] = record.tabs.map((t) => {
-          const stillLive = t.sessionId !== undefined && liveIds.has(t.sessionId)
+          // Matched on kind as well as id, now that local shells share the terminal session
+          // store: an id is only ever reused within one process, but a tab reattaching to a
+          // session of the other kind would mount the wrong view on it entirely.
+          const stillLive =
+            t.sessionId !== undefined &&
+            (t.kind === 'sftp' ? liveHomes.has(t.sessionId) : liveKinds.get(t.sessionId) === t.kind)
           return {
             id: crypto.randomUUID(),
             sessionId: stillLive ? (t.sessionId ?? null) : null,
             label: t.label,
             kind: t.kind,
-            request: {
-              host: t.host,
-              port: t.port,
-              username: t.username,
-              authMethod: t.authMethod,
-              password: t.authMethod === 'password' ? t.secret : undefined,
-              privateKey: t.authMethod === 'privateKey' ? t.secret : undefined,
-              passphrase: t.authMethod === 'privateKey' ? t.passphrase : undefined,
-              columns: 80,
-              rows: 24,
-            },
+            request:
+              t.kind === 'local'
+                ? undefined
+                : {
+                    host: t.host,
+                    port: t.port,
+                    username: t.username,
+                    authMethod: t.authMethod,
+                    password: t.authMethod === 'password' ? t.secret : undefined,
+                    privateKey: t.authMethod === 'privateKey' ? t.secret : undefined,
+                    passphrase: t.authMethod === 'privateKey' ? t.passphrase : undefined,
+                    columns: 80,
+                    rows: 24,
+                  },
             status: stillLive ? 'connected' : 'connecting',
             startupCommands: t.startupCommands,
             homeDirectory: stillLive && t.sessionId ? liveHomes.get(t.sessionId) : undefined,
@@ -374,6 +416,31 @@ function App() {
     }
   }
 
+  // A shell on the machine slopterm is running on - this PC, or the phone. No form, no
+  // credential, no failure mode worth a retry loop: it either starts or it says why.
+  async function handleConnectLocal(): Promise<boolean> {
+    setIsConnecting(true)
+    setErrorMessage(null)
+    try {
+      const response = await connectLocalShell({ columns: 80, rows: 24 })
+      const tab: SessionTab = {
+        id: crypto.randomUUID(),
+        sessionId: response.sessionId,
+        label: `${response.shell} (local)`,
+        kind: 'local',
+        status: 'connected',
+      }
+      setTabs((prev) => [...prev, tab])
+      setActiveTabId(tab.id)
+      return true
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to open a local shell')
+      return false
+    } finally {
+      setIsConnecting(false)
+    }
+  }
+
   async function handleConnectSftp(request: ConnectRequest, label: string): Promise<boolean> {
     setIsConnecting(true)
     setErrorMessage(null)
@@ -412,7 +479,9 @@ function App() {
       event.preventDefault()
       const active = tabsRef.current.find((t) => t.id === activeTabIdRef.current)
       if (!active) return
-      if (active.kind === 'ssh') void handleConnect(active.request, active.startupCommands)
+      if (active.kind === 'local') void handleConnectLocal()
+      else if (!active.request) return
+      else if (active.kind === 'ssh') void handleConnect(active.request, active.startupCommands)
       else void handleConnectSftp(active.request, active.label.replace(/ \(SFTP\)$/, ''))
     }
     window.addEventListener('keydown', onKeyDown)
@@ -511,7 +580,7 @@ function App() {
           {tabs.map((tab) => (
             <div key={tab.id} className={`absolute inset-0 ${activeTabId === tab.id ? 'block' : 'hidden'}`}>
               {tab.status === 'connected' && tab.sessionId ? (
-                tab.kind === 'ssh' ? (
+                tab.kind !== 'sftp' ? (
                   // Flex column so the AgentBar SHRINKS the terminal instead of overlaying
                   // it - keeps xterm fit() parent-driven (its ResizeObserver auto-refits
                   // when the bar expands/collapses). The bar's collapsed strip is a
@@ -545,6 +614,7 @@ function App() {
                 section={section}
                 onConnect={handleConnect}
                 onConnectSftp={handleConnectSftp}
+                onConnectLocal={handleConnectLocal}
                 errorMessage={errorMessage}
                 isConnecting={isConnecting}
               />
@@ -556,7 +626,11 @@ function App() {
       {pendingCloseTab && (
         <ConfirmDialog
           title="Close this session?"
-          message={`Close ${pendingCloseTab.label}? This ends its ${pendingCloseTab.kind === 'sftp' ? 'SFTP' : 'SSH'} connection.`}
+          message={
+            pendingCloseTab.kind === 'local'
+              ? `Close ${pendingCloseTab.label}? This ends the shell running on this machine.`
+              : `Close ${pendingCloseTab.label}? This ends its ${pendingCloseTab.kind === 'sftp' ? 'SFTP' : 'SSH'} connection.`
+          }
           confirmLabel="Close"
           danger
           onConfirm={() => {
