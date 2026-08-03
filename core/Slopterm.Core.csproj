@@ -22,6 +22,12 @@
     <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
     <PackageReference Include="SSH.NET" Version="2025.1.0" />
     <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.10" />
+    <!-- Cron expressions for scheduled jobs (SchedulerService). A hand-rolled parser was the
+         original plan, but the DST rules alone (a nightly job whose local time doesn't exist
+         on the spring-forward day, or happens twice in autumn) are exactly the kind of thing
+         a widely-used implementation has already settled. Small, no transitive dependencies,
+         netstandard2.0 so the Android head takes it too. -->
+    <PackageReference Include="Cronos" Version="0.13.0" />
   </ItemGroup>
 
   <ItemGroup>

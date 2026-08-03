@@ -3,12 +3,17 @@ import type { SavedHost } from '../lib/api'
 import { describeCredentialResolution, resolveConnectRequest } from '../lib/hosts'
 import { HostCard } from './HostCard'
 import { GroupCard } from './GroupCard'
-import { ArrowLeftIcon, PlusIcon } from './icons'
+import { ArrowLeftIcon, LocalTerminalTabIcon, PlusIcon } from './icons'
 
 interface HostGridProps {
   hosts: SavedHost[]
   onNewHost: () => void
   onQuickConnect: () => void
+  onLocalShell: () => void
+  // What a local shell would open here ("bash" on "Linux"), or null where this device
+  // can't open one at all - in which case the button isn't rendered rather than rendered
+  // and disabled, since there is nothing the user could do about it.
+  localShell: { platform: string; shell: string } | null
   onImport: () => void
   onSsh: (host: SavedHost) => void
   onSftp: (host: SavedHost) => void
@@ -36,6 +41,8 @@ export function HostGrid({
   hosts,
   onNewHost,
   onQuickConnect,
+  onLocalShell,
+  localShell,
   onImport,
   onSsh,
   onSftp,
@@ -107,6 +114,17 @@ export function HostGrid({
         >
           Quick connect
         </button>
+        {localShell && (
+          <button
+            type="button"
+            onClick={onLocalShell}
+            title={`Open a ${localShell.shell} shell on this ${localShell.platform} machine`}
+            className="flex items-center justify-center gap-1.5 rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700"
+          >
+            <LocalTerminalTabIcon aria-hidden="true" className="h-4 w-4" />
+            Local shell
+          </button>
+        )}
         <button
           type="button"
           onClick={onImport}

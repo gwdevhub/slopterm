@@ -10,6 +10,7 @@ import {
   listJobRuns,
   listJobs,
   listSnippets,
+  previewSchedule,
   runJobNow,
   updateJob,
   type JobRecord,
@@ -18,6 +19,7 @@ import {
   type SavedHost,
   type SavedJob,
   type SavedSnippet,
+  type SchedulePreview,
 } from '../lib/api'
 import { VaultGate } from './VaultGate'
 import { CardGrid, EntityCard, cardPrimaryButton, cardSecondaryButton } from './CardGrid'
@@ -223,6 +225,7 @@ interface FormState {
   scheduleKind: JobRecord['scheduleKind']
   intervalMinutes: number
   dailyTime: string
+  cronExpression: string
   enabled: boolean
   runOnStart: boolean
   overlapPolicy: JobRecord['overlapPolicy']
@@ -255,6 +258,7 @@ function JobModal({
     scheduleKind: job?.job.scheduleKind ?? 'interval',
     intervalMinutes: job?.job.intervalMinutes ?? 60,
     dailyTime: job?.job.dailyTime ?? '06:00',
+    cronExpression: job?.job.cronExpression ?? '0 6 * * *',
     enabled: job?.job.enabled ?? true,
     runOnStart: job?.job.runOnStart ?? false,
     overlapPolicy: job?.job.overlapPolicy ?? 'skip',
@@ -285,6 +289,7 @@ function JobModal({
       scheduleKind: form.scheduleKind,
       intervalMinutes: Number(form.intervalMinutes) || 60,
       dailyTime: form.dailyTime,
+      cronExpression: form.scheduleKind === 'cron' ? form.cronExpression.trim() : undefined,
       enabled: form.enabled,
       runOnStart: form.runOnStart,
       overlapPolicy: form.overlapPolicy,
@@ -356,20 +361,46 @@ function JobModal({
               <select id="job-schedule" className={inputClasses} value={form.scheduleKind} onChange={(e) => set('scheduleKind', e.target.value as FormState['scheduleKind'])}>
                 <option value="interval">Every N minutes</option>
                 <option value="daily">Once a day, at a set time</option>
+                <option value="cron">On a cron expression</option>
               </select>
             </div>
 
-            {form.scheduleKind === 'interval' ? (
+            {form.scheduleKind === 'interval' && (
               <div>
                 <label className={labelClasses} htmlFor="job-interval">Interval (minutes)</label>
                 <input id="job-interval" type="number" min={1} className={inputClasses} value={form.intervalMinutes} onChange={(e) => set('intervalMinutes', Number(e.target.value))} required />
               </div>
-            ) : (
+            )}
+
+            {form.scheduleKind === 'daily' && (
               <div>
                 <label className={labelClasses} htmlFor="job-daily-time">Time (24-hour, this machine's local time)</label>
                 <input id="job-daily-time" className={inputClasses} value={form.dailyTime} onChange={(e) => set('dailyTime', e.target.value)} placeholder="06:00" pattern="[0-2][0-9]:[0-5][0-9]" required />
               </div>
             )}
+
+            {form.scheduleKind === 'cron' && (
+              <div>
+                <label className={labelClasses} htmlFor="job-cron">Cron expression (this machine's local time)</label>
+                <input id="job-cron" className={`${inputClasses} font-mono`} value={form.cronExpression} onChange={(e) => set('cronExpression', e.target.value)} placeholder="0 6 * * 1-5" required />
+                <p className="mt-1 text-xs text-slate-500">
+                  Five fields: minute hour day-of-month month day-of-week. Need a hand?{' '}
+                  {/* Opens in the user's browser, not this window - the app is otherwise
+                      entirely local, and nothing here depends on the site being reachable. */}
+                  <a href="https://crontab.guru/" target="_blank" rel="noreferrer noopener" className="text-indigo-400 underline hover:text-indigo-300">
+                    crontab.guru
+                  </a>{' '}
+                  explains one in English.
+                </p>
+              </div>
+            )}
+
+            <SchedulePreviewLine
+              scheduleKind={form.scheduleKind}
+              intervalMinutes={form.intervalMinutes}
+              dailyTime={form.dailyTime}
+              cronExpression={form.cronExpression}
+            />
 
             <div>
               <label className={labelClasses} htmlFor="job-timeout">Timeout (seconds)</label>
@@ -507,10 +538,48 @@ function JobHistoryModal({ job, onClose }: { job: SavedJob; onClose: () => void 
 }
 
 function describeSchedule(job: JobRecord): string {
+  // Cron shows the expression verbatim rather than a prose translation: rendering one in
+  // English is a whole library's worth of work, and a wrong summary on the card is worse
+  // than the expression the user typed and can read back.
+  if (job.scheduleKind === 'cron') return job.cronExpression ?? 'Cron'
   if (job.scheduleKind === 'daily') return `Daily at ${job.dailyTime}`
   const m = job.intervalMinutes
   if (m % 60 === 0 && m >= 60) return `Every ${m / 60}h`
   return `Every ${m}m`
+}
+
+// The next three times the schedule in the form would actually fire, resolved by the backend
+// (the same code the scheduler runs on) so a cron expression can be checked before saving
+// rather than by waiting to see whether anything happens. Debounced because it re-runs on
+// every keystroke in the cron field.
+function SchedulePreviewLine(schedule: Pick<JobRecord, 'scheduleKind' | 'intervalMinutes' | 'dailyTime' | 'cronExpression'>) {
+  const [preview, setPreview] = useState<SchedulePreview | null>(null)
+  const { scheduleKind, intervalMinutes, dailyTime, cronExpression } = schedule
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = setTimeout(() => {
+      previewSchedule({ scheduleKind, intervalMinutes, dailyTime, cronExpression })
+        .then((result) => !cancelled && setPreview(result))
+        // A preview is a nicety - a failed fetch just leaves the line blank rather than
+        // putting an error in front of a form the user can still submit.
+        .catch(() => !cancelled && setPreview(null))
+    }, 300)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [scheduleKind, intervalMinutes, dailyTime, cronExpression])
+
+  if (!preview) return null
+  if (preview.error) return <p className="text-xs text-amber-400">{preview.error}</p>
+  if (preview.runs.length === 0) return null
+
+  return (
+    <p className="text-xs text-slate-500">
+      Next runs: {preview.runs.map((r) => new Date(r).toLocaleString()).join(' · ')}
+    </p>
+  )
 }
 
 function describeStatus(status: JobStatus | undefined, deviceId: string | null, job: JobRecord): string {

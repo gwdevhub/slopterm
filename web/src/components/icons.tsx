@@ -206,6 +206,21 @@ export function TerminalTabIcon(props: IconProps) {
   )
 }
 
+// The terminal glyph sitting on a small stand - "this machine" rather than a remote one.
+// Distinct enough from TerminalTabIcon at 16px to tell a local tab from an SSH tab at a
+// glance, which is the whole job it has in the tab bar.
+export function LocalTerminalTabIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="2.5" y="3.5" width="19" height="13" rx="1.5" />
+      <polyline points="6.5,7.5 9.5,10 6.5,12.5" />
+      <line x1="11.5" y1="12.5" x2="15.5" y2="12.5" />
+      <line x1="8" y1="20.5" x2="16" y2="20.5" />
+      <line x1="12" y1="16.5" x2="12" y2="20.5" />
+    </svg>
+  )
+}
+
 export function SftpTabIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

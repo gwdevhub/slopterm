@@ -39,6 +39,19 @@ public sealed class ConnectRequest
     public string? KeychainName { get; set; }
 }
 
+/// <summary>Open a shell on the machine slopterm itself is running on.</summary>
+public sealed class LocalShellRequest
+{
+    /// <summary>
+    /// Which shell to run. Null or empty means the OS default - see LocalShell.Resolve, which
+    /// is also where $SHELL and the SLOPTERM_LOCAL_SHELL override are honoured.
+    /// </summary>
+    public string? Shell { get; set; }
+
+    public int Columns { get; set; } = 80;
+    public int Rows { get; set; } = 24;
+}
+
 public sealed class VaultPasswordRequest
 {
     public required string MasterPassword { get; set; }
@@ -98,6 +111,20 @@ public sealed class LeaveCollectionRequest
 public sealed class MoveRecordRequest
 {
     public required string CollectionId { get; set; }
+}
+
+/// <summary>
+/// The schedule half of a job the user is still editing, for /api/jobs/schedule-preview. A
+/// separate type from JobRecord rather than reusing it: the form asks for this while the
+/// command, host and name may all still be empty, and none of them affect the answer.
+/// Defaults mirror JobRecord's so an omitted field previews what saving would actually do.
+/// </summary>
+public sealed class SchedulePreviewRequest
+{
+    public string ScheduleKind { get; set; } = "interval";
+    public int IntervalMinutes { get; set; } = 60;
+    public string DailyTime { get; set; } = "06:00";
+    public string? CronExpression { get; set; }
 }
 
 public sealed class SetGithubTokenRequest

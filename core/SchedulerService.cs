@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Cronos;
 using Renci.SshNet;
 using Slopterm.Server.Vault;
 
@@ -480,11 +481,21 @@ public sealed class SchedulerService : IDisposable
     /// due while the app was closed is simply skipped, which is the safer default - nobody
     /// expects two days of missed backups to all fire at once on launch.
     /// </summary>
-    private static DateTimeOffset FirstRunUtc(JobRecord job, DateTimeOffset now) =>
+    private static DateTimeOffset? FirstRunUtc(JobRecord job, DateTimeOffset now) =>
         job.RunOnStart ? now : NextRunUtcAfter(job, now);
 
-    private static DateTimeOffset NextRunUtcAfter(JobRecord job, DateTimeOffset now)
+    /// <summary>
+    /// When this job should next fire, or null if it never will - which a cron expression can
+    /// legitimately say (30 February matches nothing), and which the caller already handles by
+    /// simply leaving NextRunUtc unset so the job sits there without ever coming due.
+    /// </summary>
+    private static DateTimeOffset? NextRunUtcAfter(JobRecord job, DateTimeOffset now)
     {
+        if (job.ScheduleKind == "cron")
+        {
+            return NextCronRunUtcAfter(job.CronExpression, now);
+        }
+
         if (job.ScheduleKind == "daily")
         {
             // Local wall-clock time on purpose: "every morning at 6" means 6am where the
@@ -509,6 +520,97 @@ public sealed class SchedulerService : IDisposable
         TimeSpan.TryParseExact(value, @"hh\:mm", CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : TimeSpan.FromHours(6); // matches JobRecord.DailyTime's default
+
+    /// <summary>
+    /// The next instant a cron expression matches, in the machine's local time zone for the
+    /// same reason "daily" is local: "weekdays at 9" means 9am where the user is. Cronos
+    /// resolves the DST cases against the zone itself, and its rules are the ones you'd want:
+    /// a fixed time of day that a spring-forward skips fires at the jump rather than being
+    /// lost for that day, and one inside the repeated autumn hour fires once, not twice. An
+    /// interval-style expression (*/30) does match both passes of that repeated hour, which is
+    /// also right - those are two real half-hours. (Checked against Europe/Berlin's 2027
+    /// transitions rather than assumed.)
+    ///
+    /// Null for an expression that never matches, and also for one that doesn't parse: the
+    /// save path (ValidateCronExpression) is what rejects a bad expression, so anything
+    /// reaching here is either already-persisted or a bug, and neither is worth throwing on a
+    /// scheduler pass that's also serving every other job.
+    /// </summary>
+    private static DateTimeOffset? NextCronRunUtcAfter(string? expression, DateTimeOffset now)
+    {
+        var parsed = TryParseCron(expression);
+        return parsed?.GetNextOccurrence(now, TimeZoneInfo.Local)?.ToUniversalTime();
+    }
+
+    private static CronExpression? TryParseCron(string? expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            return null;
+        }
+
+        try
+        {
+            // Standard 5-field cron (plus the @daily/@hourly macros). Deliberately not
+            // CronFormat.IncludeSeconds: a per-second schedule is not something this feature
+            // should make easy, and the 6-field form silently shifts what every field means.
+            return CronExpression.Parse(expression.Trim(), CronFormat.Standard);
+        }
+        catch (CronFormatException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The next <paramref name="count"/> times this job would run, for the "next runs" preview
+    /// in the job form - the check that a cron expression means what the user thought before
+    /// they save it. Empty when the schedule never comes due.
+    ///
+    /// Deliberately walks the same NextRunUtcAfter the loop uses rather than reimplementing
+    /// each kind, so the preview can't drift from what actually happens. For "interval" that
+    /// means the preview is measured from now, which is exactly what that kind does.
+    /// </summary>
+    public static IReadOnlyList<DateTimeOffset> PreviewNextRuns(JobRecord job, int count)
+    {
+        var runs = new List<DateTimeOffset>();
+        var cursor = DateTimeOffset.UtcNow;
+        for (var i = 0; i < count; i++)
+        {
+            if (NextRunUtcAfter(job, cursor) is not { } next)
+            {
+                break;
+            }
+
+            runs.Add(next);
+            cursor = next;
+        }
+
+        return runs;
+    }
+
+    /// <summary>
+    /// Null if the expression is a usable cron schedule, otherwise the message to show the
+    /// user. Shared by the save path and the preview endpoint so both reject the same things.
+    /// </summary>
+    public static string? ValidateCronExpression(string? expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression))
+        {
+            return "Enter a cron expression, e.g. 0 6 * * 1-5 for weekdays at 06:00.";
+        }
+
+        if (TryParseCron(expression) is not { } parsed)
+        {
+            return "That isn't a valid cron expression. Use five fields: minute hour day-of-month month day-of-week.";
+        }
+
+        // Parses fine but matches no instant that will ever arrive (30 February, say). Saving
+        // it would produce a job that sits in the list looking scheduled and never runs.
+        return parsed.GetNextOccurrence(DateTimeOffset.UtcNow, TimeZoneInfo.Local) is null
+            ? "That expression never matches a real date, so the job would never run."
+            : null;
+    }
 
     public void Dispose()
     {

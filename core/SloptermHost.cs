@@ -529,6 +529,64 @@ app.MapPost("/api/local/mkdir", (LocalMakeDirectoryRequest request) =>
     }
 });
 
+// Whether this machine can open a local terminal at all, and what it would open. The frontend
+// asks once so it can hide the entry point rather than offer a button that always fails - the
+// one platform that says no is Android before API 28 (see UnixPty).
+app.MapGet("/api/local/shell", () =>
+{
+    if (!LocalShell.IsSupported)
+    {
+        return Results.Ok(new { supported = false, reason = LocalShell.UnsupportedReason, platform = LocalShell.PlatformName(), shell = (string?)null });
+    }
+
+    return Results.Ok(new
+    {
+        supported = true,
+        reason = (string?)null,
+        platform = LocalShell.PlatformName(),
+        shell = LocalShell.DescribeShell(LocalShell.Resolve().Executable),
+    });
+});
+
+// Opens a shell on the machine slopterm is running on - the desktop's own PC, or the phone -
+// and hands back a session id the terminal WebSocket attaches to exactly like an SSH one.
+// There is deliberately no separate WS/resize/disconnect/state route for local sessions: they
+// go in the same store as SSH sessions and every route past the connect is already shared.
+//
+// This does mean the loopback API can start a process on the user's machine. That is the same
+// boundary /api/local/list already sits on (it reads, renames and deletes the user's files),
+// held by the same per-launch token and Origin/Host checks in the middleware above - and the
+// app it is exposed to is a terminal client, whose entire purpose is running commands.
+app.MapPost("/api/local/shell/connect", (LocalShellRequest request) =>
+{
+    try
+    {
+        var session = TerminalSession.StartLocal(request);
+        sessions.Add(session.Id, session);
+        vault.AppendLog(new LogEntryRecord
+        {
+            Event = "local_shell_opened",
+            Host = session.Host,
+            Port = session.Port,
+            Username = session.Username,
+        });
+
+        return Results.Ok(new { sessionId = session.Id, shell = session.Username, platform = session.Host });
+    }
+    catch (Exception ex)
+    {
+        vault.AppendLog(new LogEntryRecord
+        {
+            Event = "local_shell_failed",
+            Host = LocalShell.PlatformName(),
+            Port = 0,
+            Username = "shell",
+            Detail = ex.Message,
+        });
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
 app.MapGet("/api/vault/status", () => Results.Ok(new { exists = vault.Exists, unlocked = vault.IsUnlocked }));
 
 app.MapPost("/api/vault/setup", (VaultPasswordRequest request) =>
@@ -1514,6 +1572,32 @@ app.MapPost("/api/jobs/{id}/cancel", (string id) =>
     return Results.NoContent();
 });
 
+// "When would this actually run?" for the job form, answered before anything is saved - the
+// only practical way to tell whether a cron expression says what you meant. Takes the schedule
+// fields of an unsaved job (nothing else about it is needed) and returns real instants from the
+// same code the loop uses, so the preview can't promise a schedule the scheduler won't keep.
+// Needs no vault access, hence no unlock/404 path here.
+app.MapPost("/api/jobs/schedule-preview", (SchedulePreviewRequest request) =>
+{
+    if (request.ScheduleKind == "cron" && SchedulerService.ValidateCronExpression(request.CronExpression) is { } error)
+    {
+        return Results.Ok(new { runs = Array.Empty<DateTimeOffset>(), error });
+    }
+
+    var probe = new JobRecord
+    {
+        // Placeholders: PreviewNextRuns only ever reads the schedule fields below.
+        HostId = string.Empty,
+        Name = string.Empty,
+        ScheduleKind = request.ScheduleKind,
+        IntervalMinutes = request.IntervalMinutes,
+        DailyTime = request.DailyTime,
+        CronExpression = request.CronExpression,
+    };
+
+    return Results.Ok(new { runs = SchedulerService.PreviewNextRuns(probe, 3), error = (string?)null });
+});
+
 app.MapGet("/api/vault/logs", () =>
 {
     try
@@ -1613,10 +1697,14 @@ app.MapDelete("/api/ssh/session/{sessionId}", (string sessionId) =>
 // Ended sessions are filtered out even though they're briefly still in the store (the reaper
 // collects them on its next tick): reattaching to a shell that has already exited would mount
 // a whole terminal onto it just to watch it close again.
+// `kind` distinguishes the local-shell sessions that now share this store, so a restored
+// local tab reattaches to a local session rather than to whichever session happened to keep
+// its id.
 app.MapGet("/api/ssh/sessions", () => Results.Ok(
     sessions.Snapshot().Where(entry => !entry.Value.Ended).Select(entry => new
     {
         sessionId = entry.Key,
+        kind = entry.Value.Kind,
         host = entry.Value.Host,
         port = entry.Value.Port,
         username = entry.Value.Username,
@@ -2372,7 +2460,14 @@ var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
             return "A job needs either a command or a snippet to run.";
         }
 
-        if (job.ScheduleKind == "daily")
+        if (job.ScheduleKind == "cron")
+        {
+            if (SchedulerService.ValidateCronExpression(job.CronExpression) is { } cronError)
+            {
+                return cronError;
+            }
+        }
+        else if (job.ScheduleKind == "daily")
         {
             if (!TimeSpan.TryParseExact(job.DailyTime, @"hh\:mm", CultureInfo.InvariantCulture, out _))
             {

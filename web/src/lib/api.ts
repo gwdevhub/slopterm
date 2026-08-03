@@ -91,6 +91,9 @@ export function terminalSocketUrl(sessionId: string, since?: number): string {
 
 export interface LiveSshSession {
   sessionId: string
+  // Local shells share this store (and every route past the connect) with SSH sessions, so a
+  // restored tab has to check this as well as the id before reattaching.
+  kind: 'ssh' | 'local'
   host: string
   port: number
   username: string
@@ -102,6 +105,43 @@ export interface LiveSshSession {
 // page find the sessions its restored tabs were already on.
 export async function listSshSessions(): Promise<LiveSshSession[]> {
   const res = await fetch('/api/ssh/sessions')
+  await throwOnError(res)
+  return res.json()
+}
+
+export interface LocalShellSupport {
+  supported: boolean
+  // Why not, when supported is false - shown instead of the launch button rather than
+  // discovered by pressing one that always fails.
+  reason: string | null
+  // "Linux" / "Windows" / "macOS" / "Android", and the shell that would be launched.
+  platform: string
+  shell: string | null
+}
+
+// Whether this machine can open a shell on itself, asked once so the entry point can be
+// hidden where it can't. Never throws: a failure here is treated as "not supported", which
+// is the same thing from the UI's point of view.
+export async function getLocalShellSupport(): Promise<LocalShellSupport> {
+  const res = await fetch('/api/local/shell')
+  await throwOnError(res)
+  return res.json()
+}
+
+export interface LocalShellResponse {
+  sessionId: string
+  shell: string
+  platform: string
+}
+
+// Opens a shell on the machine slopterm is running on. The session it returns is attached to,
+// resized, listed and disconnected through exactly the same routes an SSH session uses.
+export async function connectLocalShell(request: { columns: number; rows: number; shell?: string }): Promise<LocalShellResponse> {
+  const res = await fetch('/api/local/shell/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
   await throwOnError(res)
   return res.json()
 }
@@ -444,9 +484,13 @@ export interface JobRecord {
   // Exactly one of the two - a snippet is resolved to its current text at run time.
   command?: string
   snippetId?: string
-  scheduleKind: 'interval' | 'daily'
+  scheduleKind: 'interval' | 'daily' | 'cron'
   intervalMinutes: number
   dailyTime: string // "HH:mm", local time
+  // Standard 5-field cron, evaluated in the machine's local time. Only read when
+  // scheduleKind is 'cron'; the two simpler kinds stay because cron can't express them
+  // ("every 90 minutes" has no cron form).
+  cronExpression?: string | null
   enabled: boolean
   runOnStart: boolean
   overlapPolicy: 'skip' | 'queue' | 'kill'
@@ -550,6 +594,27 @@ export async function runJobNow(id: string): Promise<void> {
 
 export async function cancelJobRun(id: string): Promise<void> {
   await fetch(`/api/jobs/${id}/cancel`, { method: 'POST' })
+}
+
+// The next few times a not-yet-saved schedule would fire, from the same code the scheduler
+// runs on - the only real way to check a cron expression says what you meant. `error` is a
+// message about the expression itself, not a failed request, so it comes back 200 with an
+// empty `runs` rather than as a thrown error.
+export interface SchedulePreview {
+  runs: string[] // ISO UTC instants
+  error?: string | null
+}
+
+export async function previewSchedule(
+  schedule: Pick<JobRecord, 'scheduleKind' | 'intervalMinutes' | 'dailyTime' | 'cronExpression'>,
+): Promise<SchedulePreview> {
+  const res = await fetch('/api/jobs/schedule-preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(schedule),
+  })
+  await throwOnError(res)
+  return res.json()
 }
 
 export interface SnippetRecord {
@@ -698,7 +763,10 @@ export async function upsertRecentConnection(connection: RecentConnectionRecord)
 }
 
 export interface OpenTabRecord {
-  kind: 'ssh' | 'sftp'
+  // A 'local' tab carries no destination and no credential; host/username hold the machine
+  // and shell it ran ("Linux"/"bash") purely so the record's shape - which the vault has
+  // always stored with these fields required - stays the same one it has always been.
+  kind: 'ssh' | 'sftp' | 'local'
   label: string
   host: string
   port: number

@@ -6,6 +6,7 @@
 
 - **Frontend**: Mobile-first responsive design. Sidebar always visible (Hosts, Keychain, Port Forwarding, Folder Sync, Scheduled Jobs, Snippets, Logs, Appearance, Settings). Host cards with SSH/SFTP/Edit buttons. Multi-session tabs with reconnect on restart.
 - **Backend**: Serve built React bundle + WebSocket PTY via Kestrel. Never bind `0.0.0.0` without opt-in.
+- **Local terminal** (`core/Pty/`): a shell on the machine slopterm itself runs on, as a tab beside the SSH ones. `TerminalSession` pumps an `IShellChannel` — `SshShellChannel` or `LocalShellChannel` — so scrollback, detach/reattach, the reaper and the AI agent are shared, and only the connect endpoint is new (`POST /api/local/shell/connect`; everything past it reuses the SSH routes). ConPTY on Windows, `posix_openpt` + `posix_spawnp` (never `forkpty` — forking a managed process can deadlock the child before `exec`) elsewhere. Capability is a **symbol lookup, not a version check**; Android below API 28 has no `posix_spawnp` and reports unsupported.
 - **Vault**: Per-item AES-GCM + Argon2id encryption. Optional master password (auto-unlock with fixed seed when disabled).
 - **No bundled browser**: Photino for native window (WebView2/WebKitGTK/WKWebView), fallback to external browser.
 
