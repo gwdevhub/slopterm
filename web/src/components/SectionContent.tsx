@@ -4,6 +4,7 @@ import { LogsSection } from './LogsSection'
 import { KeychainSection } from './KeychainSection'
 import { PortForwardingSection } from './PortForwardingSection'
 import { SyncSection } from './SyncSection'
+import { CollectionsSection } from './CollectionsSection'
 import { JobsSection } from './JobsSection'
 import { SettingsPage } from './SettingsPage'
 import { AppearancePage } from './AppearancePage'
@@ -37,6 +38,7 @@ export function SectionContent({ section, onConnect, onConnectSftp, errorMessage
       {section === 'snippets' && <SnippetsSection />}
       {section === 'forwarding' && <PortForwardingSection />}
       {section === 'sync' && <SyncSection />}
+      {section === 'collections' && <CollectionsSection />}
       {section === 'jobs' && <JobsSection />}
       {section === 'logs' && <LogsSection />}
       {section === 'appearance' && <AppearancePage />}

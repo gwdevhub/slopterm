@@ -298,3 +298,15 @@ export function MoreHorizontalIcon(props: IconProps) {
     </svg>
   )
 }
+
+// Collections (WebDAV vault sync) - a cloud with the same stroke weight as the rest, so it
+// reads as "this is the one that leaves the device" next to the local-only sections.
+export function CollectionsIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M17.5 19a4.5 4.5 0 0 0 .3-9 6 6 0 0 0-11.6 1.4A3.8 3.8 0 0 0 6.8 19z" />
+      <line x1="12" y1="11" x2="12" y2="16" />
+      <polyline points="9.5,13.5 12,11 14.5,13.5" />
+    </svg>
+  )
+}

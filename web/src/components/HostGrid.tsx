@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { SavedHost } from '../lib/api'
-import { resolveConnectRequest } from '../lib/hosts'
+import { describeCredentialResolution, resolveConnectRequest } from '../lib/hosts'
 import { HostCard } from './HostCard'
 import { GroupCard } from './GroupCard'
 import { ArrowLeftIcon, PlusIcon } from './icons'
@@ -15,6 +15,9 @@ interface HostGridProps {
   onEditHost: (host: SavedHost) => void
   onHostContextMenu: (host: SavedHost, x: number, y: number) => void
   isConnecting?: boolean
+  // Collection id -> name, for the badge on a shared host's card. Absent while the list is
+  // still loading, or when this device holds no collections at all.
+  collectionNames?: Record<string, string>
 }
 
 function matchesQuery(host: SavedHost, q: string): boolean {
@@ -39,6 +42,7 @@ export function HostGrid({
   onEditHost,
   onHostContextMenu,
   isConnecting,
+  collectionNames,
 }: HostGridProps) {
   const [query, setQuery] = useState('')
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
@@ -142,15 +146,22 @@ export function HostGrid({
         ))}
         {individualHosts.map((saved) => {
           const request = resolveConnectRequest(saved)
-          const canConnect = request !== undefined
+          const canConnect = saved.canConnect
+          const credential = saved.host.credentials[0]
+          const username = request?.username ?? credential?.username ?? ''
           // The port only earns a place in the at-a-glance summary when it's non-default -
           // ":22" on every single card would just be repetitive noise.
-          const summary = request
-            ? request.port === 22
-              ? `${request.username}@${request.host}`
-              : `${request.username}@${request.host}:${request.port}`
+          const summary = username
+            ? saved.host.port === 22
+              ? `${username}@${saved.host.address}`
+              : `${username}@${saved.host.address}:${saved.host.port}`
             : saved.host.address
-          const authLabel = request ? (request.authMethod === 'privateKey' ? 'Private key' : 'Password') : null
+          // For a host that names its key, say which key actually resolved on THIS device -
+          // a host must never silently connect with something other than what its card
+          // claims, and "no key on this device" is a state worth showing rather than hiding.
+          const authLabel =
+            describeCredentialResolution(saved) ??
+            (credential?.kind === 'privateKey' ? 'Private key' : credential?.kind === 'password' ? 'Password' : null)
           return (
             <HostCard
               key={saved.id}
@@ -158,6 +169,7 @@ export function HostGrid({
               summary={summary}
               authLabel={authLabel}
               canConnect={canConnect}
+              collectionName={collectionNames?.[saved.collectionId]}
               isConnecting={isConnecting}
               hasStartupSnippets={(saved.host.startupSnippetIds?.length ?? 0) > 0}
               onSsh={() => onSsh(saved)}

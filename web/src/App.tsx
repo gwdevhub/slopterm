@@ -102,8 +102,13 @@ function requestToOpenTabRecord(tab: SessionTab) {
     port: request.port,
     username: request.username,
     authMethod: request.authMethod,
+    // A tab on a SAVED host carries no secret - the frontend never received one - so it
+    // records what to resolve instead, and the backend re-resolves on restore. That also
+    // means a password changed since the tab was opened is picked up rather than replayed.
     secret: request.authMethod === 'password' ? request.password : request.privateKey,
     passphrase: request.authMethod === 'privateKey' ? request.passphrase : undefined,
+    hostId: request.hostId,
+    credentialId: request.credentialId,
     startupCommands: tab.startupCommands,
     // So a reload lands back on the shell that's still running rather than opening a second
     // connection beside it - see the restore effect, which only trusts this after checking
@@ -303,6 +308,8 @@ function App() {
               password: t.authMethod === 'password' ? t.secret : undefined,
               privateKey: t.authMethod === 'privateKey' ? t.secret : undefined,
               passphrase: t.authMethod === 'privateKey' ? t.passphrase : undefined,
+              hostId: t.hostId,
+              credentialId: t.credentialId,
               columns: 80,
               rows: 24,
             },

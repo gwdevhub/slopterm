@@ -1,17 +1,36 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
-import { createKeychainEntry, listHosts, listKeychainEntries, listSnippets, type SavedKeychainEntry, type SavedSnippet } from '../lib/api'
+import {
+  createKeychainEntry,
+  listCollections,
+  listHosts,
+  listKeychainEntries,
+  listSnippets,
+  type Collection,
+  type SavedKeychainEntry,
+  type SavedSnippet,
+} from '../lib/api'
 
 export interface ConnectionFormValues {
   name?: string
   host: string
   port: number
   username: string
-  authMethod: 'password' | 'privateKey'
+  // 'keychain' names a key rather than carrying one - the mode that lets a team share a host
+  // while every member connects with their own key (see the backend's CredentialResolver).
+  authMethod: 'password' | 'privateKey' | 'keychain'
   password?: string
   privateKey?: string
   passphrase?: string
+  keychainName?: string
   startupSnippetIds?: string[]
   groupName?: string
+  // Which collection a newly saved host goes into ('local' = private to this device).
+  collectionId?: string
+  // Carried through an edit so the backend can match the credential it's replacing - a fresh
+  // id every save would orphan the stored secret this form never received.
+  credentialId?: string
+  // True when the host already has a secret saved that this form deliberately didn't get.
+  hasStoredSecret?: boolean
 }
 
 interface ConnectionFormProps {
@@ -24,6 +43,9 @@ interface ConnectionFormProps {
   // Pre-fills the fields (the "Edit host" flow). Read once on mount, so callers that switch
   // the edited host must remount the form (key it by the host id) for new values to take.
   initialValues?: ConnectionFormValues
+  // Shows the collection picker. Only the saved-host form has anywhere to put one; Quick
+  // Connect saves nothing, so it has no collection to choose.
+  includeCollection?: boolean
 }
 
 const inputClasses =
@@ -42,21 +64,27 @@ export function ConnectionForm({
   errorMessage,
   isSubmitting,
   initialValues,
+  includeCollection,
 }: ConnectionFormProps) {
   const [name, setName] = useState(initialValues?.name ?? '')
   const [host, setHost] = useState(initialValues?.host ?? '')
   const [port, setPort] = useState(initialValues?.port ?? 22)
   const [username, setUsername] = useState(initialValues?.username ?? '')
-  const [authMethod, setAuthMethod] = useState<'password' | 'privateKey'>(initialValues?.authMethod ?? 'password')
-  const [password, setPassword] = useState(initialValues?.password ?? '')
-  const [privateKey, setPrivateKey] = useState(initialValues?.privateKey ?? '')
-  const [passphrase, setPassphrase] = useState(initialValues?.passphrase ?? '')
+  const [authMethod, setAuthMethod] = useState<ConnectionFormValues['authMethod']>(initialValues?.authMethod ?? 'password')
+  // Never pre-filled from a saved host: stored credential material isn't sent to the UI, so
+  // an empty field on an edit means "keep it" and a typed one means "replace it".
+  const [password, setPassword] = useState('')
+  const [privateKey, setPrivateKey] = useState('')
+  const [passphrase, setPassphrase] = useState('')
+  const hasStoredSecret = initialValues?.hasStoredSecret ?? false
 
   const [keychainEntries, setKeychainEntries] = useState<SavedKeychainEntry[]>([])
-  const [selectedKeychainId, setSelectedKeychainId] = useState('')
+  const [namedKey, setNamedKey] = useState(initialValues?.keychainName ?? '')
   const [saveToKeychain, setSaveToKeychain] = useState(false)
   const [keychainName, setKeychainName] = useState('')
   const [keychainError, setKeychainError] = useState<string | null>(null)
+  const [collections, setCollections] = useState<Collection[]>([])
+  const [collectionId, setCollectionId] = useState(initialValues?.collectionId ?? 'local')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [snippets, setSnippets] = useState<SavedSnippet[]>([])
@@ -69,6 +97,13 @@ export function ConnectionForm({
       .then(setKeychainEntries)
       .catch(() => setKeychainEntries([]))
   }, [])
+
+  useEffect(() => {
+    if (!includeCollection) return
+    listCollections()
+      .then(setCollections)
+      .catch(() => setCollections([]))
+  }, [includeCollection])
 
   // Only the "new host"/"edit host" form (includeName) saves a host at all, so only it
   // needs these - Quick Connect has nothing to attach a startup snippet or group to.
@@ -89,28 +124,18 @@ export function ConnectionForm({
     setStartupSnippetIds((prev) => (prev.includes(id) ? prev.filter((existing) => existing !== id) : [...prev, id]))
   }
 
-  function handleUseKeychainEntry(id: string) {
-    setSelectedKeychainId(id)
-    const entry = keychainEntries.find((e) => e.id === id)
-    if (!entry) return
-    setPrivateKey(entry.entry.privateKey)
-    setPassphrase(entry.entry.passphrase ?? '')
-    setSaveToKeychain(false)
-  }
-
   async function handleBrowseFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
     setPrivateKey(await file.text())
-    setSelectedKeychainId('')
   }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     setKeychainError(null)
 
-    if (authMethod === 'privateKey' && saveToKeychain && !selectedKeychainId) {
+    if (authMethod === 'privateKey' && saveToKeychain && privateKey) {
       try {
         await createKeychainEntry({ name: keychainName, privateKey, passphrase: passphrase || undefined })
       } catch (err) {
@@ -127,8 +152,12 @@ export function ConnectionForm({
       password: authMethod === 'password' ? password : undefined,
       privateKey: authMethod === 'privateKey' ? privateKey : undefined,
       passphrase: authMethod === 'privateKey' ? passphrase : undefined,
+      keychainName: authMethod === 'keychain' ? namedKey.trim() : undefined,
       startupSnippetIds: includeName ? startupSnippetIds : undefined,
       groupName: includeName ? groupName.trim() || undefined : undefined,
+      collectionId: includeCollection ? collectionId : undefined,
+      credentialId: initialValues?.credentialId,
+      hasStoredSecret,
     })
   }
 
@@ -157,6 +186,25 @@ export function ConnectionForm({
               <option key={n} value={n} />
             ))}
           </datalist>
+        </div>
+      )}
+
+      {includeCollection && collections.length > 0 && (
+        <div>
+          <label className={labelClasses} htmlFor="collection">Collection</label>
+          <select id="collection" className={inputClasses} value={collectionId} onChange={(e) => setCollectionId(e.target.value)}>
+            <option value="local">Private to this device</option>
+            {collections.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          {collectionId !== 'local' && (
+            <p className="mt-1 text-xs text-amber-400">
+              Everyone in this collection will see this host
+              {authMethod !== 'keychain' && ', including any password or key saved on it. "Use a key named…" shares the host without the key.'}
+              {authMethod === 'keychain' && '. Its key stays on each device.'}
+            </p>
+          )}
         </div>
       )}
 
@@ -192,7 +240,7 @@ export function ConnectionForm({
 
       <div>
         <span className={labelClasses}>Authentication</span>
-        <div className="flex gap-4 text-sm text-slate-300">
+        <div className="flex flex-wrap gap-4 text-sm text-slate-300">
           <label className="flex items-center gap-2">
             <input type="radio" checked={authMethod === 'password'} onChange={() => setAuthMethod('password')} />
             Password
@@ -201,10 +249,14 @@ export function ConnectionForm({
             <input type="radio" checked={authMethod === 'privateKey'} onChange={() => setAuthMethod('privateKey')} />
             Private key
           </label>
+          <label className="flex items-center gap-2">
+            <input type="radio" checked={authMethod === 'keychain'} onChange={() => setAuthMethod('keychain')} />
+            Use a key named…
+          </label>
         </div>
       </div>
 
-      {authMethod === 'password' ? (
+      {authMethod === 'password' && (
         <div>
           <label className={labelClasses} htmlFor="password">Password</label>
           <input
@@ -213,28 +265,47 @@ export function ConnectionForm({
             className={inputClasses}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            required
+            placeholder={hasStoredSecret ? 'Stored — type to replace' : ''}
+            autoComplete="new-password"
+            required={!hasStoredSecret}
           />
-        </div>
-      ) : (
-        <>
-          {keychainEntries.length > 0 && (
-            <div>
-              <label className={labelClasses} htmlFor="keychainEntry">Use a saved key</label>
-              <select
-                id="keychainEntry"
-                className={inputClasses}
-                value={selectedKeychainId}
-                onChange={(e) => handleUseKeychainEntry(e.target.value)}
-              >
-                <option value="">Paste or browse a key below…</option>
-                {keychainEntries.map((entry) => (
-                  <option key={entry.id} value={entry.id}>{entry.entry.name}</option>
-                ))}
-              </select>
-            </div>
+          {hasStoredSecret && (
+            <p className="mt-1 text-xs text-slate-500">
+              Stored, not shown. Leave this empty to keep the saved password.
+            </p>
           )}
+        </div>
+      )}
 
+      {authMethod === 'keychain' && (
+        <>
+          <div>
+            <label className={labelClasses} htmlFor="namedKey">Key name</label>
+            <input
+              id="namedKey"
+              className={inputClasses}
+              list="keychain-names"
+              value={namedKey}
+              onChange={(e) => setNamedKey(e.target.value)}
+              placeholder="e.g. prod-deploy"
+              required
+            />
+            <datalist id="keychain-names">
+              {keychainEntries.map((entry) => (
+                <option key={entry.id} value={entry.entry.name} />
+              ))}
+            </datalist>
+          </div>
+          <p className="rounded border border-slate-800 bg-slate-900/50 px-3 py-2 text-xs text-slate-400">
+            This host carries no key — each device resolves the name against a key it holds itself, preferring your own
+            Keychain, then the host's collection, then <code>~/.ssh</code>. Share the host with a team and everyone
+            still connects with their own key.
+          </p>
+        </>
+      )}
+
+      {authMethod === 'privateKey' && (
+        <>
           <div>
             <div className="mb-1 flex items-center justify-between">
               <label className="text-sm font-medium text-slate-300" htmlFor="privateKey">Private key</label>
@@ -251,13 +322,13 @@ export function ConnectionForm({
               id="privateKey"
               className={`${inputClasses} h-32 font-mono text-xs`}
               value={privateKey}
-              onChange={(e) => {
-                setPrivateKey(e.target.value)
-                setSelectedKeychainId('')
-              }}
-              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-              required
+              onChange={(e) => setPrivateKey(e.target.value)}
+              placeholder={hasStoredSecret ? 'Stored — paste a new key to replace it' : '-----BEGIN OPENSSH PRIVATE KEY-----'}
+              required={!hasStoredSecret}
             />
+            {hasStoredSecret && (
+              <p className="mt-1 text-xs text-slate-500">Stored, not shown. Leave this empty to keep the saved key.</p>
+            )}
           </div>
 
           <div>
@@ -268,10 +339,11 @@ export function ConnectionForm({
               className={inputClasses}
               value={passphrase}
               onChange={(e) => setPassphrase(e.target.value)}
+              autoComplete="new-password"
             />
           </div>
 
-          {!selectedKeychainId && (
+          {privateKey && (
             <div className="rounded border border-slate-800 bg-slate-900/50 p-3">
               <label className="flex items-center gap-2 text-sm text-slate-300">
                 <input type="checkbox" checked={saveToKeychain} onChange={(e) => setSaveToKeychain(e.target.checked)} />

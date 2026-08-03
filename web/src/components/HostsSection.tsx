@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   getHostShareToken,
   getSettings,
+  listCollections,
   listHosts,
   listSnippets,
   upsertRecentConnection,
@@ -47,6 +48,8 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
   const [shareToken, setShareToken] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [showSshConfigHosts, setShowSshConfigHosts] = useState(false)
+  // Collection id -> name, for the badge that marks a host as one the whole team sees.
+  const [collectionNames, setCollectionNames] = useState<Record<string, string>>({})
 
   useEffect(() => {
     refreshHosts()
@@ -56,6 +59,9 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
     getSettings()
       .then((s) => setShowSshConfigHosts(s.showSshConfigHosts))
       .catch(() => setShowSshConfigHosts(false))
+    listCollections()
+      .then((cs) => setCollectionNames(Object.fromEntries(cs.map((c) => [c.id, c.name]))))
+      .catch(() => setCollectionNames({}))
   }, [])
 
   // Auto-dismiss the transient "Copied…" pill.
@@ -85,6 +91,12 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
   // their credential so next time is one click/double-click away - see
   // RecentConnectionRecord's doc comment for why this is a separate store from Hosts.
   function rememberRecent(request: ConnectRequest) {
+    // A named-key connect has no secret here to remember, and re-resolving the name is the
+    // right behaviour anyway - so it's simply not added to Recent.
+    if (!request.password && !request.privateKey) {
+      return
+    }
+
     void upsertRecentConnection({
       host: request.host,
       port: request.port,
@@ -96,14 +108,17 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
   }
 
   async function handleQuickConnectSubmit(values: ConnectionFormValues) {
+    // "Use a key named…" sends the NAME, not the key: the Keychain listing is masked, so only
+    // the backend can turn it into key material (see CredentialResolver).
     const request: ConnectRequest = {
       host: values.host,
       port: values.port,
       username: values.username,
-      authMethod: values.authMethod,
+      authMethod: values.authMethod === 'password' ? 'password' : 'privateKey',
       password: values.password,
       privateKey: values.privateKey,
       passphrase: values.passphrase,
+      keychainName: values.authMethod === 'keychain' ? values.keychainName : undefined,
       columns: 80,
       rows: 24,
     }
@@ -185,6 +200,7 @@ export function HostsSection({ onConnect, onConnectSftp, errorMessage, isConnect
           onEditHost={setHostModal}
           onHostContextMenu={(host, x, y) => setMenu({ host, x, y })}
           isConnecting={isConnecting}
+          collectionNames={collectionNames}
         />
         <RecentConnections
           refreshToken={recentsRefreshToken}

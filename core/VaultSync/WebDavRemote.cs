@@ -160,6 +160,18 @@ public sealed class WebDavRemote : IVaultSyncRemote, IDisposable
                 continue;
             }
 
+            // 409 on the FIRST segment means the collection's own base URL doesn't exist -
+            // MKCOL never creates intermediate collections, so the server is saying "your
+            // parent isn't there". That's a typo in the URL nine times out of ten, and
+            // "MKCOL slopterm failed with 409 Conflict" tells nobody that.
+            if (response.StatusCode == HttpStatusCode.Conflict)
+            {
+                throw new VaultSyncRemoteException(
+                    (int)HttpStatusCode.Conflict,
+                    $"The WebDAV server has no folder at {_root} (409). Check the collection's URL, " +
+                    "and create that folder on the server first - WebDAV won't create missing parent folders.");
+            }
+
             await ThrowIfFailedAsync(response, "MKCOL", soFar.ToString());
         }
     }

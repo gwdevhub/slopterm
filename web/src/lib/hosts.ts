@@ -1,25 +1,53 @@
 import type { ConnectRequest, SavedHost, SavedRecentConnection, SavedSnippet, SshConfigHostEntry } from './api'
 
-// Shared by the saved-host "Connect"/"SSH"/"SFTP" buttons (HostModal, HostGrid) -
-// picks the first usable credential off a host record. Full multi-credential selection
-// (letting the user pick when a host has more than one) is issue #12, not this change.
+// Shared by the saved-host "Connect"/"SSH"/"SFTP" buttons (HostModal, HostGrid).
+//
+// Deliberately carries NO credential material: the frontend never receives a saved host's
+// password or private key any more, so the request names the host (and, when the host has
+// more than one, which credential) and the backend resolves it - which is also what makes
+// "use a key named prod-deploy" work, since only the backend can see this device's keychain.
+// `canConnect` is likewise server-computed, from the same resolver, so the button state and
+// what actually happens on click can't drift apart.
 export function resolveConnectRequest(host: SavedHost): ConnectRequest | undefined {
-  const credential = host.host.credentials.find((c) => c.kind === 'password' || c.kind === 'privateKey')
-  if (!credential) {
+  if (!host.canConnect) {
     return undefined
   }
+
+  const credential = host.host.credentials.find((c) => c.resolution?.resolved) ?? host.host.credentials[0]
 
   return {
     host: host.host.address,
     port: host.host.port,
-    username: credential.username ?? '',
-    authMethod: credential.kind === 'password' ? 'password' : 'privateKey',
-    password: credential.kind === 'password' ? credential.secret : undefined,
-    privateKey: credential.kind === 'privateKey' ? credential.secret : undefined,
-    passphrase: credential.kind === 'privateKey' ? credential.passphrase : undefined,
+    username: credential?.username ?? '',
+    authMethod: credential?.kind === 'password' ? 'password' : 'privateKey',
     columns: 80,
     rows: 24,
     hostId: host.id,
+    credentialId: credential?.id,
+  }
+}
+
+// A one-line description of where a host's credential resolved on THIS device, for the card.
+// Returns undefined when there's nothing worth saying (an ordinary inline credential).
+export function describeCredentialResolution(host: SavedHost): string | undefined {
+  const credential = host.host.credentials.find((c) => c.kind === 'keychain')
+  if (!credential) {
+    return undefined
+  }
+
+  const resolution = credential.resolution
+  const name = credential.keychainName ?? 'a key'
+  switch (resolution?.source) {
+    case 'keychain-local':
+      return `key: ${resolution.detail ?? name} (yours)`
+    case 'keychain-collection':
+      return `key: ${resolution.detail ?? name} (shared)`
+    case 'keychain-other':
+      return `key: ${resolution.detail ?? name} (another collection)`
+    case 'ssh-default':
+      return `key: ~/.ssh/${resolution.detail}`
+    default:
+      return `no key called "${name}" on this device`
   }
 }
 

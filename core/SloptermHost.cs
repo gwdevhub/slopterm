@@ -355,6 +355,14 @@ app.MapPost("/api/ssh/upload", async (HttpRequest request, CancellationToken ct)
         return Results.BadRequest(new { error = "Invalid connect payload." });
     }
 
+    // The tab's request carries no credential for a saved host - the frontend never received
+    // one - so it's resolved here, exactly as the connect endpoints do. Without this, a
+    // one-shot upload from an SSH tab would try to authenticate with nothing at all.
+    if (ResolveConnectCredential(vault, connect) is { } uploadCredentialError)
+    {
+        return Results.BadRequest(new { error = uploadCredentialError });
+    }
+
     try
     {
         using var ms = new MemoryStream();
@@ -1059,6 +1067,48 @@ app.MapGet("/api/vault/hosts/{id}/share", (string id) =>
         // Sharing the inventory without shipping anyone's private key is the whole point of
         // the keychain credential kind.
         return Results.Ok(new { token = HostShareCodec.Encode(match.Record) });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+// Duplicating has to happen server-side now that credential material never reaches the
+// frontend: a copy built from what the UI holds would arrive with no password or key at all.
+// The name suffix is applied here for the same reason - it's the only place that can see the
+// whole record.
+app.MapPost("/api/vault/hosts/{id}/duplicate", (string id) =>
+{
+    try
+    {
+        var match = vault.ListHosts().FirstOrDefault(h => h.Id == id);
+        if (match.Record is null)
+        {
+            return Results.NotFound();
+        }
+
+        var copy = new HostRecord
+        {
+            Name = $"{match.Record.Name} (copy)",
+            Address = match.Record.Address,
+            Port = match.Record.Port,
+            ParentGroupId = match.Record.ParentGroupId,
+            StartupSnippetIds = [.. match.Record.StartupSnippetIds],
+            // Fresh credential ids: the copy is its own record, and sharing ids with the
+            // original would make an edit to one look like an edit to the other's credential.
+            Credentials = [.. match.Record.Credentials.Select(c => new CredentialRecord
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Kind = c.Kind,
+                Username = c.Username,
+                Secret = c.Secret,
+                Passphrase = c.Passphrase,
+                KeychainName = c.KeychainName,
+            })],
+        };
+
+        return Results.Ok(new { id = vault.SaveHost(null, copy, match.CollectionId) });
     }
     catch (InvalidOperationException ex)
     {
@@ -2291,8 +2341,27 @@ var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
             return null; // Quick Connect / Recent supply their own
         }
 
+        // Quick Connect's "use a saved key": no host to resolve against, just a name.
         if (string.IsNullOrEmpty(request.HostId))
         {
+            if (string.IsNullOrEmpty(request.KeychainName))
+            {
+                return null;
+            }
+
+            var named = CredentialResolver.Resolve(
+                vault,
+                CollectionStore.LocalCollectionId,
+                new CredentialRecord { Id = "quick-connect", Kind = "keychain", KeychainName = request.KeychainName });
+
+            if (named?.CanConnect != true)
+            {
+                return $"No key called \"{request.KeychainName}\" on this device.";
+            }
+
+            request.AuthMethod = "privateKey";
+            request.PrivateKey = named.PrivateKey;
+            request.Passphrase = named.Passphrase;
             return null;
         }
 

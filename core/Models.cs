@@ -29,6 +29,14 @@ public sealed class ConnectRequest
     /// hold no host secrets at all.
     /// </summary>
     public string? CredentialId { get; set; }
+
+    /// <summary>
+    /// Names a Keychain entry to connect with, for a request that isn't tied to a saved host
+    /// (Quick Connect's "use a saved key"). Resolved by NAME through the same
+    /// CredentialResolver a synced host uses, so the frontend never has to hold the key -
+    /// which is what lets the Keychain listing mask it.
+    /// </summary>
+    public string? KeychainName { get; set; }
 }
 
 public sealed class VaultPasswordRequest

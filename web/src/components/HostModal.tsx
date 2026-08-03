@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react'
-import { createHost, deleteHost, updateHost, type CredentialRecord, type HostRecord, type SavedHost } from '../lib/api'
+import {
+  createHost,
+  deleteHost,
+  duplicateHost,
+  moveRecordToCollection,
+  updateHost,
+  type CredentialRecord,
+  type HostRecord,
+  type SavedHost,
+} from '../lib/api'
 import { ConnectionForm, type ConnectionFormValues } from './ConnectionForm'
 import { ConfirmDialog } from './ConfirmDialog'
 import { CloseIcon } from './icons'
@@ -22,34 +31,52 @@ interface HostModalProps {
 // form (like the "new host" flow) edits a single credential; a host with several keeps the
 // rest only until it's saved from here - consistent with there being no multi-credential
 // UI yet (issue #12).
+//
+// No secret comes across: the backend masks credential material out of every listing, so the
+// form shows "stored, not shown" and only replaces a value the user actually types. The
+// credential's ID does come across, because that's what the backend matches on to carry the
+// stored secret forward - a fresh id on every save would orphan it.
 function hostToFormValues(host: SavedHost): ConnectionFormValues {
   const credential = host.host.credentials[0]
-  const isKey = credential?.kind === 'privateKey'
+  const authMethod: ConnectionFormValues['authMethod'] =
+    credential?.kind === 'keychain' ? 'keychain' : credential?.kind === 'privateKey' ? 'privateKey' : 'password'
+
   return {
     name: host.host.name,
     host: host.host.address,
     port: host.host.port,
     username: credential?.username ?? '',
-    authMethod: isKey ? 'privateKey' : 'password',
-    password: isKey ? '' : (credential?.secret ?? ''),
-    privateKey: isKey ? (credential?.secret ?? '') : '',
-    passphrase: credential?.passphrase ?? '',
+    authMethod,
+    keychainName: credential?.keychainName ?? '',
     startupSnippetIds: host.host.startupSnippetIds ?? [],
     groupName: host.host.parentGroupId ?? undefined,
+    collectionId: host.collectionId,
+    credentialId: credential?.id,
+    hasStoredSecret: credential?.hasSecret ?? false,
   }
 }
 
 function formValuesToHost(values: ConnectionFormValues): HostRecord {
-  const credential: CredentialRecord =
-    values.authMethod === 'password'
-      ? { id: crypto.randomUUID(), kind: 'password', username: values.username, secret: values.password }
-      : {
-          id: crypto.randomUUID(),
-          kind: 'privateKey',
-          username: values.username,
-          secret: values.privateKey,
-          passphrase: values.passphrase || undefined,
-        }
+  // Reused across an edit so the backend can find the credential whose secret it's carrying
+  // forward; only a genuinely new credential gets a fresh id.
+  const id = values.credentialId ?? crypto.randomUUID()
+
+  let credential: CredentialRecord
+  if (values.authMethod === 'keychain') {
+    credential = { id, kind: 'keychain', username: values.username, keychainName: values.keychainName }
+  } else if (values.authMethod === 'password') {
+    // An empty secret means "keep what's stored" - see the backend's MergeCredentials.
+    credential = { id, kind: 'password', username: values.username, secret: values.password || undefined }
+  } else {
+    credential = {
+      id,
+      kind: 'privateKey',
+      username: values.username,
+      secret: values.privateKey || undefined,
+      passphrase: values.passphrase || undefined,
+    }
+  }
+
   return {
     name: values.name ?? '',
     address: values.host,
@@ -89,8 +116,13 @@ export function HostModal({ host, onClose, onSaved, onDeleted, onDuplicated, isC
     try {
       if (host) {
         await updateHost(host.id, formValuesToHost(values))
+        // Moving between collections is its own operation, not a side effect of an edit -
+        // the record has to be tombstoned in the one it leaves and pushed to the one it joins.
+        if (values.collectionId && values.collectionId !== host.collectionId) {
+          await moveRecordToCollection('hosts', host.id, values.collectionId)
+        }
       } else {
-        await createHost(formValuesToHost(values))
+        await createHost(formValuesToHost(values), values.collectionId)
       }
       onSaved()
     } catch (err) {
@@ -108,7 +140,7 @@ export function HostModal({ host, onClose, onSaved, onDeleted, onDuplicated, isC
     if (!host) return
     setError(null)
     try {
-      const { id } = await createHost({ ...host.host, name: `${host.host.name} (copy)` })
+      const { id } = await duplicateHost(host.id)
       onDuplicated(id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to duplicate host')
@@ -127,6 +159,7 @@ export function HostModal({ host, onClose, onSaved, onDeleted, onDuplicated, isC
         <ConnectionForm
           key={host?.id ?? 'new'}
           includeName
+          includeCollection
           submitLabel={host ? 'Save changes' : 'Save host'}
           initialValues={host ? hostToFormValues(host) : undefined}
           isSubmitting={isConnecting}

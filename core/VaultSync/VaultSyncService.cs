@@ -564,7 +564,8 @@ public sealed class VaultSyncService : IAsyncDisposable
             }
 
             var pushed = await PushRecordAsync(
-                remote, collectionKey, identity, collection, scope, record, state, ct);
+                remote, collectionKey, identity, collection, scope, record, state,
+                remoteRecords.ContainsKey(record.Id), ct);
             if (pushed is not null)
             {
                 collection.Records[stateKey] = pushed;
@@ -596,10 +597,20 @@ public sealed class VaultSyncService : IAsyncDisposable
     }
 
     /// <summary>
-    /// PUT with a precondition, retrying a 412 by re-reading and re-merging. Bounded at
-    /// <see cref="PreconditionRetries"/>: past that, HLC ordering is the fallback and the
-    /// loser survives as a conflict copy, which beats spinning against a server that keeps
-    /// losing the race.
+    /// PUT with a precondition where one is usable, retrying a 412 by re-reading and
+    /// re-merging, and falling back to an unconditional write.
+    ///
+    /// Both escapes matter, and both come from servers that don't behave like the RFC
+    /// suggests. Apache's mod_dav returns no ETag at all - not on PUT, not in PROPFIND's
+    /// getetag - so there is nothing to build an If-Match from, and blindly sending
+    /// `If-None-Match: *` for an existing record means a guaranteed 412 on every attempt: the
+    /// push is refused forever and the two devices never converge, silently. So a precondition
+    /// is only used when the server has actually given us something to condition on, and after
+    /// <see cref="PreconditionRetries"/> genuine races the write goes through unconditionally.
+    ///
+    /// Giving up on ordering isn't giving up on correctness: the hybrid logical clock on every
+    /// record decides the winner, and the conflict copy keeps the loser. That is what
+    /// todo/webdav-sync.md means by preconditions being best-effort.
     /// </summary>
     private async Task<RecordSyncState?> PushRecordAsync(
         IVaultSyncRemote remote,
@@ -609,12 +620,14 @@ public sealed class VaultSyncService : IAsyncDisposable
         string scope,
         StoredRecord record,
         RecordSyncState? state,
+        bool existsRemotely,
         CancellationToken ct)
     {
         var path = $"{RemoteRoot}/records/{scope}/{record.Id}.json";
+        // Stamped once, from the record itself - never re-derived inside the retry loop.
         var hlc = record.Hlc.Length > 0 ? record.Hlc : HybridLogicalClock.Shared.Now().ToString();
 
-        for (var attempt = 0; attempt < PreconditionRetries; attempt++)
+        for (var attempt = 0; attempt <= PreconditionRetries; attempt++)
         {
             var (nonce, ciphertext) = CollectionCrypto.EncryptRecord(collectionKey, record.Json);
             var envelope = new SyncEnvelope
@@ -629,9 +642,16 @@ public sealed class VaultSyncService : IAsyncDisposable
                 AuthorFingerprint = CollectionCrypto.Fingerprint(identity),
             };
 
-            var isCreate = state?.ETag is null;
+            // Last attempt goes in unconditionally - see this method's summary.
+            var lastAttempt = attempt == PreconditionRetries;
+            var ifMatch = lastAttempt ? null : state?.ETag;
+            // "Create only" is a claim we can make just once, and only when we genuinely
+            // believe the record isn't there: asserting it against a record that exists is a
+            // permanent 412 on any server that honours it.
+            var ifNoneMatchStar = !lastAttempt && ifMatch is null && !existsRemotely;
+
             var result = await remote.PutAsync(
-                path, SyncJson.SerializeToUtf8Bytes(envelope), state?.ETag, isCreate, ct);
+                path, SyncJson.SerializeToUtf8Bytes(envelope), ifMatch, ifNoneMatchStar, ct);
 
             if (result.Ok)
             {
@@ -643,14 +663,23 @@ public sealed class VaultSyncService : IAsyncDisposable
                 return null;
             }
 
-            // Someone wrote first. Re-read theirs, let the clock absorb it so our next stamp
-            // is ordered after, and try again against the ETag they left.
+            // Something is there after all, whatever we believed.
+            existsRemotely = true;
+
+            // Someone wrote first. Read theirs so this device's clock is at least aware of it,
+            // then retry against the ETag they left.
+            //
+            // What must NOT happen here is re-stamping this record with a fresh HLC. The clock
+            // reading describes WHEN THE EDIT HAPPENED, not when the push finally landed -
+            // bumping it on a retry would let an older edit outrank a newer one purely by
+            // being pushed later, which is the "deleted host comes back" failure this whole
+            // mechanism exists to prevent. If theirs really is newer, the next pull merges it
+            // properly and keeps this one as a conflict copy.
             var existing = await remote.GetAsync(path, ct);
             var theirs = existing is null ? null : SyncJson.Deserialize<SyncEnvelope>(existing);
             if (theirs is not null)
             {
                 HybridLogicalClock.Shared.Observe(Hlc.Parse(theirs.Hlc));
-                hlc = HybridLogicalClock.Shared.Now().ToString();
             }
 
             var listing = await remote.ListAsync($"{RemoteRoot}/records/{scope}", ct);
@@ -660,6 +689,7 @@ public sealed class VaultSyncService : IAsyncDisposable
 
         return null;
     }
+
 
     // --- merge ----------------------------------------------------------------------------
 
@@ -696,13 +726,19 @@ public sealed class VaultSyncService : IAsyncDisposable
 
         // A genuine conflict is BOTH sides having moved on from the last state the two
         // agreed about - neither edit having seen the other. That is decided by the sync
-        // state, not by which HLC is higher: whoever pushed second wins on the clock, but
-        // the earlier edit was still made blind and must not evaporate. Checking this before
-        // the "ours is newer" shortcut is the whole point; the shortcut used to return first
-        // and quietly drop the remote edit.
-        if (contentsDiffer &&
-            (state?.Hlc is null || state.Hlc != mine.Hlc) &&
-            (state?.Hlc is null || state.Hlc != envelope.Hlc))
+        // state, not by which HLC is higher: whoever pushed second wins on the clock, but the
+        // earlier edit was still made blind and must not evaporate. Checking this before the
+        // "ours is newer" shortcut is the whole point; the shortcut used to return first and
+        // quietly drop the remote edit.
+        //
+        // No state at all is NOT evidence of a conflict - it means "we don't know". It's the
+        // normal situation right after a key rotation or a re-join, both of which clear the
+        // record state, and treating it as a conflict there manufactured duplicate copies of
+        // records nobody had touched. The cost is that a real conflict spanning a rotation
+        // resolves by HLC alone, with no copy kept; that is rare, and far better than a
+        // rotation quietly doubling every record in the collection.
+        var agreedHlc = state?.Hlc;
+        if (contentsDiffer && agreedHlc is not null && agreedHlc != mine.Hlc && agreedHlc != envelope.Hlc)
         {
             // Keep whichever side loses on the clock, under a new id with a suffixed name.
             SaveConflictCopy(collectionId, folder, localHlc >= remoteHlc ? plaintext : mine.Json);

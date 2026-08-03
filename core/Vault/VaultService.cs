@@ -330,19 +330,15 @@ public sealed class VaultService
         var newKey = VaultCrypto.DeriveKey(
             newDerivationInput, newSalt, VaultCrypto.Argon2Iterations, VaultCrypto.Argon2MemoryKb, VaultCrypto.Argon2Parallelism);
 
-        // Recursive: collections/{cid}/… nests one level deeper than the original record
-        // folders, and its collection.json/identity.json/members.json are vault-encrypted
-        // too - missing them would leave a synced collection unreadable after a password
-        // change, with its remote password and collection key stranded under the old key.
+        // Recursive, unlike before: collections/{cid}/… nests one level deeper than the
+        // original record folders, and its collection.json/identity.json/members.json are
+        // vault-encrypted too - missing them would leave a synced collection unreadable after
+        // a password change, with its remote password and collection key stranded under the
+        // old key.
         if (Directory.Exists(_vaultDir))
         {
-            foreach (var path in Directory.EnumerateFiles(_vaultDir, "*.json", SearchOption.AllDirectories))
+            foreach (var path in EncryptedRecordFiles())
             {
-                if (path == _metadataPath || path == _settingsPath)
-                {
-                    continue; // vault.json is rewritten below; settings.json is never encrypted
-                }
-
                 var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
                 if (envelope is null)
                 {
@@ -361,6 +357,23 @@ public sealed class VaultService
         WriteMetadata(newSalt, newKey);
         _key = newKey;
     }
+
+    /// <summary>
+    /// Every vault-encrypted record file, at any depth. Files sitting directly in the vault
+    /// directory are deliberately excluded: vault.json, settings.json and window.json are
+    /// device-local plaintext, and trying to read one as a RecordEnvelope is how a re-key
+    /// blew up on an install that had simply moved its window.
+    ///
+    /// Materialized rather than enumerated lazily, because callers replace each file as they
+    /// go (temp + move) and mutating a directory mid-enumeration can hand the same path back
+    /// twice - which during a re-key would encrypt a record under the new key twice and leave
+    /// it unreadable by anything.
+    /// </summary>
+    private string[] EncryptedRecordFiles() =>
+        Directory.Exists(_vaultDir)
+            ? [.. Directory.GetFiles(_vaultDir, "*.json", SearchOption.AllDirectories)
+                .Where(path => Path.GetDirectoryName(path) != _vaultDir)]
+            : [];
 
     /// <summary>
     /// Packages vault.json, settings.json, and every record file into a zip - the whole
@@ -388,19 +401,12 @@ public sealed class VaultService
 
             // Recursive, so collections/{cid}/… travels with the backup - restoring a vault
             // that silently dropped every synced collection would be worse than not
-            // exporting at all.
-            if (Directory.Exists(_vaultDir))
+            // exporting at all. Root-level files are excluded for the same reason a re-key
+            // skips them: they describe this device, not its records.
+            foreach (var file in EncryptedRecordFiles())
             {
-                foreach (var file in Directory.EnumerateFiles(_vaultDir, "*.json", SearchOption.AllDirectories))
-                {
-                    if (file == _metadataPath || file == _settingsPath)
-                    {
-                        continue; // both already added above, at the archive root
-                    }
-
-                    var relative = Path.GetRelativePath(_vaultDir, file).Replace(Path.DirectorySeparatorChar, '/');
-                    archive.CreateEntryFromFile(file, relative);
-                }
+                var relative = Path.GetRelativePath(_vaultDir, file).Replace(Path.DirectorySeparatorChar, '/');
+                archive.CreateEntryFromFile(file, relative);
             }
         }
 

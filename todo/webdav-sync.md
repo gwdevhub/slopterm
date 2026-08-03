@@ -1,9 +1,33 @@
 # WebDAV vault sync, with membership and revocation
 
-**Status: planned, not implemented.** This is written to be picked up and built from - it
-states what to build, in what order, and which decisions are already made vs. deliberately
-left open. Read [scheduled-jobs.md](scheduled-jobs.md)'s note on two devices firing one job
-before shipping both features together.
+**Status: implemented.** Phases 1-6 are built and shipped; phase 7 (a second
+`IVaultSyncRemote`, git in particular) is still deliberately later. The code lives in
+`core/VaultSync/`, the UI in `web/src/components/CollectionsSection.tsx`, and the tests in
+`tests/` (plus `e2e/tests/collections.spec.ts`). Read
+[scheduled-jobs.md](scheduled-jobs.md)'s note on two devices firing one job.
+
+Three things ended up different from what's written below, each for a reason discovered
+while building it - the rest of this document describes what was built:
+
+- **members.json is gated by an HMAC under the collection key, not by a pinned signer.**
+  "Pin one signer" and "any member may sign, there are no roles" cannot both hold: the
+  second device to join signs with its own key, which nobody else has pinned. The HMAC gives
+  the property the doc actually wanted ("this came from someone already in the collection")
+  without a role model; the Ed25519 signature is kept for attribution and the pinned key as
+  an advisory. A rotation additionally carries a proof under the *previous* key, so a device
+  on the old epoch can verify the list that hands it the new one. See `MembersFile`.
+- **Preconditions really are best-effort, and the code now assumes nothing.** Apache's
+  mod_dav returns no ETag at all - not on PUT, not in PROPFIND - so an unconditional path
+  was mandatory: without it every push sent `If-None-Match: *`, got a permanent 412, and was
+  abandoned silently. See `VaultSyncService.PushRecordAsync`.
+- **A conflict copy requires positive evidence that both sides moved.** "No sync state" is
+  not evidence - it's the normal situation after a rotation or a re-join, and treating it as
+  a conflict manufactured duplicates of records nobody had touched.
+
+Verified against three WebDAV implementations: the Caddy share this project actually uses,
+Apache mod_dav, and (where the image is available) KaraDAV - see `tests/webdav-servers.sh`.
+The win-x64 build was exercised under Wine against the live share, which is what the
+BouncyCastle decision below exists for.
 
 Not to be confused with **Folder sync** (`core/SyncService.cs`), which mirrors local ↔ remote
 *directories over SFTP* and has nothing to do with this. Name the new code

@@ -18,6 +18,10 @@
 
 ## Testing
 
+- `tests/` is an xunit project covering the vault-sync engine (hybrid logical clocks, the
+  merge matrix, collection crypto, credential resolution). `dotnet test` runs offline; the
+  WebDAV-backed tests skip unless `SLOPTERM_WEBDAV_URL` is set, and
+  `tests/webdav-servers.sh` runs them against real servers.
 - **Mandatory**: Build `win-x64` and run under Wine against a real SSH server. Wine's CNG has no working ECDH (X25519 *or* NIST curves), so `SshConnectionInfoFactory` detects Wine (the `wine_get_version` ntdll export) and negotiates classical Diffie-Hellman instead, which SSH.NET does in managed code. This means the Wine build connects to any default-config OpenSSH server, but *not* to one hardened to ECC-only key exchange - that's a limit of Wine's crypto, not the client.
 - Test all OS targets before committing.
 
