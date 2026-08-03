@@ -4,191 +4,84 @@ using Xunit;
 
 namespace Slopterm.Tests;
 
+/// <summary>
+/// A collection's crypto is deliberately small: one AES-256 key that records are encrypted
+/// under before they leave the device. There are no device identities, signatures or key
+/// wrapping to test, because who may read and write a collection is the WebDAV server's
+/// decision, not this app's.
+/// </summary>
 public sealed class CollectionCryptoTests
 {
     [Fact]
-    public void WrapsAndUnwrapsTheCollectionKeyForOneMember()
+    public void GeneratesADistinctKeyEveryTime()
     {
-        var key = CollectionCrypto.GenerateCollectionKey();
-        var identity = CollectionCrypto.GenerateIdentity("laptop");
-
-        var wrapped = CollectionCrypto.WrapKey(key, identity.X25519Public);
-
-        Assert.Equal(key, CollectionCrypto.UnwrapKey(wrapped, identity));
+        Assert.NotEqual(CollectionCrypto.GenerateCollectionKey(), CollectionCrypto.GenerateCollectionKey());
+        Assert.Equal(32, CollectionCrypto.GenerateCollectionKey().Length);
     }
 
     [Fact]
-    public void WrappingIsFreshEveryTime()
+    public void GeneratesADistinctCollectionIdEveryTime()
     {
-        var key = CollectionCrypto.GenerateCollectionKey();
-        var identity = CollectionCrypto.GenerateIdentity("laptop");
+        var id = CollectionCrypto.GenerateCollectionId();
 
-        // A fresh ephemeral keypair per wrap means the same key sealed twice never produces
-        // the same bytes - otherwise the member list would leak "these two entries hold the
-        // same key" to anyone reading the share.
-        Assert.NotEqual(
-            CollectionCrypto.WrapKey(key, identity.X25519Public),
-            CollectionCrypto.WrapKey(key, identity.X25519Public));
+        Assert.NotEqual(id, CollectionCrypto.GenerateCollectionId());
+        Assert.Equal(32, id.Length);
+        Assert.True(id.All(Uri.IsHexDigit));
     }
 
     [Fact]
-    public void AnotherDeviceCannotUnwrapSomeoneElsesEntry()
+    public void RoundTripsARecordUnderTheCollectionKey()
     {
         var key = CollectionCrypto.GenerateCollectionKey();
-        var mine = CollectionCrypto.GenerateIdentity("laptop");
-        var theirs = CollectionCrypto.GenerateIdentity("phone");
+        const string plaintext = """{"name":"prod-db","address":"10.0.0.5"}""";
 
-        var wrappedForThem = CollectionCrypto.WrapKey(key, theirs.X25519Public);
+        var (nonce, ciphertext) = CollectionCrypto.EncryptRecord(key, plaintext);
 
-        // AuthenticationTagMismatchException, which derives from CryptographicException -
-        // the same type VaultSyncService catches to report "you no longer have access".
-        Assert.ThrowsAny<CryptographicException>(() => CollectionCrypto.UnwrapKey(wrappedForThem, mine));
-    }
-
-    [Fact]
-    public void FingerprintsAreStableAndDistinct()
-    {
-        var a = CollectionCrypto.GenerateIdentity("a");
-        var b = CollectionCrypto.GenerateIdentity("b");
-
-        Assert.Equal(CollectionCrypto.Fingerprint(a), CollectionCrypto.Fingerprint(a));
-        Assert.NotEqual(CollectionCrypto.Fingerprint(a), CollectionCrypto.Fingerprint(b));
-        Assert.StartsWith("sha256:", CollectionCrypto.Fingerprint(a), StringComparison.Ordinal);
-
-        // Short form is what two people read to each other over a call.
-        Assert.Equal(4, CollectionCrypto.ShortFingerprint(CollectionCrypto.Fingerprint(a)).Split(' ').Length);
-    }
-
-    [Fact]
-    public void SealsAndVerifiesAMemberList()
-    {
-        var key = CollectionCrypto.GenerateCollectionKey();
-        var identity = CollectionCrypto.GenerateIdentity("laptop");
-        var members = MembersWith(key, identity);
-
-        CollectionCrypto.SealMembers(members, identity, key);
-        var verification = CollectionCrypto.VerifyMembers(members, identity.Ed25519Public, key);
-
-        Assert.True(verification.Trusted);
-        Assert.True(verification.SignatureValid);
-        Assert.True(verification.SignerIsPinned);
+        Assert.Equal(plaintext, CollectionCrypto.DecryptRecord(
+            key, Convert.ToBase64String(nonce), Convert.ToBase64String(ciphertext)));
     }
 
     /// <summary>
-    /// The attack the HMAC exists to stop: someone with write access to the WebDAV share,
-    /// but not the collection key, adding themselves so the next rotation hands them the
-    /// new key. They can produce a perfectly valid Ed25519 signature with their own key -
-    /// and it still has to be refused.
+    /// Someone pointed at the same WebDAV folder with a different collection's token can't
+    /// read the records - which is what "the server stores ciphertext it can't use" means in
+    /// practice, and why the sync loop skips a record it can't decrypt rather than mangling it.
     /// </summary>
     [Fact]
-    public void RejectsAMemberListFromSomeoneWhoDoesntHoldTheCollectionKey()
+    public void ADifferentKeyCannotReadTheRecord()
     {
-        var key = CollectionCrypto.GenerateCollectionKey();
-        var member = CollectionCrypto.GenerateIdentity("laptop");
-        var intruder = CollectionCrypto.GenerateIdentity("attacker");
+        var (nonce, ciphertext) = CollectionCrypto.EncryptRecord(CollectionCrypto.GenerateCollectionKey(), "secret");
 
-        var members = MembersWith(key, member);
-        members.Members.Add(new MemberEntry
-        {
-            Id = "intruder",
-            Label = "attacker",
-            X25519 = intruder.X25519Public,
-            Ed25519 = intruder.Ed25519Public,
-            WrappedKey = "not-a-real-wrap",
-            AddedAt = DateTimeOffset.UtcNow,
-        });
-        CollectionCrypto.SealMembers(members, intruder, CollectionCrypto.GenerateCollectionKey());
-
-        var verification = CollectionCrypto.VerifyMembers(members, member.Ed25519Public, key);
-
-        Assert.False(verification.Trusted);
-        Assert.True(verification.SignatureValid); // they really did sign it - it's just not theirs to sign
+        Assert.ThrowsAny<CryptographicException>(() => CollectionCrypto.DecryptRecord(
+            CollectionCrypto.GenerateCollectionKey(), Convert.ToBase64String(nonce), Convert.ToBase64String(ciphertext)));
     }
 
     [Fact]
-    public void RejectsATamperedMemberList()
+    public void EncryptingTwiceNeverProducesTheSameBytes()
     {
         var key = CollectionCrypto.GenerateCollectionKey();
-        var identity = CollectionCrypto.GenerateIdentity("laptop");
-        var members = MembersWith(key, identity);
-        CollectionCrypto.SealMembers(members, identity, key);
 
-        members.KeyEpoch = 99;
+        var (firstNonce, firstCiphertext) = CollectionCrypto.EncryptRecord(key, "same");
+        var (secondNonce, secondCiphertext) = CollectionCrypto.EncryptRecord(key, "same");
 
-        Assert.False(CollectionCrypto.VerifyMembers(members, identity.Ed25519Public, key).Trusted);
+        Assert.NotEqual(firstNonce, secondNonce);
+        Assert.NotEqual(firstCiphertext, secondCiphertext);
     }
 
     /// <summary>
-    /// A second device signing a list it legitimately added itself to is accepted - the doc's
-    /// "any member may sign, there are no roles" - while still being reported as an
-    /// unexpected signer, which is what the UI mentions.
+    /// The fingerprint is what two people compare out loud to confirm they pasted the same
+    /// token, so it has to be stable, short, and derived from the key without revealing it.
     /// </summary>
     [Fact]
-    public void AcceptsAListSignedByADifferentMemberButFlagsTheSigner()
+    public void KeyFingerprintIsStableDistinctAndReadable()
     {
-        var key = CollectionCrypto.GenerateCollectionKey();
-        var creator = CollectionCrypto.GenerateIdentity("laptop");
-        var joiner = CollectionCrypto.GenerateIdentity("phone");
+        var key = Convert.ToBase64String(CollectionCrypto.GenerateCollectionKey());
+        var other = Convert.ToBase64String(CollectionCrypto.GenerateCollectionKey());
 
-        var members = MembersWith(key, creator);
-        members.Members.Add(new MemberEntry
-        {
-            Id = "phone",
-            Label = "phone",
-            X25519 = joiner.X25519Public,
-            Ed25519 = joiner.Ed25519Public,
-            WrappedKey = CollectionCrypto.WrapKey(key, joiner.X25519Public),
-            AddedAt = DateTimeOffset.UtcNow,
-        });
-        CollectionCrypto.SealMembers(members, joiner, key);
+        var fingerprint = CollectionCrypto.KeyFingerprint(key);
 
-        var verification = CollectionCrypto.VerifyMembers(members, creator.Ed25519Public, key);
-
-        Assert.True(verification.Trusted);
-        Assert.False(verification.SignerIsPinned);
-        Assert.Equal(CollectionCrypto.Fingerprint(joiner), verification.SignerFingerprint);
+        Assert.Equal(fingerprint, CollectionCrypto.KeyFingerprint(key));
+        Assert.NotEqual(fingerprint, CollectionCrypto.KeyFingerprint(other));
+        Assert.Equal(4, fingerprint.Split(' ').Length);
+        Assert.DoesNotContain(key, fingerprint, StringComparison.Ordinal);
     }
-
-    [Fact]
-    public void RejectsAnUnsealedList()
-    {
-        var key = CollectionCrypto.GenerateCollectionKey();
-        var identity = CollectionCrypto.GenerateIdentity("laptop");
-
-        Assert.False(CollectionCrypto.VerifyMembers(MembersWith(key, identity), identity.Ed25519Public, key).Trusted);
-    }
-
-    /// <summary>
-    /// Both proofs cover canonical JSON, so verification has to survive a round-trip through
-    /// the serializer that actually puts it on the wire - property order and all.
-    /// </summary>
-    [Fact]
-    public void SurvivesASerializationRoundTrip()
-    {
-        var key = CollectionCrypto.GenerateCollectionKey();
-        var identity = CollectionCrypto.GenerateIdentity("laptop");
-        var members = MembersWith(key, identity);
-        CollectionCrypto.SealMembers(members, identity, key);
-
-        var reloaded = SyncJson.Deserialize<MembersFile>(SyncJson.SerializeToUtf8Bytes(members))!;
-
-        Assert.True(CollectionCrypto.VerifyMembers(reloaded, identity.Ed25519Public, key).Trusted);
-    }
-
-    private static MembersFile MembersWith(byte[] key, CollectionIdentity identity) => new()
-    {
-        KeyEpoch = 1,
-        Members =
-        [
-            new MemberEntry
-            {
-                Id = identity.MemberId,
-                Label = identity.Label,
-                X25519 = identity.X25519Public,
-                Ed25519 = identity.Ed25519Public,
-                WrappedKey = CollectionCrypto.WrapKey(key, identity.X25519Public),
-                AddedAt = DateTimeOffset.UtcNow,
-            },
-        ],
-    };
 }

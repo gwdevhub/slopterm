@@ -6,15 +6,12 @@ import {
   getSyncConfigurationToken,
   joinCollection,
   leaveCollection,
-  listCollectionMembers,
   listCollections,
   listSyncScopes,
-  rotateCollectionKey,
   syncCollectionNow,
   updateCollection,
   type Collection,
   type CollectionInput,
-  type CollectionMember,
   type CollectionStatus,
   type SyncScopeInfo,
 } from '../lib/api'
@@ -29,6 +26,13 @@ const labelClasses = 'mb-1 block text-xs font-medium text-slate-400'
 // Collections: a set of records that converge with a WebDAV URL across every device holding
 // the collection's token, encrypted end to end. Teams share a collection by sharing its
 // token; a person shares one with their own phone the same way.
+//
+// Who may read and write is the WebDAV server's business, not this app's. Everyone can use
+// one shared account, or each person can have their own against the same folder, or the
+// folder can need no auth at all - and removing someone is done on the server, where their
+// access actually lives. That's why there's no member list, no per-device keys and no
+// rotation here: an app-level permission model on top of the server's would be a second,
+// weaker one that lies about what it enforces.
 //
 // The hard part of this feature on a phone is typing a WebDAV URL and password, and the
 // answer here is a single line of text you copy and paste - not a camera. Scanning a QR
@@ -51,7 +55,6 @@ function CollectionList() {
   const [editing, setEditing] = useState<Collection | 'new' | null>(null)
   const [joining, setJoining] = useState(false)
   const [tokenFor, setTokenFor] = useState<Collection | 'all' | null>(null)
-  const [membersFor, setMembersFor] = useState<Collection | null>(null)
   const [leaving, setLeaving] = useState<Collection | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -153,7 +156,6 @@ function CollectionList() {
                   <div className="flex w-full flex-col gap-0.5">
                     <p className="truncate text-xs text-slate-500">
                       {(st?.recordCount ?? 0)} record{(st?.recordCount ?? 0) === 1 ? '' : 's'} ·{' '}
-                      {(st?.memberCount ?? 0)} device{(st?.memberCount ?? 0) === 1 ? '' : 's'} ·{' '}
                       {describeLastSync(collection.lastSyncUtc)}
                     </p>
                     <p className="truncate text-xs text-slate-500">
@@ -178,9 +180,6 @@ function CollectionList() {
                     </button>
                     <button type="button" onClick={() => setTokenFor(collection)} className={cardSecondaryButton}>
                       Invite
-                    </button>
-                    <button type="button" onClick={() => setMembersFor(collection)} className={cardSecondaryButton}>
-                      Devices
                     </button>
                     <button type="button" onClick={() => setEditing(collection)} className={cardSecondaryButton}>
                       Edit
@@ -241,17 +240,6 @@ function CollectionList() {
       )}
 
       {tokenFor && <TokenModal target={tokenFor} onClose={() => setTokenFor(null)} />}
-
-      {membersFor && (
-        <MembersModal
-          collection={membersFor}
-          onClose={() => setMembersFor(null)}
-          onRotated={() => {
-            setMembersFor(null)
-            refresh()
-          }}
-        />
-      )}
 
       {leaving && (
         <LeaveModal
@@ -358,6 +346,12 @@ function CollectionModal({
           password — it can be revoked on its own.
         </p>
       </div>
+
+      <p className="text-xs text-slate-500">
+        This device's WebDAV login. Everyone can share one account, or each person can have their own pointed at the
+        same folder — slopterm doesn't mind which, and access is revoked on the server. Leave both empty for a folder
+        that needs no login.
+      </p>
 
       <div className="flex flex-col gap-3 sm:flex-row">
         <div className="flex-1">
@@ -532,9 +526,9 @@ function TokenModal({ target, onClose }: { target: Collection | 'all'; onClose: 
       </p>
 
       <p className="rounded border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
-        This carries the collection's encryption key — anyone who has it can read everything in{' '}
-        {isAll ? 'every collection listed' : 'the collection'}. Treat it like a password: don't paste it into a chat.
-        Rotating the key invalidates every token issued before it.
+        This carries the collection's encryption key and its WebDAV login — anyone who has it can read everything in{' '}
+        {isAll ? 'every collection listed' : 'the collection'}. Treat it like a password: don't paste it into a chat. To
+        cut someone off, revoke their access on the WebDAV server itself.
       </p>
 
       <div>
@@ -577,105 +571,6 @@ function TokenModal({ target, onClose }: { target: Collection | 'all'; onClose: 
       {error && <p className="text-sm text-red-400">{error}</p>}
 
       <ModalButtons onClose={onClose} submitLabel={token ? 'Regenerate' : 'Show token'} busy={busy} />
-    </ModalShell>
-  )
-}
-
-function MembersModal({
-  collection,
-  onClose,
-  onRotated,
-}: {
-  collection: Collection
-  onClose: () => void
-  onRotated: () => void
-}) {
-  const [members, setMembers] = useState<CollectionMember[]>([])
-  const [selected, setSelected] = useState<string[]>([])
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [confirming, setConfirming] = useState(false)
-
-  useEffect(() => {
-    listCollectionMembers(collection.id).then(setMembers).catch(() => setMembers([]))
-  }, [collection.id])
-
-  function toggle(id: string) {
-    setSelected((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]))
-  }
-
-  async function rotate(event: FormEvent) {
-    event.preventDefault()
-    if (!confirming) {
-      setConfirming(true)
-      return
-    }
-
-    setError(null)
-    setBusy(true)
-    try {
-      await rotateCollectionKey(collection.id, selected)
-      onRotated()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to rotate the key')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <ModalShell onSubmit={rotate} title={`Devices in ${collection.name}`}>
-      <p className="text-sm text-slate-400">
-        Every device holding this collection's token. Compare a short fingerprint out loud with whoever owns the device
-        if you want to be sure it's the one you meant.
-      </p>
-
-      <ul className="flex flex-col gap-1">
-        {members.map((member) => (
-          <li key={member.id} className="rounded border border-slate-800 bg-slate-900/50 px-3 py-2">
-            <label className="flex items-start gap-2 text-sm text-slate-300">
-              <input
-                type="checkbox"
-                className="mt-1"
-                disabled={member.isThisDevice}
-                checked={selected.includes(member.id)}
-                onChange={() => toggle(member.id)}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate">
-                  {member.label}
-                  {member.isThisDevice && <span className="ml-1 text-xs text-slate-500">(this device)</span>}
-                </span>
-                <span className="block font-mono text-xs text-slate-500">{member.shortFingerprint}</span>
-              </span>
-            </label>
-          </li>
-        ))}
-        {members.length === 0 && <li className="text-sm text-slate-500">No member list synced yet.</li>}
-      </ul>
-
-      <p className="rounded border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
-        Rotating the key stops the devices you remove from reading anything written from now on.{' '}
-        <strong>It does not un-know anything.</strong> They keep every credential they ever synced — rotate the actual
-        SSH keys and passwords too, or they still get into the hosts. A collection that shares only host inventory and
-        resolves keys by name is far better off here.
-      </p>
-
-      {confirming && (
-        <p className="text-sm text-slate-300">
-          {selected.length === 0
-            ? 'Rotate the key without removing anyone? Every existing invite token stops working.'
-            : `Remove ${selected.length} device${selected.length === 1 ? '' : 's'} and rotate the key?`}
-        </p>
-      )}
-
-      {error && <p className="text-sm text-red-400">{error}</p>}
-
-      <ModalButtons
-        onClose={onClose}
-        submitLabel={confirming ? 'Yes, rotate the key' : selected.length > 0 ? 'Remove and rotate…' : 'Rotate key…'}
-        busy={busy}
-      />
     </ModalShell>
   )
 }
@@ -788,10 +683,9 @@ function StatusDot({ state }: { state?: CollectionStatus['state'] }) {
       ? 'bg-emerald-400'
       : state === 'syncing'
         ? 'bg-amber-400'
-        : state === 'error' || state === 'no-access'
+        : state === 'error'
           ? 'bg-red-400'
           : 'bg-slate-600'
-  const title =
-    state === 'no-access' ? 'No access — this collection was rotated without this device' : state ? state[0].toUpperCase() + state.slice(1) : 'Inactive'
+  const title = state ? state[0].toUpperCase() + state.slice(1) : 'Inactive'
   return <span aria-hidden="true" title={title} className={`h-2.5 w-2.5 shrink-0 rounded-full ${color}`} />
 }

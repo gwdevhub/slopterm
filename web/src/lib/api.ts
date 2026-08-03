@@ -1176,41 +1176,28 @@ export interface Collection {
   id: string
   name: string
   remoteUrl: string
+  // The WebDAV account THIS device uses. Another device in the same collection may well use
+  // a different one against the same folder - who may read and write is the server's call.
   remoteUsername?: string | null
   // The password itself is never sent - the form shows an empty field and only replaces the
   // stored value when the user types one.
   hasRemotePassword: boolean
   scopes: string[]
   enabled: boolean
-  keyEpoch: number
   lastSyncUtc?: string | null
   lastError?: string | null
-  // This device's identity within the collection - the short form is what two people read to
-  // each other to confirm a newly added device is the one they meant.
-  deviceFingerprint: string
-  deviceShortFingerprint: string
+  // A short digest of the collection key, so two people can confirm out loud that they pasted
+  // the same token without either of them showing it.
+  keyFingerprint: string
 }
 
-// 'no-access' is its own state, not an error: the collection was rotated without this device,
-// and no amount of retrying will fix it.
 export interface CollectionStatus {
   collectionId: string
   name: string
-  state: 'idle' | 'syncing' | 'error' | 'paused' | 'no-access'
+  state: 'idle' | 'syncing' | 'error' | 'paused'
   lastSyncUtc?: string | null
   error?: string | null
-  memberCount: number
-  keyEpoch: number
   recordCount: number
-}
-
-export interface CollectionMember {
-  id: string
-  label: string
-  fingerprint: string
-  shortFingerprint: string
-  addedAt: string
-  isThisDevice: boolean
 }
 
 export interface CollectionInput {
@@ -1275,25 +1262,8 @@ export async function syncCollectionNow(id: string): Promise<void> {
   await throwOnError(res)
 }
 
-export async function listCollectionMembers(id: string): Promise<CollectionMember[]> {
-  const res = await fetch(`/api/collections/${id}/members`)
-  await throwOnError(res)
-  return res.json()
-}
-
-// Re-keys the collection so removed members can't read anything written from now on. It does
-// NOT un-know anything they already synced - the dialog that calls this says so.
-export async function rotateCollectionKey(id: string, removeMemberIds: string[]): Promise<void> {
-  const res = await fetch(`/api/collections/${id}/rotate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ removeMemberIds }),
-  })
-  await throwOnError(res)
-}
-
-// Carries the collection key: possession IS membership. Revealed on demand, never logged,
-// and invalidated for future epochs by rotating the key.
+// Carries the collection key and the WebDAV credentials - everything another device needs.
+// Revealed on demand, never logged, treated like a password.
 export async function getCollectionInviteToken(id: string, passphrase?: string): Promise<string> {
   const query = passphrase ? `?passphrase=${encodeURIComponent(passphrase)}` : ''
   const res = await fetch(`/api/collections/${id}/token${query}`)

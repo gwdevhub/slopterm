@@ -9,23 +9,25 @@ namespace Slopterm.Server.VaultSync;
 public sealed record CollectionSyncStatus(
     string CollectionId,
     string Name,
-    string State, // "idle" | "syncing" | "error" | "paused" | "no-access"
+    string State, // "idle" | "syncing" | "error" | "paused"
     DateTimeOffset? LastSyncUtc,
     string? Error,
-    int MemberCount,
-    int KeyEpoch,
     int RecordCount);
 
 /// <summary>
 /// Converges one collection's records with its WebDAV remote, forever, without ever throwing
 /// into a caller.
 ///
-/// The shape of a pass is: read the signed member list (and adopt a newer key epoch from it),
-/// PROPFIND each enabled scope for names+ETags, GET only what changed, merge, then PUT what
-/// changed here. Preconditions (If-Match / If-None-Match) are attempted but never relied on -
-/// Nextcloud's handling is quirky and some servers ignore them outright - so the real
-/// ordering guarantee is the hybrid logical clock on every record, and the conflict copy is
-/// what makes last-writer-wins survivable when two people edit the same host.
+/// The shape of a pass is: PROPFIND each enabled scope for names+ETags, GET only what
+/// changed, merge, then PUT what changed here. Preconditions (If-Match / If-None-Match) are
+/// attempted but never relied on - Apache's mod_dav returns no ETag at all and others ignore
+/// preconditions outright - so the real ordering guarantee is the hybrid logical clock on
+/// every record, and the conflict copy is what makes last-writer-wins survivable when two
+/// people edit the same host.
+///
+/// There is no membership layer here. Who may read and write a collection is whatever the
+/// WebDAV server says: one shared account, one account per person against the same folder, or
+/// none at all. A 403 means "read-only for you" and is reported as such.
 ///
 /// Everything here is best-effort by construction. A failed sync lands in
 /// <see cref="GetStatus"/> and the collection is retried on the next tick; it never surfaces
@@ -52,7 +54,10 @@ public sealed class VaultSyncService : IAsyncDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _pending = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSync = new();
-    private readonly ConcurrentDictionary<string, Task> _running = new();
+    // Guards _running. A collection's pass is registered before it can finish, which a
+    // fire-and-forget Task.Run cannot guarantee on its own - see StartSync.
+    private readonly object _runningGate = new();
+    private readonly Dictionary<string, Task> _running = [];
     private readonly ConcurrentDictionary<string, string?> _errors = new();
     private readonly Func<string, string?, string?, IVaultSyncRemote> _remoteFactory;
     private Task? _loop;
@@ -117,18 +122,14 @@ public sealed class VaultSyncService : IAsyncDisposable
 
             var error = _errors.GetValueOrDefault(collectionId) ?? collection.LastError;
             var state = !collection.Enabled ? "paused"
-                : _running.ContainsKey(collectionId) ? "syncing"
-                : error is null ? "idle"
-                : error.Contains("no longer have access", StringComparison.OrdinalIgnoreCase) ? "no-access"
-                : "error";
+                : IsSyncing(collectionId) ? "syncing"
+                : error is null ? "idle" : "error";
 
-            var members = _vault.Collections.GetCachedMembers(collectionId);
             var recordCount = collection.Scopes.Sum(scope =>
                 SyncScopes.FolderFor(scope) is { } folder ? _vault.Collections.ListRecords(collectionId, folder).Count : 0);
 
             results.Add(new CollectionSyncStatus(
-                collectionId, collection.Name, state, collection.LastSyncUtc, error,
-                members?.Members.Count ?? 0, collection.KeyEpoch, recordCount));
+                collectionId, collection.Name, state, collection.LastSyncUtc, error, recordCount));
         }
 
         return results;
@@ -141,15 +142,19 @@ public sealed class VaultSyncService : IAsyncDisposable
     /// </summary>
     public async Task SyncNowAsync(string collectionId, CancellationToken ct)
     {
-        var task = StartSync(collectionId, ct);
-        if (task is not null)
-        {
-            await task;
-        }
+        await StartSync(collectionId, ct);
 
         if (_errors.GetValueOrDefault(collectionId) is { } error)
         {
             throw new InvalidOperationException(error);
+        }
+    }
+
+    private bool IsSyncing(string collectionId)
+    {
+        lock (_runningGate)
+        {
+            return _running.TryGetValue(collectionId, out var inFlight) && !inFlight.IsCompleted;
         }
     }
 
@@ -194,9 +199,12 @@ public sealed class VaultSyncService : IAsyncDisposable
 
     private bool IsDue(string collectionId)
     {
-        if (_running.ContainsKey(collectionId))
+        lock (_runningGate)
         {
-            return false;
+            if (_running.TryGetValue(collectionId, out var inFlight) && !inFlight.IsCompleted)
+            {
+                return false;
+            }
         }
 
         var now = DateTimeOffset.UtcNow;
@@ -209,14 +217,38 @@ public sealed class VaultSyncService : IAsyncDisposable
         return now - last >= PeriodicInterval;
     }
 
-    private Task? StartSync(string collectionId, CancellationToken ct)
+    /// <summary>
+    /// Starts a pass, or returns the one already in flight for this collection.
+    ///
+    /// The bookkeeping is fiddly for one reason worth spelling out: the task used to be
+    /// started first and only then stored in the dictionary, while the task itself removed
+    /// its own entry when it finished. A pass that completed before that assignment ran
+    /// therefore removed nothing, and the assignment then parked a COMPLETED task in the
+    /// dictionary forever - so the next "sync now" found an entry, awaited a task that was
+    /// already done, and did no work at all. Silently. It looked like a rare, unexplainable
+    /// failure to converge, which is exactly how it presented.
+    ///
+    /// Registering under a lock before the pass can finish, and treating a completed entry as
+    /// "not running" rather than having the task delete itself, removes the window entirely.
+    /// </summary>
+    private Task StartSync(string collectionId, CancellationToken ct)
     {
-        if (_running.ContainsKey(collectionId))
+        lock (_runningGate)
         {
-            return _running[collectionId];
-        }
+            if (_running.TryGetValue(collectionId, out var inFlight) && !inFlight.IsCompleted)
+            {
+                return inFlight;
+            }
 
-        var task = Task.Run(async () =>
+            var started = RunPassAsync(collectionId, ct);
+            _running[collectionId] = started;
+            return started;
+        }
+    }
+
+    private Task RunPassAsync(string collectionId, CancellationToken ct)
+    {
+        return Task.Run(async () =>
         {
             try
             {
@@ -238,12 +270,8 @@ public sealed class VaultSyncService : IAsyncDisposable
             finally
             {
                 _lastSync[collectionId] = DateTimeOffset.UtcNow;
-                _running.TryRemove(collectionId, out _);
             }
         }, ct);
-
-        _running[collectionId] = task;
-        return task;
     }
 
     private static string Describe(Exception ex) => ex switch
@@ -293,7 +321,6 @@ public sealed class VaultSyncService : IAsyncDisposable
             return;
         }
 
-        var identity = _vault.Collections.GetOrCreateIdentity(collectionId, DeviceLabel());
         var remote = _remoteFactory(collection.RemoteUrl, collection.RemoteUsername, collection.RemotePassword);
         try
         {
@@ -301,7 +328,7 @@ public sealed class VaultSyncService : IAsyncDisposable
             await remote.EnsureDirectoryAsync($"{RemoteRoot}/tombstones", ct);
 
             await EnsureRemoteInfoAsync(remote, collectionId, collection, ct);
-            var collectionKey = await SyncMembershipAsync(remote, collectionId, collection, identity, ct);
+            var collectionKey = Convert.FromBase64String(collection.CollectionKey);
 
             foreach (var scope in collection.Scopes)
             {
@@ -310,7 +337,7 @@ public sealed class VaultSyncService : IAsyncDisposable
                     continue; // a scope name from a newer build - skip rather than guess
                 }
 
-                await SyncScopeAsync(remote, collectionId, collection, identity, collectionKey, scope, ct);
+                await SyncScopeAsync(remote, collectionId, collection, collectionKey, scope, ct);
             }
 
             _vault.Collections.GcTombstones(collectionId, TombstoneLifetime);
@@ -345,136 +372,10 @@ public sealed class VaultSyncService : IAsyncDisposable
         await remote.PutAsync($"{RemoteRoot}/collection.json", SyncJson.SerializeToUtf8Bytes(info), null, true, ct);
     }
 
-    /// <summary>
-    /// Reconciles this device against the signed member list and returns the collection key
-    /// to use for this pass.
-    ///
-    /// Three cases matter. A newer key epoch than we hold means someone rotated: unwrap the
-    /// new key from our entry and adopt it. No entry for our fingerprint at all, when we do
-    /// hold a key, means we've never announced ourselves: add and sign. No entry AND a newer
-    /// epoch we can't unwrap means we were removed - reported plainly rather than as a retry
-    /// loop that never converges.
-    /// </summary>
-    private async Task<byte[]> SyncMembershipAsync(
-        IVaultSyncRemote remote, string collectionId, CollectionRecord collection, CollectionIdentity identity, CancellationToken ct)
-    {
-        var fingerprint = CollectionCrypto.Fingerprint(identity);
-        var ownKey = Convert.FromBase64String(collection.CollectionKey);
-        var bytes = await remote.GetAsync($"{RemoteRoot}/members.json", ct);
-
-        if (bytes is null)
-        {
-            // First device on this share - publish a member list signed by our own key,
-            // which is also the key this device already pinned when it created the
-            // collection.
-            var created = new MembersFile
-            {
-                KeyEpoch = collection.KeyEpoch,
-                Members =
-                [
-                    new MemberEntry
-                    {
-                        Id = identity.MemberId,
-                        Label = identity.Label,
-                        X25519 = identity.X25519Public,
-                        Ed25519 = identity.Ed25519Public,
-                        WrappedKey = CollectionCrypto.WrapKey(Convert.FromBase64String(collection.CollectionKey), identity.X25519Public),
-                        AddedAt = DateTimeOffset.UtcNow,
-                        AddedBy = fingerprint,
-                    },
-                ],
-            };
-            CollectionCrypto.SealMembers(created, identity, ownKey);
-            await remote.PutAsync($"{RemoteRoot}/members.json", SyncJson.SerializeToUtf8Bytes(created), null, false, ct);
-            _vault.Collections.SaveCachedMembers(collectionId, created);
-            return ownKey;
-        }
-
-        var members = SyncJson.Deserialize<MembersFile>(bytes)
-            ?? throw new InvalidOperationException("The collection's members.json is unreadable.");
-
-        // The HMAC under CK is what makes this list trustworthy - see MembersFile. A list
-        // that fails it was written by someone who has write access to the share but is not
-        // a member, which is precisely the attack pinning was meant to stop.
-        var verification = CollectionCrypto.VerifyMembers(members, collection.SignerEd25519Pub, ownKey);
-        if (!verification.Trusted)
-        {
-            // Either it wasn't written by a member, or this device slept through more than
-            // one rotation and holds no key in the chain any more. Both are refusals, but
-            // only one of them is the user's fault.
-            throw new InvalidOperationException(members.KeyEpoch > collection.KeyEpoch + 1
-                ? "This collection has been re-keyed more than once since this device last synced - paste a fresh invite token to re-join."
-                : "This collection's member list isn't from a member of the collection - refusing to use it.");
-        }
-
-        _vault.Collections.SaveCachedMembers(collectionId, members);
-        var mine = members.Members.FirstOrDefault(m => CollectionCrypto.Fingerprint(m) == fingerprint);
-
-        if (mine is null)
-        {
-            if (members.KeyEpoch > collection.KeyEpoch)
-            {
-                throw new InvalidOperationException(
-                    "You no longer have access to this collection - it was rotated without this device.");
-            }
-
-            var updated = new MembersFile
-            {
-                Version = members.Version,
-                KeyEpoch = members.KeyEpoch,
-                Members =
-                [
-                    .. members.Members,
-                    new MemberEntry
-                    {
-                        Id = identity.MemberId,
-                        Label = identity.Label,
-                        X25519 = identity.X25519Public,
-                        Ed25519 = identity.Ed25519Public,
-                        WrappedKey = CollectionCrypto.WrapKey(Convert.FromBase64String(collection.CollectionKey), identity.X25519Public),
-                        AddedAt = DateTimeOffset.UtcNow,
-                        AddedBy = fingerprint,
-                    },
-                ],
-            };
-            CollectionCrypto.SealMembers(updated, identity, ownKey);
-            await remote.PutAsync($"{RemoteRoot}/members.json", SyncJson.SerializeToUtf8Bytes(updated), null, false, ct);
-            _vault.Collections.SaveCachedMembers(collectionId, updated);
-            return ownKey;
-        }
-
-        if (members.KeyEpoch > collection.KeyEpoch)
-        {
-            byte[] rotated;
-            try
-            {
-                rotated = CollectionCrypto.UnwrapKey(mine.WrappedKey, identity);
-            }
-            catch (CryptographicException)
-            {
-                throw new InvalidOperationException(
-                    "You no longer have access to this collection - the key was rotated without this device.");
-            }
-
-            collection.CollectionKey = Convert.ToBase64String(rotated);
-            collection.KeyEpoch = members.KeyEpoch;
-
-            // Everything we thought we'd agreed with the remote was under the old epoch, so
-            // the whole record state is stale - dropping it makes the next pass re-read
-            // rather than skip records it can no longer decrypt.
-            collection.Records.Clear();
-            _vault.Collections.SaveCollection(collectionId, collection);
-            return rotated;
-        }
-
-        return ownKey;
-    }
-
     private async Task SyncScopeAsync(
         IVaultSyncRemote remote,
         string collectionId,
         CollectionRecord collection,
-        CollectionIdentity identity,
         byte[] collectionKey,
         string scope,
         CancellationToken ct)
@@ -491,6 +392,7 @@ public sealed class VaultSyncService : IAsyncDisposable
             .Where(e => !e.IsCollection && e.Path.EndsWith(".json", StringComparison.Ordinal))
             .ToDictionary(e => Path.GetFileNameWithoutExtension(e.Path), e => e, StringComparer.Ordinal);
 
+        var undecryptable = 0;
         var local = _vault.Collections.ListRecords(collectionId, folder).ToDictionary(r => r.Id, StringComparer.Ordinal);
         var localTombstones = _vault.Collections.ListTombstones(collectionId)
             .Where(t => t.Type == scope)
@@ -512,7 +414,7 @@ public sealed class VaultSyncService : IAsyncDisposable
                 continue;
             }
 
-            HybridLogicalClock.Shared.Observe(Hlc.Parse(tombstone.Hlc));
+            _vault.Collections.Clock.Observe(Hlc.Parse(tombstone.Hlc));
             ApplyRemoteTombstone(collectionId, collection, folder, scope, local, tombstone);
             collection.Tombstones[stateKey] = entry.ETag ?? tombstone.Hlc;
             localTombstones[id] = tombstone;
@@ -541,14 +443,16 @@ public sealed class VaultSyncService : IAsyncDisposable
             }
             catch (CryptographicException)
             {
-                // Written under a key epoch we don't hold. The next pass re-reads
-                // members.json and either adopts the new key or reports the removal - either
-                // way, silently skipping beats corrupting the local copy.
+                // Encrypted under a different collection key - someone is pointed at this
+                // folder with a token that isn't ours. Skipping beats corrupting the local
+                // copy, but skipping SILENTLY is how "my hosts never showed up on the other
+                // device" becomes unexplainable, so it's counted and reported.
+                undecryptable++;
                 continue;
             }
 
             var remoteHlc = Hlc.Parse(envelope.Hlc);
-            HybridLogicalClock.Shared.Observe(remoteHlc);
+            _vault.Collections.Clock.Observe(remoteHlc);
             MergeRemoteRecord(collectionId, collection, folder, scope, local, localTombstones, envelope, remoteHlc, plaintext, state);
             collection.Records[stateKey] = new RecordSyncState { ETag = entry.ETag, Hlc = envelope.Hlc };
         }
@@ -564,8 +468,7 @@ public sealed class VaultSyncService : IAsyncDisposable
             }
 
             var pushed = await PushRecordAsync(
-                remote, collectionKey, identity, collection, scope, record, state,
-                remoteRecords.ContainsKey(record.Id), ct);
+                remote, collectionKey, scope, record, state, remoteRecords.ContainsKey(record.Id), ct);
             if (pushed is not null)
             {
                 collection.Records[stateKey] = pushed;
@@ -594,6 +497,14 @@ public sealed class VaultSyncService : IAsyncDisposable
         }
 
         _vault.Collections.SaveCollection(collectionId, collection);
+
+        if (undecryptable > 0)
+        {
+            throw new InvalidOperationException(
+                $"{undecryptable} of the {scope} records on this share are encrypted with a different key than this " +
+                "collection's, so they can't be read here. That means two different collections are pointed at the " +
+                "same folder - give one of them its own, or re-join with the other's token.");
+        }
     }
 
     /// <summary>
@@ -615,8 +526,6 @@ public sealed class VaultSyncService : IAsyncDisposable
     private async Task<RecordSyncState?> PushRecordAsync(
         IVaultSyncRemote remote,
         byte[] collectionKey,
-        CollectionIdentity identity,
-        CollectionRecord collection,
         string scope,
         StoredRecord record,
         RecordSyncState? state,
@@ -625,7 +534,7 @@ public sealed class VaultSyncService : IAsyncDisposable
     {
         var path = $"{RemoteRoot}/records/{scope}/{record.Id}.json";
         // Stamped once, from the record itself - never re-derived inside the retry loop.
-        var hlc = record.Hlc.Length > 0 ? record.Hlc : HybridLogicalClock.Shared.Now().ToString();
+        var hlc = record.Hlc.Length > 0 ? record.Hlc : _vault.Collections.Clock.Now().ToString();
 
         for (var attempt = 0; attempt <= PreconditionRetries; attempt++)
         {
@@ -636,10 +545,8 @@ public sealed class VaultSyncService : IAsyncDisposable
                 Type = scope,
                 UpdatedAt = record.UpdatedAt,
                 Hlc = hlc,
-                KeyEpoch = collection.KeyEpoch,
                 Nonce = Convert.ToBase64String(nonce),
                 Ciphertext = Convert.ToBase64String(ciphertext),
-                AuthorFingerprint = CollectionCrypto.Fingerprint(identity),
             };
 
             // Last attempt goes in unconditionally - see this method's summary.
@@ -679,7 +586,7 @@ public sealed class VaultSyncService : IAsyncDisposable
             var theirs = existing is null ? null : SyncJson.Deserialize<SyncEnvelope>(existing);
             if (theirs is not null)
             {
-                HybridLogicalClock.Shared.Observe(Hlc.Parse(theirs.Hlc));
+                _vault.Collections.Clock.Observe(Hlc.Parse(theirs.Hlc));
             }
 
             var listing = await remote.ListAsync($"{RemoteRoot}/records/{scope}", ct);
@@ -823,126 +730,6 @@ public sealed class VaultSyncService : IAsyncDisposable
 
     private static string RecordKey(string scope, string id) => $"{scope}/{id}";
     private static string TombstoneKey(string scope, string id) => $"{scope}/{id}";
-
-    private static string DeviceLabel()
-    {
-        try
-        {
-            return $"{Environment.MachineName} ({HybridLogicalClock.ShortNode(DeviceIdentity.Current)})";
-        }
-        catch
-        {
-            return "this device";
-        }
-    }
-
-    // --- rotation -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Removes members and re-keys the collection: a fresh CK at keyEpoch+1, every record
-    /// re-encrypted under it, wrapped for everyone who remains, and members.json written
-    /// LAST - so a crash mid-rotation leaves records that everyone still holding the old
-    /// epoch can read, rather than a share nobody can open.
-    ///
-    /// It does not un-know anything. A removed member keeps every credential they ever
-    /// synced; only rotating the actual SSH credentials locks them out of the hosts, which
-    /// is why the dialog that calls this says so.
-    /// </summary>
-    public async Task RotateKeyAsync(string collectionId, IReadOnlyList<string> removeMemberIds, CancellationToken ct)
-    {
-        var collection = _vault.Collections.GetCollection(collectionId)
-            ?? throw new InvalidOperationException("That collection doesn't exist on this device.");
-        if (string.IsNullOrWhiteSpace(collection.RemoteUrl))
-        {
-            throw new InvalidOperationException("This collection has no remote to rotate.");
-        }
-
-        var identity = _vault.Collections.GetOrCreateIdentity(collectionId, DeviceLabel());
-        var remote = _remoteFactory(collection.RemoteUrl, collection.RemoteUsername, collection.RemotePassword);
-        try
-        {
-            var bytes = await remote.GetAsync($"{RemoteRoot}/members.json", ct)
-                ?? throw new InvalidOperationException("This collection has no member list to rotate.");
-            var members = SyncJson.Deserialize<MembersFile>(bytes)
-                ?? throw new InvalidOperationException("The collection's members.json is unreadable.");
-            if (!CollectionCrypto.VerifyMembers(members, collection.SignerEd25519Pub, Convert.FromBase64String(collection.CollectionKey)).Trusted)
-            {
-                throw new InvalidOperationException(
-                    "This collection's member list isn't from a member of the collection - refusing to rotate it.");
-            }
-
-            var fingerprint = CollectionCrypto.Fingerprint(identity);
-            var remaining = members.Members
-                .Where(m => !removeMemberIds.Contains(m.Id) || CollectionCrypto.Fingerprint(m) == fingerprint)
-                .ToList();
-            if (remaining.All(m => CollectionCrypto.Fingerprint(m) != fingerprint))
-            {
-                throw new InvalidOperationException("A rotation can't remove the device performing it.");
-            }
-
-            var newKey = CollectionCrypto.GenerateCollectionKey();
-            var newEpoch = Math.Max(members.KeyEpoch, collection.KeyEpoch) + 1;
-
-            // Records first, member list last.
-            foreach (var scope in collection.Scopes)
-            {
-                if (SyncScopes.FolderFor(scope) is not { } folder)
-                {
-                    continue;
-                }
-
-                await remote.EnsureDirectoryAsync($"{RemoteRoot}/records/{scope}", ct);
-                foreach (var record in _vault.Collections.ListRecords(collectionId, folder))
-                {
-                    var (nonce, ciphertext) = CollectionCrypto.EncryptRecord(newKey, record.Json);
-                    var envelope = new SyncEnvelope
-                    {
-                        Id = record.Id,
-                        Type = scope,
-                        UpdatedAt = record.UpdatedAt,
-                        Hlc = record.Hlc.Length > 0 ? record.Hlc : HybridLogicalClock.Shared.Now().ToString(),
-                        KeyEpoch = newEpoch,
-                        Nonce = Convert.ToBase64String(nonce),
-                        Ciphertext = Convert.ToBase64String(ciphertext),
-                        AuthorFingerprint = fingerprint,
-                    };
-                    await remote.PutAsync(
-                        $"{RemoteRoot}/records/{scope}/{record.Id}.json", SyncJson.SerializeToUtf8Bytes(envelope), null, false, ct);
-                }
-            }
-
-            var rotated = new MembersFile
-            {
-                Version = members.Version,
-                KeyEpoch = newEpoch,
-                Members = remaining.Select(m => new MemberEntry
-                {
-                    Id = m.Id,
-                    Label = m.Label,
-                    X25519 = m.X25519,
-                    Ed25519 = m.Ed25519,
-                    WrappedKey = CollectionCrypto.WrapKey(newKey, m.X25519),
-                    AddedAt = m.AddedAt,
-                    AddedBy = m.AddedBy,
-                }).ToList(),
-            };
-            // Sealed under BOTH keys: the new one for everyone going forward, the old one so
-            // devices still on the previous epoch can verify this list is what tells them to
-            // move - see MembersFile.PreviousKeyProof.
-            CollectionCrypto.SealMembers(rotated, identity, newKey, Convert.FromBase64String(collection.CollectionKey));
-            await remote.PutAsync($"{RemoteRoot}/members.json", SyncJson.SerializeToUtf8Bytes(rotated), null, false, ct);
-
-            collection.CollectionKey = Convert.ToBase64String(newKey);
-            collection.KeyEpoch = newEpoch;
-            collection.Records.Clear();
-            _vault.Collections.SaveCollection(collectionId, collection);
-            _vault.Collections.SaveCachedMembers(collectionId, rotated);
-        }
-        finally
-        {
-            (remote as IDisposable)?.Dispose();
-        }
-    }
 
     public async ValueTask DisposeAsync()
     {

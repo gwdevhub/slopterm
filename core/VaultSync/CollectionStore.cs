@@ -21,20 +21,29 @@ public sealed record StoredRecord(string CollectionId, string Id, DateTimeOffset
 /// encrypted at rest with the VAULT key, exactly like today's records. The collection key
 /// only ever encrypts what goes over the wire (see <see cref="CollectionCrypto"/>).
 /// </summary>
-public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor)
+/// <param name="clock">
+/// This device's hybrid logical clock. Injected rather than reached for as a singleton so a
+/// test can run two genuinely independent "devices" in one process - with a shared static
+/// clock the two can never tie, which is exactly the case the tiebreak exists for, and their
+/// stamps become coupled in a way no real pair of devices ever is.
+/// </param>
+public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, HybridLogicalClock? clock = null)
 {
+    private readonly HybridLogicalClock _clock = clock ?? HybridLogicalClock.Shared;
+
     public const string LocalCollectionId = "local";
 
     private const string CollectionsFolder = "collections";
     private const string CollectionFile = "collection.json";
-    private const string IdentityFile = "identity.json";
-    private const string MembersFileName = "members.json";
     private const string TombstonesFolder = "tombstones";
 
     // Collection ids are 128 bits of hex we generate ourselves, but they arrive from pasted
     // tokens too - so they're validated before ever reaching a path, rather than trusted.
     private static bool IsValidCollectionId(string id) =>
         id.Length is > 0 and <= 64 && id.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
+
+    /// <summary>This device's clock, so the sync loop stamps and observes through the same one.</summary>
+    public HybridLogicalClock Clock => _clock;
 
     private byte[] RequireKey() =>
         keyAccessor() ?? throw new InvalidOperationException("Vault is locked.");
@@ -103,36 +112,6 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor)
         {
             Directory.Delete(directory, recursive: true);
         }
-    }
-
-    /// <summary>
-    /// This device's keypair for this collection, created on first use. One per collection
-    /// rather than one per device, so leaving a collection reveals nothing about membership
-    /// of another.
-    /// </summary>
-    public CollectionIdentity GetOrCreateIdentity(string collectionId, string label)
-    {
-        var path = Path.Combine(CollectionDirectory(collectionId), IdentityFile);
-        var existing = ReadEncrypted<CollectionIdentity>(path);
-        if (existing is not null)
-        {
-            return existing;
-        }
-
-        var identity = CollectionCrypto.GenerateIdentity(label);
-        Directory.CreateDirectory(CollectionDirectory(collectionId));
-        WriteEncrypted(path, identity);
-        return identity;
-    }
-
-    /// <summary>The last members list pulled from the remote, so the UI can list members offline.</summary>
-    public MembersFile? GetCachedMembers(string collectionId) =>
-        ReadEncrypted<MembersFile>(Path.Combine(CollectionDirectory(collectionId), MembersFileName));
-
-    public void SaveCachedMembers(string collectionId, MembersFile members)
-    {
-        Directory.CreateDirectory(CollectionDirectory(collectionId));
-        WriteEncrypted(Path.Combine(CollectionDirectory(collectionId), MembersFileName), members);
     }
 
     // --- records -------------------------------------------------------------------------
@@ -212,7 +191,7 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor)
             UpdatedAt = DateTimeOffset.UtcNow,
             Nonce = Convert.ToBase64String(nonce),
             Ciphertext = Convert.ToBase64String(ciphertext),
-            Hlc = hlc ?? HybridLogicalClock.Shared.Now().ToString(),
+            Hlc = hlc ?? _clock.Now().ToString(),
         };
 
         WriteAtomic(Path.Combine(directory, $"{id}.json"), JsonSerializer.Serialize(envelope));
@@ -243,7 +222,7 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor)
             {
                 Id = SafeId(id),
                 Type = recordType,
-                Hlc = HybridLogicalClock.Shared.Now().ToString(),
+                Hlc = _clock.Now().ToString(),
                 DeletedAt = DateTimeOffset.UtcNow,
             });
         }

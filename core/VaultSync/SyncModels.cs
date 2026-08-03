@@ -52,6 +52,13 @@ public static class SyncScopes
 /// collections/{cid}/collection.json - everything about one collection except its records:
 /// where it syncs, under which key, what it last did. Vault-encrypted at rest like any
 /// other record, because it carries both the remote password and the collection key.
+///
+/// Access control is the WebDAV server's, not this app's. Several people can each have
+/// their own account on the server pointed at one shared folder, or everyone can share a
+/// single account, or the folder can need no auth at all - slopterm neither knows nor cares.
+/// A read-only share simply answers 403 to a write, which surfaces as "this collection is
+/// read-only for you" rather than as a sync error loop. Revoking someone is done where their
+/// access actually lives: on the server.
 /// </summary>
 public sealed class CollectionRecord
 {
@@ -60,24 +67,21 @@ public sealed class CollectionRecord
     // Empty for a collection that exists only on this device (created but not yet pointed
     // at a share) - it just never syncs until a URL is set.
     public string RemoteUrl { get; set; } = string.Empty;
+
+    // The WebDAV account this device uses. Two devices in the same collection may well use
+    // DIFFERENT accounts against the same folder; nothing here assumes otherwise. Both may
+    // also be empty, for a share that needs no authentication.
     public string? RemoteUsername { get; set; }
     public string? RemotePassword { get; set; }
 
     public List<string> Scopes { get; set; } = [.. SyncScopes.Defaults];
 
-    /// <summary>Base64 AES-256 collection key. Independent of the vault key - see CollectionCrypto.</summary>
-    public required string CollectionKey { get; set; }
-
-    public int KeyEpoch { get; set; } = 1;
-
     /// <summary>
-    /// Base64 Ed25519 public key this device expects to have signed members.json - pinned
-    /// when the collection is created (this device's own) or joined (the one carried in the
-    /// token). Advisory, not a gate: any member may legitimately sign, so a different signer
-    /// is surfaced in the UI rather than refused. What actually gates trust is the HMAC under
-    /// the collection key - see MembersFile.
+    /// Base64 AES-256 key the records are encrypted under before they're uploaded, so the
+    /// server stores ciphertext it can't read. Independent of the vault key - see
+    /// CollectionCrypto - and shared with other devices by the collection's token.
     /// </summary>
-    public required string SignerEd25519Pub { get; set; }
+    public required string CollectionKey { get; set; }
 
     /// <summary>Off pauses this collection's loop without deleting anything.</summary>
     public bool Enabled { get; set; } = true;
@@ -90,8 +94,6 @@ public sealed class CollectionRecord
 
     /// <summary>Remote ETags of tombstones already applied here, keyed "{type}/{id}".</summary>
     public Dictionary<string, string> Tombstones { get; set; } = [];
-
-    public string? MembersETag { get; set; }
 }
 
 /// <summary>
@@ -107,85 +109,6 @@ public sealed class RecordSyncState
 }
 
 /// <summary>
-/// collections/{cid}/identity.json - this device's keypair for this collection. Separate
-/// per collection so leaving one reveals nothing about membership of another.
-/// </summary>
-public sealed class CollectionIdentity
-{
-    public required string MemberId { get; set; }
-    public required string Label { get; set; }
-    public required string X25519Public { get; set; }   // base64
-    public required string X25519Private { get; set; }  // base64
-    public required string Ed25519Public { get; set; }  // base64
-    public required string Ed25519Private { get; set; } // base64
-}
-
-/// <summary>One entry in <see cref="MembersFile"/>. WrappedKey is the CK sealed to this member's X25519 key.</summary>
-public sealed class MemberEntry
-{
-    public required string Id { get; set; }
-    public required string Label { get; set; }
-    public required string X25519 { get; set; }
-    public required string Ed25519 { get; set; }
-    public required string WrappedKey { get; set; }
-    public DateTimeOffset AddedAt { get; set; }
-    public string? AddedBy { get; set; }
-}
-
-/// <summary>
-/// The member list at &lt;base&gt;/slopterm/v1/members.json, carrying two independent proofs.
-///
-/// <see cref="KeyProof"/> is the boundary: HMAC-SHA256 over the canonical JSON, keyed by the
-/// collection key. Only someone who already holds CK - i.e. an actual member - can produce
-/// one, which is exactly what stops a stranger with write access to the WebDAV share adding
-/// themselves and being handed the new key on the next rotation.
-///
-/// <see cref="Signature"/> is attribution: Ed25519 by whichever member wrote the list, over
-/// the same canonical JSON, verifiable against <see cref="SignerEd25519"/>. It answers "who
-/// changed this", and its fingerprint is what two people compare out of band.
-///
-/// todo/webdav-sync.md asks for the signature alone, verified against a signer pinned at
-/// create/join time. That can't hold together with "any member may sign, there are no
-/// roles": the second device to join signs with its OWN key, which no other device has
-/// pinned, so every other device would reject a member list that is entirely legitimate.
-/// Pinning only works if exactly one device may ever sign, which is the role model the doc
-/// rules out. The HMAC gives the property the doc actually wanted - "this came from someone
-/// already in the collection" - without one, and the pinned key is kept as an advisory: a
-/// list signed by an unexpected device is shown as such rather than silently trusted.
-/// </summary>
-public sealed class MembersFile
-{
-    public int Version { get; set; } = 1;
-    public int KeyEpoch { get; set; } = 1;
-    public List<MemberEntry> Members { get; set; } = [];
-
-    /// <summary>Base64 Ed25519 public key of whoever wrote this list.</summary>
-    public string? SignerEd25519 { get; set; }
-
-    /// <summary>Base64 Ed25519 over the canonical JSON of everything above.</summary>
-    public string? Signature { get; set; }
-
-    /// <summary>Base64 HMAC-SHA256, keyed by the collection key, over the same canonical JSON.</summary>
-    public string? KeyProof { get; set; }
-
-    /// <summary>
-    /// The same HMAC keyed by the PREVIOUS collection key, present only on a list that
-    /// rotates the key. Without it a device still on the old epoch could never verify the
-    /// list that carries the new key - it would need the new key to check the proof, and the
-    /// proof is what tells it the new key is legitimate.
-    /// </summary>
-    public string? PreviousKeyProof { get; set; }
-}
-
-/// <summary>
-/// The outcome of checking a <see cref="MembersFile"/>. Trusted is the gate - a false here
-/// means the list is refused outright. SignerIsPinned false means the list is genuine but
-/// was written by a device other than the one this collection first pinned, which the UI
-/// mentions rather than acts on.
-/// </summary>
-public sealed record MembersVerification(bool Trusted, bool SignatureValid, bool SignerIsPinned, string? SignerFingerprint);
-
-/// <summary>
 /// &lt;base&gt;/slopterm/v1/collection.json - the human-facing description of a share, so a
 /// person poking at the WebDAV folder can tell what it is. Deliberately carries no secrets.
 /// </summary>
@@ -199,10 +122,9 @@ public sealed class RemoteCollectionInfo
 
 /// <summary>
 /// One record as it travels: the same id/timestamp-outside-the-ciphertext shape the vault
-/// already uses on disk, plus what merging needs (hlc, keyEpoch) and who wrote it. The
-/// ciphertext is AES-GCM under the collection key, never the vault key - a no-password
-/// vault derives its key from a public seed, so anything leaving the device has to be
-/// encrypted under something else.
+/// already uses on disk, plus the clock reading merging needs. The ciphertext is AES-GCM
+/// under the collection key, never the vault key - a no-password vault derives its key from
+/// a public seed, so anything leaving the device has to be encrypted under something else.
 /// </summary>
 public sealed class SyncEnvelope
 {
@@ -210,10 +132,8 @@ public sealed class SyncEnvelope
     public required string Type { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public required string Hlc { get; set; }
-    public int KeyEpoch { get; set; }
     public required string Nonce { get; set; }
     public required string Ciphertext { get; set; }
-    public string? AuthorFingerprint { get; set; }
 }
 
 /// <summary>
@@ -227,12 +147,16 @@ public sealed class SyncTombstone
     public required string Type { get; set; }
     public required string Hlc { get; set; }
     public DateTimeOffset DeletedAt { get; set; }
-    public string? AuthorFingerprint { get; set; }
 }
 
 /// <summary>
-/// The payload behind a "slopterm:collection:v1:" invite token. Possession is membership -
-/// it carries the collection key - so the UI treats it exactly like a password.
+/// The payload behind a "slopterm:collection:v1:" token - everything another device needs
+/// to join: where the share is, how to authenticate to it, and the key its records are
+/// encrypted under. The UI treats it exactly like a password, because that is what it is.
+///
+/// The WebDAV credentials are included so the common case (one paste, it works) needs no
+/// second step - but the receiving device can replace them with its own account, which is
+/// the point of the server owning access control rather than this app.
 /// </summary>
 public sealed class CollectionInviteToken
 {
@@ -243,8 +167,6 @@ public sealed class CollectionInviteToken
     public string? Username { get; set; }
     public string? Password { get; set; }
     public required string CollectionKey { get; set; }
-    public int KeyEpoch { get; set; } = 1;
-    public required string SignerEd25519Pub { get; set; }
     public List<string> Scopes { get; set; } = [];
 }
 

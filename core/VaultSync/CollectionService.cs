@@ -15,24 +15,15 @@ public sealed record CollectionSummary(
     bool HasRemotePassword,
     IReadOnlyList<string> Scopes,
     bool Enabled,
-    int KeyEpoch,
     DateTimeOffset? LastSyncUtc,
     string? LastError,
-    string DeviceFingerprint,
-    string DeviceShortFingerprint);
-
-public sealed record CollectionMemberInfo(
-    string Id,
-    string Label,
-    string Fingerprint,
-    string ShortFingerprint,
-    DateTimeOffset AddedAt,
-    bool IsThisDevice);
+    // A short digest of the collection key, so two people can confirm out of band that they
+    // pasted the same token without either of them showing it.
+    string KeyFingerprint);
 
 /// <summary>
-/// Creating, joining, leaving and describing collections - everything about membership that
-/// doesn't need the remote in hand. The actual converging lives in
-/// <see cref="VaultSyncService"/>; this decides what exists.
+/// Creating, joining, leaving and describing collections. The actual converging lives in
+/// <see cref="VaultSyncService"/>; this decides what exists on this device.
 /// </summary>
 public sealed class CollectionService(VaultService vault, VaultSyncService sync)
 {
@@ -58,8 +49,6 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
             return null;
         }
 
-        var identity = vault.Collections.GetOrCreateIdentity(collectionId, DeviceLabel());
-        var fingerprint = CollectionCrypto.Fingerprint(identity);
         return new CollectionSummary(
             collectionId,
             collection.Name,
@@ -68,18 +57,14 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
             !string.IsNullOrEmpty(collection.RemotePassword),
             collection.Scopes,
             collection.Enabled,
-            collection.KeyEpoch,
             collection.LastSyncUtc,
             collection.LastError,
-            fingerprint,
-            CollectionCrypto.ShortFingerprint(fingerprint));
+            CollectionCrypto.KeyFingerprint(collection.CollectionKey));
     }
 
     public CollectionSummary Create(string name, string remoteUrl, string? username, string? password, IReadOnlyList<string>? scopes)
     {
         var collectionId = CollectionCrypto.GenerateCollectionId();
-        var identity = vault.Collections.GetOrCreateIdentity(collectionId, DeviceLabel());
-
         vault.Collections.SaveCollection(collectionId, new CollectionRecord
         {
             Name = string.IsNullOrWhiteSpace(name) ? "Collection" : name.Trim(),
@@ -88,9 +73,6 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
             RemotePassword = password,
             Scopes = [.. NormalizeScopes(scopes)],
             CollectionKey = Convert.ToBase64String(CollectionCrypto.GenerateCollectionKey()),
-            // The creating device pins its own key: it's the only one that exists yet, and
-            // it's what an invite hands to whoever joins next.
-            SignerEd25519Pub = identity.Ed25519Public,
         });
 
         sync.RequestSync(collectionId);
@@ -174,25 +156,6 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
         vault.Collections.DeleteCollection(collectionId);
     }
 
-    public IReadOnlyList<CollectionMemberInfo> ListMembers(string collectionId)
-    {
-        var members = vault.Collections.GetCachedMembers(collectionId);
-        if (members is null)
-        {
-            return [];
-        }
-
-        var identity = vault.Collections.GetOrCreateIdentity(collectionId, DeviceLabel());
-        var mine = CollectionCrypto.Fingerprint(identity);
-
-        return members.Members.Select(m =>
-        {
-            var fingerprint = CollectionCrypto.Fingerprint(m);
-            return new CollectionMemberInfo(
-                m.Id, m.Label, fingerprint, CollectionCrypto.ShortFingerprint(fingerprint), m.AddedAt, fingerprint == mine);
-        }).ToList();
-    }
-
     /// <summary>
     /// The one-line invite for a single collection. It carries the collection key, so the
     /// caller shows it behind a reveal and warns against pasting it into a chat.
@@ -223,8 +186,6 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
             Username = collection.RemoteUsername,
             Password = collection.RemotePassword,
             CollectionKey = collection.CollectionKey,
-            KeyEpoch = collection.KeyEpoch,
-            SignerEd25519Pub = collection.SignerEd25519Pub,
             Scopes = [.. collection.Scopes],
         };
     }
@@ -246,7 +207,6 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
             {
                 Name = invite.Name,
                 CollectionKey = invite.CollectionKey,
-                SignerEd25519Pub = invite.SignerEd25519Pub,
             };
 
             record.Name = invite.Name;
@@ -254,18 +214,17 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
             record.RemoteUsername = invite.Username;
             record.RemotePassword = invite.Password;
             record.Scopes = [.. NormalizeScopes(invite.Scopes)];
-            record.SignerEd25519Pub = invite.SignerEd25519Pub;
 
-            // Only adopt the token's key when it's at least as new as what we hold: a stale
-            // token issued before a rotation must not drag a device back onto the old key.
-            if (existing is null || invite.KeyEpoch >= existing.KeyEpoch)
+            // A token with a different key than the one we hold means we're being pointed at
+            // a different collection under a familiar id - adopt it, and drop the per-record
+            // state, which described records encrypted under the old key.
+            if (record.CollectionKey != invite.CollectionKey)
             {
                 record.CollectionKey = invite.CollectionKey;
-                record.KeyEpoch = invite.KeyEpoch;
                 record.Records.Clear();
+                record.Tombstones.Clear();
             }
 
-            vault.Collections.GetOrCreateIdentity(invite.CollectionId, DeviceLabel());
             vault.Collections.SaveCollection(invite.CollectionId, record);
             sync.RequestSync(invite.CollectionId);
 
@@ -284,16 +243,4 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
         scopes is null || scopes.Count == 0
             ? SyncScopes.Defaults
             : scopes.Where(s => SyncScopes.Find(s) is not null).Distinct(StringComparer.OrdinalIgnoreCase);
-
-    private static string DeviceLabel()
-    {
-        try
-        {
-            return $"{Environment.MachineName} ({HybridLogicalClock.ShortNode(DeviceIdentity.Current)})";
-        }
-        catch
-        {
-            return "this device";
-        }
-    }
 }

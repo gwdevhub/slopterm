@@ -890,40 +890,9 @@ app.MapPost("/api/collections/{id}/sync", async (string id, CancellationToken ct
     }
 });
 
-app.MapGet("/api/collections/{id}/members", (string id) =>
-{
-    try
-    {
-        return Results.Ok(collections.ListMembers(id));
-    }
-    catch (InvalidOperationException ex)
-    {
-        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
-    }
-});
-
-// Removing someone re-keys the collection. It does NOT un-know anything: they keep every
-// credential they ever synced, which is why the dialog that calls this says so and prompts
-// to rotate the affected SSH credentials too.
-app.MapPost("/api/collections/{id}/rotate", async (string id, RotateCollectionRequest request, CancellationToken ct) =>
-{
-    try
-    {
-        await vaultSync.RotateKeyAsync(id, request.RemoveMemberIds, ct);
-        return Results.NoContent();
-    }
-    catch (InvalidOperationException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-    catch (VaultSyncRemoteException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-});
-
-// The invite token carries the collection key - possession IS membership - so the frontend
-// reveals it on demand and warns against pasting it into a chat.
+// The token carries the collection key AND the WebDAV credentials, so the frontend reveals it
+// on demand and warns against pasting it into a chat. Access itself is the server's business:
+// the receiving device can keep these credentials or swap in its own account.
 app.MapGet("/api/collections/{id}/token", (string id, string? passphrase) =>
 {
     try

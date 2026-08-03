@@ -87,15 +87,6 @@ public sealed class JoinCollectionRequest
     public string? Passphrase { get; set; }
 }
 
-/// <summary>
-/// Removing members and re-keying. RemoveMemberIds may be empty - rotating with nobody
-/// removed is the "that token got pasted into the wrong chat" case.
-/// </summary>
-public sealed class RotateCollectionRequest
-{
-    public List<string> RemoveMemberIds { get; set; } = [];
-}
-
 public sealed class LeaveCollectionRequest
 {
     // On by default: leaving a team collection must not silently take every host it carried

@@ -17,12 +17,25 @@ public sealed class VaultService
     // In-memory only for the life of the process - never written to disk, never logged.
     private byte[]? _key;
 
-    public VaultService()
+    /// <param name="clock">
+    /// This install's hybrid logical clock. Defaults to the process-wide one keyed to this
+    /// device's id, which is right for the app - there is one device per process. Tests pass
+    /// their own so two "devices" in one process are genuinely independent rather than
+    /// sharing a clock no real pair of devices ever would.
+    /// </param>
+    /// <param name="vaultDirectory">
+    /// Where this vault lives. Defaults to <see cref="AppPaths.GetVaultDirectory"/>, which is
+    /// what the app uses. Passing it explicitly is how a test runs two vaults in one process
+    /// without reaching for the SLOPTERM_VAULT_DIR environment variable - process-global
+    /// mutable state that every other vault in the process shares, and which nothing can make
+    /// safe once more than one of them exists.
+    /// </param>
+    public VaultService(HybridLogicalClock? clock = null, string? vaultDirectory = null)
     {
-        _vaultDir = AppPaths.GetVaultDirectory();
+        _vaultDir = vaultDirectory ?? AppPaths.GetVaultDirectory();
         _metadataPath = Path.Combine(_vaultDir, "vault.json");
         _settingsPath = Path.Combine(_vaultDir, "settings.json");
-        Collections = new CollectionStore(_vaultDir, () => _key);
+        Collections = new CollectionStore(_vaultDir, () => _key, clock);
     }
 
     public bool Exists => File.Exists(_metadataPath);

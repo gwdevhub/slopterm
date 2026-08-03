@@ -145,6 +145,58 @@ public sealed class VaultSyncServiceTests : IDisposable
     }
 
     /// <summary>
+    /// Two edits in the SAME millisecond on different devices. Neither "happened first" in
+    /// any meaningful sense, so the winner is decided by the clock's node tiebreak - what
+    /// matters is that it's decided the same way on both devices, and that the losing edit is
+    /// still kept rather than vanishing.
+    /// </summary>
+    [Fact]
+    public async Task ATieBetweenTwoDevicesResolvesTheSameWayOnBoth()
+    {
+        var collectionId = await PairAsync();
+        var id = _fixture.Laptop.SaveHost(collectionId, "prod-db", "10.0.0.5");
+        await _fixture.Laptop.SyncAsync(collectionId);
+        await _fixture.Phone.SyncAsync(collectionId);
+
+        _fixture.Freeze(); // both edits land on the same millisecond on purpose
+        _fixture.Phone.Vault.SaveHost(id, new HostRecord { Name = "prod-db", Address = "10.0.0.7" });
+        _fixture.Laptop.Vault.SaveHost(id, new HostRecord { Name = "prod-db", Address = "10.0.0.8" });
+
+        await _fixture.Phone.SyncAsync(collectionId);
+        await _fixture.Laptop.SyncAsync(collectionId);
+        await _fixture.Phone.SyncAsync(collectionId);
+        await _fixture.Laptop.SyncAsync(collectionId);
+
+        // Both addresses survive somewhere, and both devices agree on which one kept the name.
+        Assert.Equal(_fixture.Laptop.HostNames(), _fixture.Phone.HostNames());
+        Assert.Equal(_fixture.Laptop.Host("prod-db")!.Address, _fixture.Phone.Host("prod-db")!.Address);
+        Assert.Equal(2, _fixture.Phone.HostNames().Count);
+    }
+
+    /// <summary>
+    /// Every "Sync now" must actually run a pass. A completed pass used to be left parked in
+    /// the in-flight table, so the next call awaited a task that had already finished and did
+    /// nothing at all - the collection silently stopped converging, at random, forever.
+    /// </summary>
+    [Fact]
+    public async Task EverySyncActuallyRunsAPass()
+    {
+        var collectionId = await PairAsync();
+
+        for (var i = 0; i < 5; i++)
+        {
+            _fixture.Laptop.SaveHost(collectionId, $"host-{i}", $"10.0.0.{i}");
+
+            var putsBefore = _store.PutCount;
+            await _fixture.Laptop.SyncAsync(collectionId);
+            Assert.True(_store.PutCount > putsBefore, $"sync {i} pushed nothing");
+
+            await _fixture.Phone.SyncAsync(collectionId);
+            Assert.Contains($"host-{i}", _fixture.Phone.HostNames());
+        }
+    }
+
+    /// <summary>
     /// A 412 means somebody wrote first. The push has to re-read, re-stamp and retry rather
     /// than fail the pass - servers disagree about preconditions, so this path runs often.
     /// </summary>
@@ -182,51 +234,31 @@ public sealed class VaultSyncServiceTests : IDisposable
     }
 
     /// <summary>
-    /// Rotation re-keys everything and re-wraps for whoever remains. The removed device
-    /// finds no wrapped key for its fingerprint and says so plainly, rather than looping on
-    /// a decrypt it will never win.
+    /// Two devices in one collection can use DIFFERENT WebDAV accounts against the same
+    /// folder - which is the whole point of leaving access control to the server. Joining
+    /// takes the token's credentials, and swapping in your own account changes nothing about
+    /// the sync.
     /// </summary>
     [Fact]
-    public async Task RotatingAfterRemovingSomeoneLocksThemOut()
+    public async Task DevicesCanUseTheirOwnWebDavAccounts()
     {
-        var collectionId = await PairAsync();
-        _fixture.Laptop.SaveHost(collectionId, "prod-db", "10.0.0.5");
-        await _fixture.Laptop.SyncAsync(collectionId);
-        await _fixture.Phone.SyncAsync(collectionId);
+        var created = _fixture.Laptop.Collections.Create(
+            "Team", "https://webdav.example.com/", "alice", "alice-pw", null);
+        await _fixture.Laptop.SyncAsync(created.Id);
 
-        var phoneMember = _fixture.Laptop.Collections.ListMembers(collectionId)
-            .Single(m => !m.IsThisDevice);
-        await _fixture.Laptop.Sync.RotateKeyAsync(collectionId, [phoneMember.Id], CancellationToken.None);
+        _fixture.Phone.Collections.Join(_fixture.Laptop.Collections.BuildInviteToken(created.Id, null), null);
+        _fixture.Phone.Collections.Update(created.Id, null, null, "bob", "bob-pw", null, null);
+        Assert.Equal("bob", _fixture.Phone.Collections.Describe(created.Id)!.RemoteUsername);
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => _fixture.Phone.SyncAsync(collectionId));
-        Assert.Contains("no longer have access", error.Message, StringComparison.OrdinalIgnoreCase);
+        _fixture.Laptop.SaveHost(created.Id, "prod-db", "10.0.0.5");
+        await _fixture.Laptop.SyncAsync(created.Id);
+        await _fixture.Phone.SyncAsync(created.Id);
 
-        // The laptop keeps working on the new epoch.
-        _fixture.Laptop.SaveHost(collectionId, "second", "10.0.0.6");
-        await _fixture.Laptop.SyncAsync(collectionId);
-        Assert.Equal(["prod-db", "second"], _fixture.Laptop.HostNames());
-    }
-
-    /// <summary>
-    /// A rotation with nobody removed - "that invite token got pasted into the wrong chat" -
-    /// must leave every remaining device able to read the collection on the new epoch.
-    /// </summary>
-    [Fact]
-    public async Task RotatingWithoutRemovingAnyoneKeepsEveryoneIn()
-    {
-        var collectionId = await PairAsync();
-        _fixture.Laptop.SaveHost(collectionId, "prod-db", "10.0.0.5");
-        await _fixture.Laptop.SyncAsync(collectionId);
-        await _fixture.Phone.SyncAsync(collectionId);
-
-        await _fixture.Laptop.Sync.RotateKeyAsync(collectionId, [], CancellationToken.None);
-        await _fixture.Phone.SyncAsync(collectionId);
-
-        _fixture.Laptop.SaveHost(collectionId, "second", "10.0.0.6");
-        await _fixture.Laptop.SyncAsync(collectionId);
-        await _fixture.Phone.SyncAsync(collectionId);
-
-        Assert.Equal(["prod-db", "second"], _fixture.Phone.HostNames());
+        Assert.Equal(["prod-db"], _fixture.Phone.HostNames());
+        // Same collection key on both, whatever account each of them authenticates with.
+        Assert.Equal(
+            _fixture.Laptop.Collections.Describe(created.Id)!.KeyFingerprint,
+            _fixture.Phone.Collections.Describe(created.Id)!.KeyFingerprint);
     }
 
     [Fact]

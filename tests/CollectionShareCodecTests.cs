@@ -14,8 +14,6 @@ public sealed class CollectionShareCodecTests
         Username = "team",
         Password = "app-password",
         CollectionKey = Convert.ToBase64String(CollectionCrypto.GenerateCollectionKey()),
-        KeyEpoch = 3,
-        SignerEd25519Pub = CollectionCrypto.GenerateIdentity("laptop").Ed25519Public,
         Scopes = ["hosts", "snippets"],
     };
 
@@ -29,8 +27,8 @@ public sealed class CollectionShareCodecTests
         Assert.Equal(original.CollectionId, decoded.CollectionId);
         Assert.Equal(original.CollectionKey, decoded.CollectionKey);
         Assert.Equal(original.RemoteUrl, decoded.RemoteUrl);
+        Assert.Equal(original.Username, decoded.Username);
         Assert.Equal(original.Password, decoded.Password);
-        Assert.Equal(original.KeyEpoch, decoded.KeyEpoch);
         Assert.Equal(original.Scopes, decoded.Scopes);
     }
 

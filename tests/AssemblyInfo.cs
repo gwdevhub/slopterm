@@ -1,4 +1,6 @@
-// Every test that constructs a VaultService flips SLOPTERM_VAULT_DIR, which is process-wide -
-// so they must not run in parallel with each other, or two tests race over which vault
-// directory the next `new VaultService()` picks up.
+// The sync tests spin up two VaultService instances that write to real temp directories and
+// converge through a shared in-memory remote. Each fixture is self-contained now (its vault
+// directories are passed in, not set through the environment), but the suite still runs
+// serially: several tests deliberately assert on wall-clock-free orderings, and parallel
+// execution buys nothing here beyond making a failure harder to read.
 [assembly: Xunit.CollectionBehavior(DisableTestParallelization = true)]

@@ -119,31 +119,6 @@ public sealed class WebDavIntegrationTests : IDisposable
     }
 
     /// <summary>
-    /// A rotation over the wire: the removed device must find no key it can unwrap and say
-    /// so, while the remaining one keeps working on the new epoch.
-    /// </summary>
-    [SkippableFact]
-    public async Task RotationLocksOutARemovedDeviceThroughARealServer()
-    {
-        Skip.If(_fixture is null, "SLOPTERM_WEBDAV_URL not set");
-
-        var collectionId = await PairAsync();
-        _fixture!.Laptop.SaveHost(collectionId, "prod-db", "10.0.0.5");
-        await _fixture.Laptop.SyncAsync(collectionId);
-        await _fixture.Phone.SyncAsync(collectionId);
-
-        var phone = _fixture.Laptop.Collections.ListMembers(collectionId).Single(m => !m.IsThisDevice);
-        await _fixture.Laptop.Sync.RotateKeyAsync(collectionId, [phone.Id], CancellationToken.None);
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => _fixture.Phone.SyncAsync(collectionId));
-        Assert.Contains("no longer have access", error.Message, StringComparison.OrdinalIgnoreCase);
-
-        _fixture.Laptop.SaveHost(collectionId, "second", "10.0.0.6");
-        await _fixture.Laptop.SyncAsync(collectionId);
-        Assert.Equal(["prod-db", "second"], _fixture.Laptop.HostNames());
-    }
-
-    /// <summary>
     /// Both devices editing between syncs, against a server whose precondition handling is
     /// whatever it is. The winner is decided by HLC either way, and the loser survives as a
     /// conflict copy - which is what makes last-writer-wins tolerable when preconditions
