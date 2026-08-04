@@ -1,13 +1,38 @@
-# WebDAV vault sync, with membership and revocation
+# WebDAV vault sync
 
-**Status: planned, not implemented.** This is written to be picked up and built from - it
-states what to build, in what order, and which decisions are already made vs. deliberately
-left open. Read [scheduled-jobs.md](scheduled-jobs.md)'s note on two devices firing one job
-before shipping both features together.
+**Status: implemented.** The code lives in `core/VaultSync/`, the UI in
+`web/src/components/CollectionsSection.tsx`, and the tests in `tests/` (plus
+`e2e/tests/collections.spec.ts`). Read [scheduled-jobs.md](scheduled-jobs.md)'s note on two
+devices firing one job.
 
-Not to be confused with **Folder sync** (`core/SyncService.cs`), which mirrors local ↔ remote
-*directories over SFTP* and has nothing to do with this. Name the new code
-`VaultSyncService` / `core/VaultSync/` so the two never get confused in a stack trace.
+**The membership half of this document was NOT built, deliberately.** No members.json, no
+per-device keypairs, no signatures, no key epochs, no rotation. Who may read and write a
+collection is decided by the WebDAV server's own accounts and permissions - several people
+can each have their own login against one shared folder, everyone can share a single login,
+or the folder can need no login at all. Revoking someone happens where their access actually
+lives: on the server. An app-level permission model layered on top of that would be a second,
+weaker one that lies about what it enforces - and the rules written below for it don't hold
+together anyway, since a pinned signer and "any member may sign, there are no roles" are
+mutually exclusive (the second device to join signs with a key nobody pinned).
+
+What survives from the crypto section is the part that earns its keep: a collection key that
+records are encrypted under before they're uploaded, so the server stores ciphertext it
+cannot read. It travels in the collection's token alongside the WebDAV credentials.
+BouncyCastle went with the asymmetric crypto, so the Wine/CNG concern that motivated it is
+moot.
+
+Two other things ended up different, both found by running against real servers:
+
+- **Preconditions are best-effort and the code now assumes nothing.** Apache's mod_dav
+  returns no ETag at all - not on PUT, not in PROPFIND - so an unconditional path was
+  mandatory: without it every push sent `If-None-Match: *`, got a permanent 412, and was
+  abandoned silently. See `VaultSyncService.PushRecordAsync`.
+- **A conflict copy requires positive evidence that both sides moved.** "No sync state" is
+  not evidence, and treating it as one manufactured duplicates of records nobody had touched.
+
+Verified against the Caddy share this project uses (with two different WebDAV accounts) and
+against Apache mod_dav - see `tests/webdav-servers.sh`. The win-x64 build was exercised under
+Wine driving a real sync.
 
 ## What this delivers
 
@@ -247,7 +272,7 @@ Per collection, driven by `VaultSyncService`:
 State lives in `collection.json`: last sync time, per-record `{etag, hlc}`, last error.
 Everything is best-effort - a failed sync surfaces in the UI, never throws into a caller.
 
-## Membership and revocation
+## Membership and revocation (NOT BUILT - see the status note above)
 
 - **Join**: paste token → generate this device's identity → unwrap CK → add self to
   `members.json` (signed) → full pull.
@@ -273,18 +298,17 @@ Backend (`core/VaultSync/`):
   minimal XML parse of the multistatus (href + getetag). No new package.
 - `VaultSyncService` - one background loop per collection, with the same
   never-let-the-loop-die try/catch `ForwardingService` had to learn the hard way.
-- `CollectionCrypto` - CK generation, wrap/unwrap, members.json signing/verification, rotation.
+- `CollectionCrypto` - CK generation and record encryption. No wrapping or signing: see the status note.
 - `CredentialResolver` - the name-based lookup above, shared by the connect endpoints and by
   whatever the UI uses to decide whether a host is connectable.
-- Endpoints: `/api/vault/collections` (CRUD incl. scopes), `/api/collections/{id}/sync|status`,
-  `/api/collections/{id}/members`, `/api/collections/{id}/rotate`, `/api/collections/join`,
-  `/api/collections/{id}/token`.
+- Endpoints: `/api/vault/collections` (CRUD incl. scopes), `/api/collections/{id}/sync`,
+  `/api/collections/status`, `/api/collections/join`, `/api/collections/{id}/token`.
 
 Frontend:
 
-- A **Collections** sidebar section: name, remote, scopes, last sync, members, Sync now,
-  Rotate key, Copy invite token, Leave - plus a "Copy sync configuration" action covering
-  every collection at once, and the paste box that restores it.
+- A **Collections** sidebar section: name, remote, scopes, last sync, Sync now, Copy invite
+  token, Leave - plus a "Copy sync configuration" action covering every collection at once,
+  and the paste box that restores it.
 - Join flow: paste a token or a sync-configuration dump. Identical on every platform; no
   camera, no platform-specific code.
 - `ConnectionForm`: a collection picker, and a credential mode of "use a key named…" alongside

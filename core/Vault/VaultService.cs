@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Slopterm.Server.Ai;
+using Slopterm.Server.VaultSync;
 
 namespace Slopterm.Server.Vault;
 
@@ -16,15 +17,55 @@ public sealed class VaultService
     // In-memory only for the life of the process - never written to disk, never logged.
     private byte[]? _key;
 
-    public VaultService()
+    /// <param name="clock">
+    /// This install's hybrid logical clock. Defaults to the process-wide one keyed to this
+    /// device's id, which is right for the app - there is one device per process. Tests pass
+    /// their own so two "devices" in one process are genuinely independent rather than
+    /// sharing a clock no real pair of devices ever would.
+    /// </param>
+    /// <param name="vaultDirectory">
+    /// Where this vault lives. Defaults to <see cref="AppPaths.GetVaultDirectory"/>, which is
+    /// what the app uses. Passing it explicitly is how a test runs two vaults in one process
+    /// without reaching for the SLOPTERM_VAULT_DIR environment variable - process-global
+    /// mutable state that every other vault in the process shares, and which nothing can make
+    /// safe once more than one of them exists.
+    /// </param>
+    public VaultService(HybridLogicalClock? clock = null, string? vaultDirectory = null)
     {
-        _vaultDir = AppPaths.GetVaultDirectory();
+        _vaultDir = vaultDirectory ?? AppPaths.GetVaultDirectory();
         _metadataPath = Path.Combine(_vaultDir, "vault.json");
         _settingsPath = Path.Combine(_vaultDir, "settings.json");
+        Collections = new CollectionStore(_vaultDir, () => _key, clock);
     }
 
     public bool Exists => File.Exists(_metadataPath);
     public bool IsUnlocked => _key is not null;
+
+    /// <summary>
+    /// Where records actually live, per collection. Every typed accessor below goes through
+    /// this - the `local` collection is just "the vault directory as it always was", so a
+    /// vault with no collections behaves byte-for-byte the way it did before sync existed.
+    /// </summary>
+    public CollectionStore Collections { get; }
+
+    /// <summary>
+    /// Raised after any record changes, with the collection that changed. VaultSyncService
+    /// subscribes to debounce a push; nothing else may throw out of it, since a subscriber
+    /// blowing up would take the save that triggered it with it.
+    /// </summary>
+    public event Action<string>? RecordChanged;
+
+    private void NotifyChanged(string collectionId)
+    {
+        try
+        {
+            RecordChanged?.Invoke(collectionId);
+        }
+        catch
+        {
+            // A sync trigger failing must never fail the save that raised it.
+        }
+    }
 
     public void Setup(string masterPassword)
     {
@@ -97,9 +138,10 @@ public sealed class VaultService
         // password-protected vault. Fail closed instead, with a message that names the file and
         // the fix (it's non-secret and safe to delete) - the crash reporter surfaces it, rather
         // than a raw System.Text.Json stack trace nobody can act on.
+        AppSettings settings;
         try
         {
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath)) ?? new AppSettings();
+            settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath)) ?? new AppSettings();
         }
         catch (JsonException ex)
         {
@@ -107,6 +149,105 @@ public sealed class VaultService
                 $"settings.json is corrupt or from an incompatible version and can't be read ({_settingsPath}). " +
                 "It holds only non-secret app preferences - delete it to reset to defaults, then relaunch.", ex);
         }
+
+        // Everything except RequireMasterPassword now lives in the vault-stored preferences
+        // record so it can sync (see PreferencesRecord). settings.json keeps a copy purely
+        // as the pre-unlock fallback, which is what this returns while locked.
+        if (IsUnlocked && GetPreferences() is { } preferences)
+        {
+            settings.CloseToTray = preferences.CloseToTray;
+            settings.ShowSshConfigHosts = preferences.ShowSshConfigHosts;
+            settings.AiBaseUrl = preferences.AiBaseUrl;
+            settings.AiModel = preferences.AiModel;
+        }
+
+        return settings;
+    }
+
+    private const string PreferencesFolder = "preferences";
+    private const string PreferencesRecordId = "preferences";
+
+    /// <summary>
+    /// The syncable preferences, migrating settings.json's values (and the old
+    /// secrets/appearance record) into one on first read so an existing install keeps every
+    /// toggle it had. Null only when the vault is locked.
+    /// </summary>
+    public PreferencesRecord? GetPreferences()
+    {
+        if (!IsUnlocked)
+        {
+            return null;
+        }
+
+        var stored = Collections.ListAll(PreferencesFolder)
+            .FirstOrDefault(r => r.Id == PreferencesRecordId);
+        if (stored is not null)
+        {
+            var parsed = TryDeserialize<PreferencesRecord>(stored.Json);
+            if (parsed is not null)
+            {
+                return parsed;
+            }
+        }
+
+        AppSettings fromFile;
+        try
+        {
+            fromFile = File.Exists(_settingsPath)
+                ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath)) ?? new AppSettings()
+                : new AppSettings();
+        }
+        catch (JsonException)
+        {
+            fromFile = new AppSettings();
+        }
+
+        var migrated = new PreferencesRecord
+        {
+            CloseToTray = fromFile.CloseToTray,
+            ShowSshConfigHosts = fromFile.ShowSshConfigHosts,
+            AiBaseUrl = fromFile.AiBaseUrl,
+            AiModel = fromFile.AiModel,
+            Appearance = ReadLegacyAppearance(),
+        };
+        SavePreferences(migrated);
+        return migrated;
+    }
+
+    /// <summary>
+    /// Writes the preferences record AND mirrors the same values back into settings.json,
+    /// so the pre-unlock read and an older build both still see the user's choices.
+    /// </summary>
+    public void SavePreferences(PreferencesRecord preferences)
+    {
+        RequireUnlocked();
+        var collectionId = Collections.FindCollectionOf(PreferencesFolder, PreferencesRecordId)
+            ?? CollectionStore.LocalCollectionId;
+        Collections.SaveRecord(collectionId, PreferencesFolder, PreferencesRecordId, JsonSerializer.Serialize(preferences));
+        NotifyChanged(collectionId);
+        MirrorPreferencesToSettingsFile(preferences);
+    }
+
+    private void MirrorPreferencesToSettingsFile(PreferencesRecord preferences)
+    {
+        AppSettings settings;
+        try
+        {
+            settings = File.Exists(_settingsPath)
+                ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath)) ?? new AppSettings()
+                : new AppSettings();
+        }
+        catch (JsonException)
+        {
+            return; // a corrupt settings.json is handled by GetSettings, not silently rewritten here
+        }
+
+        settings.CloseToTray = preferences.CloseToTray;
+        settings.ShowSshConfigHosts = preferences.ShowSshConfigHosts;
+        settings.AiBaseUrl = preferences.AiBaseUrl;
+        settings.AiModel = preferences.AiModel;
+        Directory.CreateDirectory(_vaultDir);
+        File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
     }
 
     /// <summary>
@@ -155,15 +296,7 @@ public sealed class VaultService
     /// </summary>
     public void SetCloseToTray(bool enabled)
     {
-        var settings = GetSettings();
-        if (enabled == settings.CloseToTray)
-        {
-            return;
-        }
-
-        settings.CloseToTray = enabled;
-        Directory.CreateDirectory(_vaultDir);
-        File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
+        UpdatePreferences(p => p.CloseToTray = enabled, s => s.CloseToTray = enabled);
     }
 
     /// <summary>
@@ -173,13 +306,25 @@ public sealed class VaultService
     /// </summary>
     public void SetShowSshConfigHosts(bool enabled)
     {
-        var settings = GetSettings();
-        if (enabled == settings.ShowSshConfigHosts)
+        UpdatePreferences(p => p.ShowSshConfigHosts = enabled, s => s.ShowSshConfigHosts = enabled);
+    }
+
+    /// <summary>
+    /// Applies a change to the preferences record, or - with the vault locked - straight to
+    /// settings.json. The locked path matters: these toggles were always usable without an
+    /// unlock, and moving them into the vault must not quietly take that away.
+    /// </summary>
+    private void UpdatePreferences(Action<PreferencesRecord> applyToRecord, Action<AppSettings> applyToFile)
+    {
+        if (GetPreferences() is { } preferences)
         {
+            applyToRecord(preferences);
+            SavePreferences(preferences);
             return;
         }
 
-        settings.ShowSshConfigHosts = enabled;
+        var settings = GetSettings();
+        applyToFile(settings);
         Directory.CreateDirectory(_vaultDir);
         File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
     }
@@ -198,31 +343,50 @@ public sealed class VaultService
         var newKey = VaultCrypto.DeriveKey(
             newDerivationInput, newSalt, VaultCrypto.Argon2Iterations, VaultCrypto.Argon2MemoryKb, VaultCrypto.Argon2Parallelism);
 
+        // Recursive, unlike before: collections/{cid}/… nests one level deeper than the
+        // original record folders, and its collection.json/identity.json/members.json are
+        // vault-encrypted too - missing them would leave a synced collection unreadable after
+        // a password change, with its remote password and collection key stranded under the
+        // old key.
         if (Directory.Exists(_vaultDir))
         {
-            foreach (var dir in Directory.EnumerateDirectories(_vaultDir))
+            foreach (var path in EncryptedRecordFiles())
             {
-                foreach (var path in Directory.EnumerateFiles(dir, "*.json"))
+                var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
+                if (envelope is null)
                 {
-                    var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
-                    if (envelope is null)
-                    {
-                        continue;
-                    }
-
-                    var plaintext = VaultCrypto.Decrypt(
-                        oldKey, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
-                    var (newNonce, newCiphertext) = VaultCrypto.Encrypt(newKey, plaintext);
-                    envelope.Nonce = Convert.ToBase64String(newNonce);
-                    envelope.Ciphertext = Convert.ToBase64String(newCiphertext);
-                    File.WriteAllText(path, JsonSerializer.Serialize(envelope));
+                    continue;
                 }
+
+                var plaintext = VaultCrypto.Decrypt(
+                    oldKey, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
+                var (newNonce, newCiphertext) = VaultCrypto.Encrypt(newKey, plaintext);
+                envelope.Nonce = Convert.ToBase64String(newNonce);
+                envelope.Ciphertext = Convert.ToBase64String(newCiphertext);
+                CollectionStore.WriteAtomic(path, JsonSerializer.Serialize(envelope));
             }
         }
 
         WriteMetadata(newSalt, newKey);
         _key = newKey;
     }
+
+    /// <summary>
+    /// Every vault-encrypted record file, at any depth. Files sitting directly in the vault
+    /// directory are deliberately excluded: vault.json, settings.json and window.json are
+    /// device-local plaintext, and trying to read one as a RecordEnvelope is how a re-key
+    /// blew up on an install that had simply moved its window.
+    ///
+    /// Materialized rather than enumerated lazily, because callers replace each file as they
+    /// go (temp + move) and mutating a directory mid-enumeration can hand the same path back
+    /// twice - which during a re-key would encrypt a record under the new key twice and leave
+    /// it unreadable by anything.
+    /// </summary>
+    private string[] EncryptedRecordFiles() =>
+        Directory.Exists(_vaultDir)
+            ? [.. Directory.GetFiles(_vaultDir, "*.json", SearchOption.AllDirectories)
+                .Where(path => Path.GetDirectoryName(path) != _vaultDir)]
+            : [];
 
     /// <summary>
     /// Packages vault.json, settings.json, and every record file into a zip - the whole
@@ -248,16 +412,14 @@ public sealed class VaultService
                 archive.CreateEntryFromFile(_settingsPath, "settings.json");
             }
 
-            if (Directory.Exists(_vaultDir))
+            // Recursive, so collections/{cid}/… travels with the backup - restoring a vault
+            // that silently dropped every synced collection would be worse than not
+            // exporting at all. Root-level files are excluded for the same reason a re-key
+            // skips them: they describe this device, not its records.
+            foreach (var file in EncryptedRecordFiles())
             {
-                foreach (var dir in Directory.EnumerateDirectories(_vaultDir))
-                {
-                    var subfolder = Path.GetFileName(dir);
-                    foreach (var file in Directory.EnumerateFiles(dir, "*.json"))
-                    {
-                        archive.CreateEntryFromFile(file, $"{subfolder}/{Path.GetFileName(file)}");
-                    }
-                }
+                var relative = Path.GetRelativePath(_vaultDir, file).Replace(Path.DirectorySeparatorChar, '/');
+                archive.CreateEntryFromFile(file, relative);
             }
         }
 
@@ -460,7 +622,7 @@ public sealed class VaultService
     /// four AI-chat methods are best-effort by design (like AppendLog): a locked vault just
     /// means chats don't persist/restore/list, never an error in the agent path.
     /// </summary>
-    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, AiChatRecord Record)> ListAiChats()
+    public IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, AiChatRecord Record)> ListAiChats()
     {
         if (!IsUnlocked)
         {
@@ -544,16 +706,9 @@ public sealed class VaultService
     /// </summary>
     public void SetAiSettings(string baseUrl, string model)
     {
-        var settings = GetSettings();
-        if (baseUrl == settings.AiBaseUrl && model == settings.AiModel)
-        {
-            return;
-        }
-
-        settings.AiBaseUrl = baseUrl;
-        settings.AiModel = model;
-        Directory.CreateDirectory(_vaultDir);
-        File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
+        UpdatePreferences(
+            p => { p.AiBaseUrl = baseUrl; p.AiModel = model; },
+            s => { s.AiBaseUrl = baseUrl; s.AiModel = model; });
     }
 
     private const string OpenTabsRecordId = "open-tabs";
@@ -612,7 +767,26 @@ public sealed class VaultService
     /// can evolve entirely client-side without a backend change. Never throws - the client
     /// keeps a local cache for instant theming and treats null as "nothing to sync".
     /// </summary>
-    public JsonElement? GetAppearance()
+    public JsonElement? GetAppearance() => GetPreferences()?.Appearance ?? ReadLegacyAppearance();
+
+    /// <summary>Best-effort - silently no-ops if locked (same contract as SaveOpenTabs).</summary>
+    public void SaveAppearance(JsonElement settings)
+    {
+        if (GetPreferences() is not { } preferences)
+        {
+            return;
+        }
+
+        preferences.Appearance = settings;
+        SavePreferences(preferences);
+    }
+
+    /// <summary>
+    /// The pre-split location (secrets/appearance). Read once, on the migration into the
+    /// preferences record, and left on disk afterwards so an older build downgraded onto the
+    /// same vault still finds the theme it wrote.
+    /// </summary>
+    private JsonElement? ReadLegacyAppearance()
     {
         if (!IsUnlocked)
         {
@@ -642,41 +816,39 @@ public sealed class VaultService
         }
     }
 
-    /// <summary>Best-effort - silently no-ops if locked (same contract as SaveOpenTabs).</summary>
-    public void SaveAppearance(JsonElement settings)
-    {
-        if (!IsUnlocked)
-        {
-            return;
-        }
-
-        SaveRecord("secrets", AppearanceRecordId, settings);
-    }
-
-    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, HostRecord Record)> ListHosts() => ListRecords<HostRecord>("hosts");
-    public string SaveHost(string? id, HostRecord record) => SaveRecord("hosts", id, record);
+    public IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, HostRecord Record)> ListHosts() =>
+        ListRecords<HostRecord>("hosts");
+    public string SaveHost(string? id, HostRecord record, string? collectionId = null) =>
+        SaveRecord("hosts", id, record, collectionId);
     public bool DeleteHost(string id) => DeleteRecord("hosts", id);
 
-    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, SnippetRecord Record)> ListSnippets() => ListRecords<SnippetRecord>("snippets");
-    public string SaveSnippet(string? id, SnippetRecord record) => SaveRecord("snippets", id, record);
+    public IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, SnippetRecord Record)> ListSnippets() =>
+        ListRecords<SnippetRecord>("snippets");
+    public string SaveSnippet(string? id, SnippetRecord record, string? collectionId = null) =>
+        SaveRecord("snippets", id, record, collectionId);
     public bool DeleteSnippet(string id) => DeleteRecord("snippets", id);
 
-    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, KeychainEntryRecord Record)> ListKeychainEntries() =>
+    public IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, KeychainEntryRecord Record)> ListKeychainEntries() =>
         ListRecords<KeychainEntryRecord>("keychain");
-    public string SaveKeychainEntry(string? id, KeychainEntryRecord record) => SaveRecord("keychain", id, record);
+    public string SaveKeychainEntry(string? id, KeychainEntryRecord record, string? collectionId = null) =>
+        SaveRecord("keychain", id, record, collectionId);
     public bool DeleteKeychainEntry(string id) => DeleteRecord("keychain", id);
 
-    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, PortForwardRecord Record)> ListPortForwards() =>
+    public IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, PortForwardRecord Record)> ListPortForwards() =>
         ListRecords<PortForwardRecord>("port-forwards");
-    public string SavePortForward(string? id, PortForwardRecord record) => SaveRecord("port-forwards", id, record);
+    public string SavePortForward(string? id, PortForwardRecord record, string? collectionId = null) =>
+        SaveRecord("port-forwards", id, record, collectionId);
     public bool DeletePortForward(string id) => DeleteRecord("port-forwards", id);
 
-    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, SyncRuleRecord Record)> ListSyncRules() =>
+    public IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, SyncRuleRecord Record)> ListSyncRules() =>
         ListRecords<SyncRuleRecord>("sync-rules");
-    public string SaveSyncRule(string? id, SyncRuleRecord record) => SaveRecord("sync-rules", id, record);
+    public string SaveSyncRule(string? id, SyncRuleRecord record, string? collectionId = null) =>
+        SaveRecord("sync-rules", id, record, collectionId);
     public bool DeleteSyncRule(string id) => DeleteRecord("sync-rules", id);
 
-    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, JobRecord Record)> ListJobs() =>
+    // Jobs have no sync scope at all (a schedule is pinned to one device by OwnerDeviceId,
+    // see JobRecord), so they only ever live in the local collection.
+    public IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, JobRecord Record)> ListJobs() =>
         ListRecords<JobRecord>("jobs");
     public string SaveJob(string? id, JobRecord record) => SaveRecord("jobs", id, record);
 
@@ -773,7 +945,7 @@ public sealed class VaultService
         return text[..MaxRunOutputChars];
     }
 
-    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, LogEntryRecord Record)> ListLogs() =>
+    public IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, LogEntryRecord Record)> ListLogs() =>
         ListRecords<LogEntryRecord>("logs").OrderByDescending(l => l.UpdatedAt).ToList();
 
     /// <summary>Best-effort: silently does nothing if the vault is locked (see LogEntryRecord's doc comment).</summary>
@@ -799,7 +971,7 @@ public sealed class VaultService
 
     private const int MaxRecentConnections = 5;
 
-    public IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, RecentConnectionRecord Record)> ListRecentConnections() =>
+    public IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, RecentConnectionRecord Record)> ListRecentConnections() =>
         ListRecords<RecentConnectionRecord>("recent-connections").OrderByDescending(r => r.UpdatedAt).ToList();
 
     /// <summary>
@@ -830,65 +1002,95 @@ public sealed class VaultService
         }
     }
 
-    private IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, T Record)> ListRecords<T>(string subfolder)
+    /// <summary>
+    /// Every record of one kind, across every collection this device holds, each tagged
+    /// with where it came from. A vault with no collections yields exactly what it always
+    /// did, with CollectionId = "local".
+    /// </summary>
+    private IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, T Record)> ListRecords<T>(string subfolder)
     {
         RequireUnlocked();
-
-        var dir = Path.Combine(_vaultDir, subfolder);
-        if (!Directory.Exists(dir))
+        var results = new List<(string, string, DateTimeOffset, T)>();
+        foreach (var stored in Collections.ListAll(subfolder))
         {
-            return [];
-        }
-
-        var results = new List<(string, DateTimeOffset, T)>();
-        foreach (var path in Directory.EnumerateFiles(dir, "*.json"))
-        {
-            var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
-            if (envelope is null)
+            var record = TryDeserialize<T>(stored.Json);
+            if (record is not null)
             {
-                continue;
+                results.Add((stored.Id, stored.CollectionId, stored.UpdatedAt, record));
             }
-
-            var json = VaultCrypto.Decrypt(_key!, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
-            var record = JsonSerializer.Deserialize<T>(json)!;
-            results.Add((envelope.Id, envelope.UpdatedAt, record));
         }
 
         return results;
     }
 
-    private string SaveRecord<T>(string subfolder, string? id, T record)
+    /// <summary>
+    /// Saves into <paramref name="collectionId"/> for a new record. Updating an EXISTING id
+    /// always writes back to whichever collection already holds it, ignoring the argument -
+    /// changing collection is a deliberate move (see <see cref="MoveRecord"/>), never a
+    /// side effect of an edit that forgot to say where the record lived.
+    /// </summary>
+    private string SaveRecord<T>(string subfolder, string? id, T record, string? collectionId = null)
     {
         RequireUnlocked();
-        var dir = Path.Combine(_vaultDir, subfolder);
-        Directory.CreateDirectory(dir);
-
-        id ??= Guid.NewGuid().ToString("N");
-        var json = JsonSerializer.Serialize(record);
-        var (nonce, ciphertext) = VaultCrypto.Encrypt(_key!, json);
-
-        var envelope = new RecordEnvelope
-        {
-            Id = id,
-            UpdatedAt = DateTimeOffset.UtcNow,
-            Nonce = Convert.ToBase64String(nonce),
-            Ciphertext = Convert.ToBase64String(ciphertext),
-        };
-        File.WriteAllText(Path.Combine(dir, $"{id}.json"), JsonSerializer.Serialize(envelope));
-        return id;
+        var target = (id is null ? null : Collections.FindCollectionOf(subfolder, id))
+            ?? collectionId
+            ?? CollectionStore.LocalCollectionId;
+        var saved = Collections.SaveRecord(target, subfolder, id, JsonSerializer.Serialize(record));
+        NotifyChanged(target);
+        return saved;
     }
 
-    private bool DeleteRecord(string subfolder, string id)
+    private bool DeleteRecord(string subfolder, string id, string? recordType = null)
     {
         RequireUnlocked();
-        var path = Path.Combine(_vaultDir, subfolder, $"{id}.json");
-        if (!File.Exists(path))
+        var collectionId = Collections.FindCollectionOf(subfolder, id);
+        if (collectionId is null)
         {
             return false;
         }
 
-        File.Delete(path);
-        return true;
+        var deleted = Collections.DeleteRecord(collectionId, subfolder, id, recordType ?? subfolder);
+        NotifyChanged(collectionId);
+        return deleted;
+    }
+
+    /// <summary>
+    /// Moves one record between collections - "share this host with the team", or pull it
+    /// back out again. Both sides are notified so the collection it left writes its
+    /// tombstone out and the one it joined pushes it.
+    /// </summary>
+    public void MoveRecord(string subfolder, string id, string toCollectionId)
+    {
+        RequireUnlocked();
+        var from = Collections.FindCollectionOf(subfolder, id)
+            ?? throw new InvalidOperationException("That record no longer exists.");
+        if (from == toCollectionId)
+        {
+            return;
+        }
+
+        if (toCollectionId != CollectionStore.LocalCollectionId && Collections.GetCollection(toCollectionId) is null)
+        {
+            throw new InvalidOperationException("That collection doesn't exist on this device.");
+        }
+
+        Collections.MoveRecord(from, toCollectionId, subfolder, id, subfolder);
+        NotifyChanged(from);
+        NotifyChanged(toCollectionId);
+    }
+
+    private static T? TryDeserialize<T>(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<T>(json);
+        }
+        catch (JsonException)
+        {
+            // A record written by a newer/older build that this type can no longer read is
+            // skipped rather than taking the whole listing down.
+            return default;
+        }
     }
 
     private void RequireUnlocked()

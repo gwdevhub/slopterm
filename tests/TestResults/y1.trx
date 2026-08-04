@@ -1,0 +1,421 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="3edb2b14-556b-4056-ab57-5aec7bbe4748" name="@e48a8263a08a 2026-08-03 17:46:50" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-08-03T17:46:50.2932782+00:00" queuing="2026-08-03T17:46:50.2932783+00:00" start="2026-08-03T17:46:46.4218529+00:00" finish="2026-08-03T17:47:30.2862819+00:00" />
+  <TestSettings name="default" id="8c9fb910-605b-48bf-8e5a-73f9bee95db3">
+    <Deployment runDeploymentRoot="_e48a8263a08a_2026-08-03_17_46_50" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="c1b9cd96-12be-4ace-b588-47ac7753be89" testId="4e16dc8e-dcc7-043a-dff8-4c0f731bc698" testName="Slopterm.Tests.CollectionShareCodecTests.RejectsAnythingThatIsntOneOfItsTokens(token: &quot;slopterm:host:v1:abc&quot;)" computerName="e48a8263a08a" duration="00:00:00.0000347" startTime="2026-08-03T17:47:26.9654513+00:00" endTime="2026-08-03T17:47:26.9654514+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="c1b9cd96-12be-4ace-b588-47ac7753be89" />
+    <UnitTestResult executionId="632af498-5f8c-40cd-b9a7-ac521742b0c8" testId="dc3366cd-f140-f2aa-a8b4-dcdc0fcb6960" testName="Slopterm.Tests.VaultSyncServiceTests.NothingReadableLeavesTheDevice" computerName="e48a8263a08a" duration="00:00:01.2862513" startTime="2026-08-03T17:47:26.9141775+00:00" endTime="2026-08-03T17:47:26.9141778+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="632af498-5f8c-40cd-b9a7-ac521742b0c8" />
+    <UnitTestResult executionId="64aee0db-15c3-4a93-8b12-d5e9ccd0a828" testId="430204c9-0521-a730-6d2e-f3540ef7fdc4" testName="Slopterm.Tests.CredentialResolverTests.FallsBackToTheHostsOwnCollection" computerName="e48a8263a08a" duration="00:00:01.4829171" startTime="2026-08-03T17:46:56.8844100+00:00" endTime="2026-08-03T17:46:56.8844103+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="64aee0db-15c3-4a93-8b12-d5e9ccd0a828" />
+    <UnitTestResult executionId="5d48c43b-a7fa-4d88-89cb-cdc87ac7fdf2" testId="9bc58c4f-cbc4-efed-8f90-e6abb762f55f" testName="Slopterm.Tests.CredentialResolverTests.TheSameNameResolvesToADifferentLocalKeyOnEachDevice" computerName="e48a8263a08a" duration="00:00:01.8518410" startTime="2026-08-03T17:46:55.4019417+00:00" endTime="2026-08-03T17:46:55.4019421+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="5d48c43b-a7fa-4d88-89cb-cdc87ac7fdf2" />
+    <UnitTestResult executionId="f89230b7-b886-4133-b2ea-5376e566a343" testId="96324546-0b4c-657a-38bf-87cae044038f" testName="Slopterm.Tests.HybridLogicalClockTests.ParsesAnythingUnusableAsTheEpoch(value: &quot;&quot;)" computerName="e48a8263a08a" duration="00:00:00.0000111" startTime="2026-08-03T17:47:30.0840917+00:00" endTime="2026-08-03T17:47:30.0840919+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f89230b7-b886-4133-b2ea-5376e566a343" />
+    <UnitTestResult executionId="b08a3822-50e1-453a-a935-e6f436c23b0a" testId="0a4e1810-0bf7-19b5-6dfd-536b16e6da89" testName="Slopterm.Tests.CollectionCryptoTests.RoundTripsARecordUnderTheCollectionKey" computerName="e48a8263a08a" duration="00:00:00.0036142" startTime="2026-08-03T17:46:49.0605272+00:00" endTime="2026-08-03T17:46:49.0605274+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="b08a3822-50e1-453a-a935-e6f436c23b0a" />
+    <UnitTestResult executionId="7c646fca-8ea4-4792-a06f-2eee65f806fe" testId="49bd07ab-c8c8-3778-5ebb-ff4ba300a01f" testName="Slopterm.Tests.CollectionCryptoTests.ADifferentKeyCannotReadTheRecord" computerName="e48a8263a08a" duration="00:00:00.0045551" startTime="2026-08-03T17:46:49.0687777+00:00" endTime="2026-08-03T17:46:49.0687778+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="7c646fca-8ea4-4792-a06f-2eee65f806fe" />
+    <UnitTestResult executionId="44be10d8-4937-4b81-8933-1ac5c8df0365" testId="045e6a50-629f-2e28-9672-b26a2baab094" testName="Slopterm.Tests.CredentialResolverTests.PassesInlineCredentialsStraightThrough" computerName="e48a8263a08a" duration="00:00:01.4252769" startTime="2026-08-03T17:47:01.1498550+00:00" endTime="2026-08-03T17:47:01.1498723+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="44be10d8-4937-4b81-8933-1ac5c8df0365" />
+    <UnitTestResult executionId="28eade55-31f0-4a3b-8e0a-7ec7e06c713e" testId="8d8dc28c-9c06-eab3-d1c9-135b98593f8f" testName="Slopterm.Tests.VaultSyncServiceTests.DevicesCanUseTheirOwnWebDavAccounts" computerName="e48a8263a08a" duration="00:00:01.3361616" startTime="2026-08-03T17:47:22.8555877+00:00" endTime="2026-08-03T17:47:22.8555881+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="28eade55-31f0-4a3b-8e0a-7ec7e06c713e" />
+    <UnitTestResult executionId="4ad956e9-ccaf-475d-9eed-e9f7a754dd39" testId="8c3e9572-a4e0-399c-9fe0-0f0550b315b9" testName="Slopterm.Tests.CredentialResolverTests.SkipsAnUnresolvableCredentialForOneThatWorks" computerName="e48a8263a08a" duration="00:00:01.2817526" startTime="2026-08-03T17:47:03.7947759+00:00" endTime="2026-08-03T17:47:03.7947773+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="4ad956e9-ccaf-475d-9eed-e9f7a754dd39" />
+    <UnitTestResult executionId="330e6714-3f9d-4049-bb28-ff3722ca05d8" testId="6849cfb4-3363-071d-8910-aa2cbb6a33f2" testName="Slopterm.Tests.HybridLogicalClockTests.OrdersByPhysicalThenCounterThenNode" computerName="e48a8263a08a" duration="00:00:00.0003457" startTime="2026-08-03T17:47:30.0814110+00:00" endTime="2026-08-03T17:47:30.0814111+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="330e6714-3f9d-4049-bb28-ff3722ca05d8" />
+    <UnitTestResult executionId="b8fec3b7-dcd5-4b0e-bc09-1b0b00f82708" testId="7395c2d5-dbf5-675f-dcc3-5b1269890c18" testName="Slopterm.Tests.HybridLogicalClockTests.ParsesAnythingUnusableAsTheEpoch(value: &quot;2026-07-30T12:00:00.123Z&quot;)" computerName="e48a8263a08a" duration="00:00:00.0000208" startTime="2026-08-03T17:47:30.0832375+00:00" endTime="2026-08-03T17:47:30.0832378+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="b8fec3b7-dcd5-4b0e-bc09-1b0b00f82708" />
+    <UnitTestResult executionId="ac60d462-295c-42e8-ae24-0d3abe3e1e45" testId="e198fe80-7158-dfe3-2784-6c9576c401c3" testName="Slopterm.Tests.CollectionShareCodecTests.CarriesItsFormatInThePrefix" computerName="e48a8263a08a" duration="00:00:00.0033936" startTime="2026-08-03T17:47:28.8105949+00:00" endTime="2026-08-03T17:47:28.8105951+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ac60d462-295c-42e8-ae24-0d3abe3e1e45" />
+    <UnitTestResult executionId="27d45627-86c4-4913-b4d0-6d069d55b610" testId="42eef3d6-1a1b-bc2c-2bb9-eed7f9a6da87" testName="Slopterm.Tests.CredentialResolverTests.ReportsNoKeyOnThisDeviceRatherThanConnectingWithSomethingElse" computerName="e48a8263a08a" duration="00:00:01.4323456" startTime="2026-08-03T17:46:58.3170756+00:00" endTime="2026-08-03T17:46:58.3170760+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="27d45627-86c4-4913-b4d0-6d069d55b610" />
+    <UnitTestResult executionId="241f54dd-3c74-4f62-a9bf-65677aabbdc9" testId="9bd2e220-c72e-961a-c9c4-81740a2596fd" testName="Slopterm.Tests.VaultSyncServiceTests.AnEditOnOneDeviceOverwritesTheOlderCopyOnTheOther" computerName="e48a8263a08a" duration="00:00:01.2883107" startTime="2026-08-03T17:47:13.0189714+00:00" endTime="2026-08-03T17:47:13.0189717+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="241f54dd-3c74-4f62-a9bf-65677aabbdc9" />
+    <UnitTestResult executionId="f50c3328-0284-4796-84a9-9ddcbebcb6d4" testId="a1f4fcbc-e816-b8de-1560-7c097c5babe2" testName="Slopterm.Tests.HybridLogicalClockTests.ParsesAnythingUnusableAsTheEpoch(value: &quot;garbage&quot;)" computerName="e48a8263a08a" duration="00:00:00.0002856" startTime="2026-08-03T17:47:30.0814843+00:00" endTime="2026-08-03T17:47:30.0814844+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f50c3328-0284-4796-84a9-9ddcbebcb6d4" />
+    <UnitTestResult executionId="566aa968-850f-4c41-91e6-5b7b23416398" testId="dee05ed0-16b7-2bf7-c3d9-eef784c5f1d8" testName="Slopterm.Tests.CollectionCryptoTests.KeyFingerprintIsStableDistinctAndReadable" computerName="e48a8263a08a" duration="00:00:00.0281946" startTime="2026-08-03T17:46:49.0586884+00:00" endTime="2026-08-03T17:46:49.0586886+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="566aa968-850f-4c41-91e6-5b7b23416398" />
+    <UnitTestResult executionId="b342e7c5-5336-42ff-aa51-ade06cd2d494" testId="04bfe952-fb94-f9d3-6611-10bdb76d4645" testName="Slopterm.Tests.VaultSyncServiceTests.AnEditAfterADeleteWinsOverTheTombstone" computerName="e48a8263a08a" duration="00:00:01.6546280" startTime="2026-08-03T17:47:08.1169291+00:00" endTime="2026-08-03T17:47:08.1169294+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="b342e7c5-5336-42ff-aa51-ade06cd2d494" />
+    <UnitTestResult executionId="ea0b8c82-9ed1-4ccf-a9cb-d1c067f07d7c" testId="0e82ef00-9678-0855-062e-421292b832a9" testName="Slopterm.Tests.CollectionCryptoTests.EncryptingTwiceNeverProducesTheSameBytes" computerName="e48a8263a08a" duration="00:00:00.0003284" startTime="2026-08-03T17:46:49.0688613+00:00" endTime="2026-08-03T17:46:49.0688615+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ea0b8c82-9ed1-4ccf-a9cb-d1c067f07d7c" />
+    <UnitTestResult executionId="1c14956b-efb3-4f63-af87-b17783cb1d69" testId="baa5793b-4d8d-4949-34e9-a10290558d9c" testName="Slopterm.Tests.VaultSyncServiceTests.ARecordSavedOnOneDeviceReachesTheOther" computerName="e48a8263a08a" duration="00:00:01.3803243" startTime="2026-08-03T17:47:17.2205894+00:00" endTime="2026-08-03T17:47:17.2205898+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="1c14956b-efb3-4f63-af87-b17783cb1d69" />
+    <UnitTestResult executionId="9424070e-6f02-447b-9fe3-b0fd491b6710" testId="02390621-47f6-7eae-b639-73bf5ccfbf0d" testName="Slopterm.Tests.WebDavRemoteTests.RoundTripsRecordsThroughEveryVerbTheSyncLoopUses" computerName="e48a8263a08a" duration="00:00:00.0010000" startTime="2026-08-03T17:47:26.9609921+00:00" endTime="2026-08-03T17:47:26.9609923+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9424070e-6f02-447b-9fe3-b0fd491b6710">
+      <Output>
+        <ErrorInfo>
+          <Message>SLOPTERM_WEBDAV_URL not set</Message>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="21ad96f7-3693-482f-99e4-1b3e1071a31d" testId="ffa15a08-53f5-f4ed-b590-9cc41b2148ac" testName="Slopterm.Tests.WebDavIntegrationTests.ConcurrentEditsKeepBothSidesThroughARealServer" computerName="e48a8263a08a" duration="00:00:00.0010000" startTime="2026-08-03T17:47:26.9426962+00:00" endTime="2026-08-03T17:47:26.9426964+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="21ad96f7-3693-482f-99e4-1b3e1071a31d">
+      <Output>
+        <ErrorInfo>
+          <Message>SLOPTERM_WEBDAV_URL not set</Message>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="fdd42e11-3bac-4b2c-a042-e9c75480cee8" testId="77349aaa-1753-779f-55d6-ede529593f51" testName="Slopterm.Tests.CollectionShareCodecTests.RejectsAnythingThatIsntOneOfItsTokens(token: &quot;&quot;)" computerName="e48a8263a08a" duration="00:00:00.0007698" startTime="2026-08-03T17:47:26.9647820+00:00" endTime="2026-08-03T17:47:26.9647821+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="fdd42e11-3bac-4b2c-a042-e9c75480cee8" />
+    <UnitTestResult executionId="ed23503f-d0e6-4aa7-9455-f6dfe2b6264d" testId="017b9ccd-ff1b-0643-3dd1-e788df54300a" testName="Slopterm.Tests.CollectionShareCodecTests.RejectsAnythingThatIsntOneOfItsTokens(token: &quot;slopterm:collection:v1:!!!!&quot;)" computerName="e48a8263a08a" duration="00:00:00.0007655" startTime="2026-08-03T17:47:26.9647147+00:00" endTime="2026-08-03T17:47:26.9647149+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ed23503f-d0e6-4aa7-9455-f6dfe2b6264d" />
+    <UnitTestResult executionId="fcf1f8cf-9a25-4bfb-9764-cc079863d5af" testId="e5b060c5-66ff-9bf7-42a1-23cec33ce2da" testName="Slopterm.Tests.VaultSyncServiceTests.DoesntSyncAScopeTheCollectionDoesntCarry" computerName="e48a8263a08a" duration="00:00:01.3266195" startTime="2026-08-03T17:47:18.5344597+00:00" endTime="2026-08-03T17:47:18.5344601+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="fcf1f8cf-9a25-4bfb-9764-cc079863d5af" />
+    <UnitTestResult executionId="6b7ab7a3-b924-491a-a41d-ceb683957ee2" testId="8f88247e-66be-e104-f96e-bdc2018f97ab" testName="Slopterm.Tests.WebDavRemoteTests.RejectsAUrlThatIsntHttp" computerName="e48a8263a08a" duration="00:00:00.0024789" startTime="2026-08-03T17:47:26.9619363+00:00" endTime="2026-08-03T17:47:26.9619368+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="6b7ab7a3-b924-491a-a41d-ceb683957ee2" />
+    <UnitTestResult executionId="a3435904-4fed-40c6-93b8-f67fe75202c7" testId="444961b3-2c6d-e8bc-d1ef-fa18eda762da" testName="Slopterm.Tests.HybridLogicalClockTests.NeverIssuesTheSameValueTwice" computerName="e48a8263a08a" duration="00:00:00.0142080" startTime="2026-08-03T17:47:30.0960761+00:00" endTime="2026-08-03T17:47:30.0960763+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a3435904-4fed-40c6-93b8-f67fe75202c7" />
+    <UnitTestResult executionId="a87175d0-c81f-451b-b094-f3d0aba57fae" testId="d2bc2e0b-f0b1-50b0-b03d-d0f5cf78c923" testName="Slopterm.Tests.CollectionShareCodecTests.RoundTripsAPassphraseWrappedToken" computerName="e48a8263a08a" duration="00:00:01.2513481" startTime="2026-08-03T17:47:30.0616686+00:00" endTime="2026-08-03T17:47:30.0616688+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a87175d0-c81f-451b-b094-f3d0aba57fae" />
+    <UnitTestResult executionId="9de56225-bbd6-495f-ad5d-55dd415aa13f" testId="5df95f92-d822-2ac4-88f5-db2748997ad7" testName="Slopterm.Tests.CollectionCryptoTests.GeneratesADistinctCollectionIdEveryTime" computerName="e48a8263a08a" duration="00:00:00.0010463" startTime="2026-08-03T17:46:49.0689611+00:00" endTime="2026-08-03T17:46:49.0689613+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9de56225-bbd6-495f-ad5d-55dd415aa13f" />
+    <UnitTestResult executionId="43277c82-ad63-42d2-9c71-726f3068b592" testId="e207733b-4e5c-1b59-c14b-c82e9bb1f146" testName="Slopterm.Tests.CredentialResolverTests.IgnoresCredentialKindsThatArentForConnecting" computerName="e48a8263a08a" duration="00:00:01.3639292" startTime="2026-08-03T17:47:05.1586947+00:00" endTime="2026-08-03T17:47:05.1586949+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="43277c82-ad63-42d2-9c71-726f3068b592" />
+    <UnitTestResult executionId="54974cfb-10c2-4f37-83cb-c88e980b4325" testId="f3280c23-027a-ad8f-0c3d-66466293ec0e" testName="Slopterm.Tests.CollectionShareCodecTests.RejectsAnythingThatIsntOneOfItsTokens(token: &quot;slopterm:collection:v1:&quot;)" computerName="e48a8263a08a" duration="00:00:00.0000419" startTime="2026-08-03T17:47:26.9654194+00:00" endTime="2026-08-03T17:47:26.9654195+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="54974cfb-10c2-4f37-83cb-c88e980b4325" />
+    <UnitTestResult executionId="7e5bcf08-f8cd-42bc-8e82-3211765c8fa6" testId="465822e1-3dfb-b4f9-7a1c-eaadf5be5c10" testName="Slopterm.Tests.CollectionShareCodecTests.RoundTripsAnInvite" computerName="e48a8263a08a" duration="00:00:00.0064473" startTime="2026-08-03T17:47:26.9717842+00:00" endTime="2026-08-03T17:47:26.9717844+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="7e5bcf08-f8cd-42bc-8e82-3211765c8fa6" />
+    <UnitTestResult executionId="9fe58028-fc0e-4f16-a5b6-dd6875e6d60a" testId="50a79d9a-729d-94c5-3c94-9cda87bc27c6" testName="Slopterm.Tests.CollectionShareCodecTests.RejectsAnythingThatIsntOneOfItsTokens(token: &quot;hello&quot;)" computerName="e48a8263a08a" duration="00:00:00.0001785" startTime="2026-08-03T17:47:26.9653781+00:00" endTime="2026-08-03T17:47:26.9653782+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9fe58028-fc0e-4f16-a5b6-dd6875e6d60a" />
+    <UnitTestResult executionId="399228a6-2333-492d-8190-4c6e9e787bab" testId="1c182ae5-f201-71c5-46a6-ed4c74bfea6d" testName="Slopterm.Tests.CredentialResolverTests.FallsBackToAnyOtherCollectionThisDeviceHolds" computerName="e48a8263a08a" duration="00:00:01.2976973" startTime="2026-08-03T17:47:06.4579368+00:00" endTime="2026-08-03T17:47:06.4579371+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="399228a6-2333-492d-8190-4c6e9e787bab" />
+    <UnitTestResult executionId="af388053-acc7-40b3-babc-c9a81f129022" testId="eacf0f88-eeb6-33b8-0e5b-d752d937e9a4" testName="Slopterm.Tests.WebDavRemoteTests.ReportsPreconditionFailuresRatherThanThrowing" computerName="e48a8263a08a" duration="00:00:00.0010000" startTime="2026-08-03T17:47:26.9612313+00:00" endTime="2026-08-03T17:47:26.9612315+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="af388053-acc7-40b3-babc-c9a81f129022">
+      <Output>
+        <ErrorInfo>
+          <Message>SLOPTERM_WEBDAV_URL not set</Message>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="b27d8cd0-62bb-4fe5-8168-9a733208a01e" testId="ace97d1e-bb36-4bd8-cb57-74305f304697" testName="Slopterm.Tests.HybridLogicalClockTests.RoundTripsThroughItsSerializedForm" computerName="e48a8263a08a" duration="00:00:00.0077083" startTime="2026-08-03T17:47:30.0774677+00:00" endTime="2026-08-03T17:47:30.0774679+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="b27d8cd0-62bb-4fe5-8168-9a733208a01e" />
+    <UnitTestResult executionId="82468b37-7f07-47c2-92cb-e132213baa0e" testId="d92550b1-0ca2-1c5e-d0ad-b298d5786c0c" testName="Slopterm.Tests.CollectionShareCodecTests.UnwrappedTokensDontClaimToNeedAPassphrase" computerName="e48a8263a08a" duration="00:00:00.0008228" startTime="2026-08-03T17:47:28.8106364+00:00" endTime="2026-08-03T17:47:28.8106365+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="82468b37-7f07-47c2-92cb-e132213baa0e" />
+    <UnitTestResult executionId="1b7fe703-1b06-4a46-a941-9be25e1b8c03" testId="a373e96e-b62c-eb77-19ec-ac8fabf309f6" testName="Slopterm.Tests.VaultSyncServiceTests.RetriesAWriteThatLostAPreconditionRace" computerName="e48a8263a08a" duration="00:00:01.3402051" startTime="2026-08-03T17:47:21.5133458+00:00" endTime="2026-08-03T17:47:21.5133462+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="1b7fe703-1b06-4a46-a941-9be25e1b8c03" />
+    <UnitTestResult executionId="37c6f703-9031-4daf-b876-3d7b68f1a63e" testId="73304184-e608-ecdd-9533-712d61466eb6" testName="Slopterm.Tests.VaultSyncServiceTests.BothSidesEditingKeepsTheLoserAsAConflictCopy" computerName="e48a8263a08a" duration="00:00:01.2996989" startTime="2026-08-03T17:47:25.6272063+00:00" endTime="2026-08-03T17:47:25.6272066+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="37c6f703-9031-4daf-b876-3d7b68f1a63e" />
+    <UnitTestResult executionId="ca442afc-b0ba-43f4-a12f-f99b8926a83a" testId="7e62a782-392b-a478-cebd-8214101a20c5" testName="Slopterm.Tests.VaultSyncServiceTests.ADeleteOnOneDevicePropagatesAndStaysDeleted" computerName="e48a8263a08a" duration="00:00:01.6295005" startTime="2026-08-03T17:47:20.1800744+00:00" endTime="2026-08-03T17:47:20.1800750+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ca442afc-b0ba-43f4-a12f-f99b8926a83a" />
+    <UnitTestResult executionId="78a3d703-8616-4fd5-b901-0ae70523707d" testId="ed7bdbc4-8e0d-b459-05e1-5ea6a55b5e1d" testName="Slopterm.Tests.CollectionCryptoTests.GeneratesADistinctKeyEveryTime" computerName="e48a8263a08a" duration="00:00:00.0395789" startTime="2026-08-03T17:46:49.0368240+00:00" endTime="2026-08-03T17:46:49.0369313+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="78a3d703-8616-4fd5-b901-0ae70523707d" />
+    <UnitTestResult executionId="1a0dc0a9-b674-4461-b44a-65282c6bb06a" testId="27b0f2a2-b48b-3ccb-d1da-68ddd4669ec1" testName="Slopterm.Tests.WebDavIntegrationTests.TwoDevicesConvergeThroughARealServer" computerName="e48a8263a08a" duration="00:00:00.0010000" startTime="2026-08-03T17:47:26.9539707+00:00" endTime="2026-08-03T17:47:26.9539709+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="1a0dc0a9-b674-4461-b44a-65282c6bb06a">
+      <Output>
+        <ErrorInfo>
+          <Message>SLOPTERM_WEBDAV_URL not set</Message>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="8c9a5c7e-64fd-432d-8fd9-00c1f2f1f27c" testId="ed219a79-dfe4-17e2-f88b-1555e253229f" testName="Slopterm.Tests.CollectionShareCodecTests.RoundTripsAWholeSyncConfiguration" computerName="e48a8263a08a" duration="00:00:00.0061813" startTime="2026-08-03T17:47:30.0758767+00:00" endTime="2026-08-03T17:47:30.0758769+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="8c9a5c7e-64fd-432d-8fd9-00c1f2f1f27c" />
+    <UnitTestResult executionId="630a1985-f263-470e-b7b9-5bece236fff3" testId="34e91c7f-8b58-2310-9fbf-5980191d33cb" testName="Slopterm.Tests.VaultSyncServiceTests.TheLocalCollectionIsNeverListedAsSyncable" computerName="e48a8263a08a" duration="00:00:01.3766880" startTime="2026-08-03T17:47:14.3953134+00:00" endTime="2026-08-03T17:47:14.3953137+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="630a1985-f263-470e-b7b9-5bece236fff3" />
+    <UnitTestResult executionId="031acf6f-622b-41a4-ad2d-6067f374fc12" testId="c366ff22-21b6-eacd-2440-193eee8a9102" testName="Slopterm.Tests.CredentialResolverTests.TheLocalCollectionBeatsTheHostsOwnCollection" computerName="e48a8263a08a" duration="00:00:01.4061198" startTime="2026-08-03T17:46:59.7240802+00:00" endTime="2026-08-03T17:46:59.7240804+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="031acf6f-622b-41a4-ad2d-6067f374fc12" />
+    <UnitTestResult executionId="f7acd64f-44fb-4660-801a-212b0333ca66" testId="060cf423-72e3-14b7-68ce-860f034fbcb7" testName="Slopterm.Tests.HybridLogicalClockTests.StampsAfterAPeerEvenWhenThisClockIsBehind" computerName="e48a8263a08a" duration="00:00:00.0011061" startTime="2026-08-03T17:47:30.0812536+00:00" endTime="2026-08-03T17:47:30.0812537+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f7acd64f-44fb-4660-801a-212b0333ca66" />
+    <UnitTestResult executionId="187d8b54-1bce-4328-a63d-a45cbafb1e76" testId="45f2e750-b21c-b90a-09cf-d05d0a4953f0" testName="Slopterm.Tests.VaultSyncServiceTests.LeavingKeepsTheRecordsLocallyByDefault" computerName="e48a8263a08a" duration="00:00:01.4274426" startTime="2026-08-03T17:47:15.8235151+00:00" endTime="2026-08-03T17:47:15.8235154+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="187d8b54-1bce-4328-a63d-a45cbafb1e76" />
+    <UnitTestResult executionId="3d76bb65-e4ea-4e7f-b3ea-d0068606c037" testId="3502e061-f81d-d8fe-3328-cce0a12c38fe" testName="Slopterm.Tests.HybridLogicalClockTests.DoesntInheritABehindPeersCounter" computerName="e48a8263a08a" duration="00:00:00.0011756" startTime="2026-08-03T17:47:30.0813745+00:00" endTime="2026-08-03T17:47:30.0813746+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="3d76bb65-e4ea-4e7f-b3ea-d0068606c037" />
+    <UnitTestResult executionId="ab3cf2b9-2d7e-49b2-a2c6-399f32b05c49" testId="889dff0c-cda9-e59a-b47f-c5ea36b2b1ce" testName="Slopterm.Tests.CredentialResolverTests.MatchesNamesCaseInsensitively" computerName="e48a8263a08a" duration="00:00:01.3628039" startTime="2026-08-03T17:47:02.5127384+00:00" endTime="2026-08-03T17:47:02.5127387+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="ab3cf2b9-2d7e-49b2-a2c6-399f32b05c49" />
+    <UnitTestResult executionId="0c2f1d9b-022d-4029-a945-ad2ed3d47170" testId="5206b762-cc18-3e6b-af1c-3dc696e6473a" testName="Slopterm.Tests.CollectionShareCodecTests.RefusesAPassphraseWrappedTokenWithoutOrWithTheWrongPassphrase" computerName="e48a8263a08a" duration="00:00:01.8339501" startTime="2026-08-03T17:47:28.8104862+00:00" endTime="2026-08-03T17:47:28.8104866+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="0c2f1d9b-022d-4029-a945-ad2ed3d47170" />
+    <UnitTestResult executionId="a8b55ac1-4738-4254-9c48-6ff04f5bc89c" testId="96bd3bc6-f493-dcc9-71ea-289a724d3fe0" testName="Slopterm.Tests.CredentialResolverTests.DescribeNeverCarriesTheSecret" computerName="e48a8263a08a" duration="00:00:04.4787921" startTime="2026-08-03T17:46:53.5496619+00:00" endTime="2026-08-03T17:46:53.5496622+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a8b55ac1-4738-4254-9c48-6ff04f5bc89c" />
+    <UnitTestResult executionId="baaec37d-ad03-4f74-b9a8-a11ad5999739" testId="80e9bea8-0cd1-e930-6c99-7f1fea9cef6a" testName="Slopterm.Tests.VaultSyncServiceTests.ReportsAReadOnlyShareAsSuchRatherThanAsAGenericFailure" computerName="e48a8263a08a" duration="00:00:01.4737084" startTime="2026-08-03T17:47:24.3266582+00:00" endTime="2026-08-03T17:47:24.3266585+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="baaec37d-ad03-4f74-b9a8-a11ad5999739" />
+    <UnitTestResult executionId="14133765-c01f-4257-9f8c-af88754ea699" testId="21170c22-35bc-f34b-f68d-39e80a76a48e" testName="Slopterm.Tests.HybridLogicalClockTests.ParsesAnythingUnusableAsTheEpoch(value: null)" computerName="e48a8263a08a" duration="00:00:00.0002603" startTime="2026-08-03T17:47:30.0814403+00:00" endTime="2026-08-03T17:47:30.0814404+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="14133765-c01f-4257-9f8c-af88754ea699" />
+    <UnitTestResult executionId="721a49cd-1be0-4e7f-95d3-74e511d1f3b1" testId="1169cd94-c0e7-0844-b786-b04448fa3759" testName="Slopterm.Tests.VaultSyncServiceTests.ATieBetweenTwoDevicesResolvesTheSameWayOnBoth" computerName="e48a8263a08a" duration="00:00:01.8242237" startTime="2026-08-03T17:47:09.9446913+00:00" endTime="2026-08-03T17:47:09.9446917+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="721a49cd-1be0-4e7f-95d3-74e511d1f3b1" />
+    <UnitTestResult executionId="5ce4f297-f855-499f-9710-afdb6df612d3" testId="c7b98515-873e-4c51-15e6-b7d069e96c30" testName="Slopterm.Tests.WebDavIntegrationTests.TheServerOnlyEverHoldsCiphertext" computerName="e48a8263a08a" duration="00:00:00.0010000" startTime="2026-08-03T17:47:26.9421766+00:00" endTime="2026-08-03T17:47:26.9421769+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="NotExecuted" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="5ce4f297-f855-499f-9710-afdb6df612d3">
+      <Output>
+        <ErrorInfo>
+          <Message>SLOPTERM_WEBDAV_URL not set</Message>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="7af2ab7b-3839-4205-940f-63010b8c5419" testId="3638f16d-ec7b-19f3-39c7-c4b79b7f1212" testName="Slopterm.Tests.VaultSyncServiceTests.ASecondPassDoesntRefetchUnchangedRecords" computerName="e48a8263a08a" duration="00:00:01.7829891" startTime="2026-08-03T17:47:11.7292373+00:00" endTime="2026-08-03T17:47:11.7292376+00:00" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="7af2ab7b-3839-4205-940f-63010b8c5419" />
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.RoundTripsAWholeSyncConfiguration" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="ed219a79-dfe4-17e2-f88b-1555e253229f">
+      <Execution id="8c9a5c7e-64fd-432d-8fd9-00c1f2f1f27c" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="RoundTripsAWholeSyncConfiguration" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.HybridLogicalClockTests.DoesntInheritABehindPeersCounter" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="3502e061-f81d-d8fe-3328-cce0a12c38fe">
+      <Execution id="3d76bb65-e4ea-4e7f-b3ea-d0068606c037" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.HybridLogicalClockTests" name="DoesntInheritABehindPeersCounter" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.RejectsAnythingThatIsntOneOfItsTokens(token: &quot;slopterm:collection:v1:&quot;)" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="f3280c23-027a-ad8f-0c3d-66466293ec0e">
+      <Execution id="54974cfb-10c2-4f37-83cb-c88e980b4325" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="RejectsAnythingThatIsntOneOfItsTokens" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionCryptoTests.GeneratesADistinctKeyEveryTime" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="ed7bdbc4-8e0d-b459-05e1-5ea6a55b5e1d">
+      <Execution id="78a3d703-8616-4fd5-b901-0ae70523707d" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionCryptoTests" name="GeneratesADistinctKeyEveryTime" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.WebDavRemoteTests.RoundTripsRecordsThroughEveryVerbTheSyncLoopUses" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="02390621-47f6-7eae-b639-73bf5ccfbf0d">
+      <Execution id="9424070e-6f02-447b-9fe3-b0fd491b6710" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.WebDavRemoteTests" name="RoundTripsRecordsThroughEveryVerbTheSyncLoopUses" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.HybridLogicalClockTests.NeverIssuesTheSameValueTwice" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="444961b3-2c6d-e8bc-d1ef-fa18eda762da">
+      <Execution id="a3435904-4fed-40c6-93b8-f67fe75202c7" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.HybridLogicalClockTests" name="NeverIssuesTheSameValueTwice" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.RejectsAnythingThatIsntOneOfItsTokens(token: &quot;slopterm:collection:v1:!!!!&quot;)" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="017b9ccd-ff1b-0643-3dd1-e788df54300a">
+      <Execution id="ed23503f-d0e6-4aa7-9455-f6dfe2b6264d" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="RejectsAnythingThatIsntOneOfItsTokens" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.HybridLogicalClockTests.StampsAfterAPeerEvenWhenThisClockIsBehind" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="060cf423-72e3-14b7-68ce-860f034fbcb7">
+      <Execution id="f7acd64f-44fb-4660-801a-212b0333ca66" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.HybridLogicalClockTests" name="StampsAfterAPeerEvenWhenThisClockIsBehind" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CredentialResolverTests.TheLocalCollectionBeatsTheHostsOwnCollection" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="c366ff22-21b6-eacd-2440-193eee8a9102">
+      <Execution id="031acf6f-622b-41a4-ad2d-6067f374fc12" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CredentialResolverTests" name="TheLocalCollectionBeatsTheHostsOwnCollection" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.RoundTripsAnInvite" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="465822e1-3dfb-b4f9-7a1c-eaadf5be5c10">
+      <Execution id="7e5bcf08-f8cd-42bc-8e82-3211765c8fa6" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="RoundTripsAnInvite" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.RejectsAnythingThatIsntOneOfItsTokens(token: &quot;slopterm:host:v1:abc&quot;)" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="4e16dc8e-dcc7-043a-dff8-4c0f731bc698">
+      <Execution id="c1b9cd96-12be-4ace-b588-47ac7753be89" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="RejectsAnythingThatIsntOneOfItsTokens" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.HybridLogicalClockTests.RoundTripsThroughItsSerializedForm" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="ace97d1e-bb36-4bd8-cb57-74305f304697">
+      <Execution id="b27d8cd0-62bb-4fe5-8168-9a733208a01e" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.HybridLogicalClockTests" name="RoundTripsThroughItsSerializedForm" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.NothingReadableLeavesTheDevice" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="dc3366cd-f140-f2aa-a8b4-dcdc0fcb6960">
+      <Execution id="632af498-5f8c-40cd-b9a7-ac521742b0c8" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="NothingReadableLeavesTheDevice" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.AnEditOnOneDeviceOverwritesTheOlderCopyOnTheOther" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="9bd2e220-c72e-961a-c9c4-81740a2596fd">
+      <Execution id="241f54dd-3c74-4f62-a9bf-65677aabbdc9" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="AnEditOnOneDeviceOverwritesTheOlderCopyOnTheOther" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.HybridLogicalClockTests.ParsesAnythingUnusableAsTheEpoch(value: &quot;2026-07-30T12:00:00.123Z&quot;)" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="7395c2d5-dbf5-675f-dcc3-5b1269890c18">
+      <Execution id="b8fec3b7-dcd5-4b0e-bc09-1b0b00f82708" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.HybridLogicalClockTests" name="ParsesAnythingUnusableAsTheEpoch" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CredentialResolverTests.ReportsNoKeyOnThisDeviceRatherThanConnectingWithSomethingElse" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="42eef3d6-1a1b-bc2c-2bb9-eed7f9a6da87">
+      <Execution id="27d45627-86c4-4913-b4d0-6d069d55b610" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CredentialResolverTests" name="ReportsNoKeyOnThisDeviceRatherThanConnectingWithSomethingElse" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.HybridLogicalClockTests.ParsesAnythingUnusableAsTheEpoch(value: &quot;garbage&quot;)" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="a1f4fcbc-e816-b8de-1560-7c097c5babe2">
+      <Execution id="f50c3328-0284-4796-84a9-9ddcbebcb6d4" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.HybridLogicalClockTests" name="ParsesAnythingUnusableAsTheEpoch" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.RejectsAnythingThatIsntOneOfItsTokens(token: &quot;hello&quot;)" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="50a79d9a-729d-94c5-3c94-9cda87bc27c6">
+      <Execution id="9fe58028-fc0e-4f16-a5b6-dd6875e6d60a" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="RejectsAnythingThatIsntOneOfItsTokens" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.TheLocalCollectionIsNeverListedAsSyncable" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="34e91c7f-8b58-2310-9fbf-5980191d33cb">
+      <Execution id="630a1985-f263-470e-b7b9-5bece236fff3" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="TheLocalCollectionIsNeverListedAsSyncable" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.DevicesCanUseTheirOwnWebDavAccounts" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="8d8dc28c-9c06-eab3-d1c9-135b98593f8f">
+      <Execution id="28eade55-31f0-4a3b-8e0a-7ec7e06c713e" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="DevicesCanUseTheirOwnWebDavAccounts" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.ASecondPassDoesntRefetchUnchangedRecords" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="3638f16d-ec7b-19f3-39c7-c4b79b7f1212">
+      <Execution id="7af2ab7b-3839-4205-940f-63010b8c5419" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="ASecondPassDoesntRefetchUnchangedRecords" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.UnwrappedTokensDontClaimToNeedAPassphrase" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="d92550b1-0ca2-1c5e-d0ad-b298d5786c0c">
+      <Execution id="82468b37-7f07-47c2-92cb-e132213baa0e" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="UnwrappedTokensDontClaimToNeedAPassphrase" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.WebDavIntegrationTests.ConcurrentEditsKeepBothSidesThroughARealServer" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="ffa15a08-53f5-f4ed-b590-9cc41b2148ac">
+      <Execution id="21ad96f7-3693-482f-99e4-1b3e1071a31d" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.WebDavIntegrationTests" name="ConcurrentEditsKeepBothSidesThroughARealServer" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.ARecordSavedOnOneDeviceReachesTheOther" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="baa5793b-4d8d-4949-34e9-a10290558d9c">
+      <Execution id="1c14956b-efb3-4f63-af87-b17783cb1d69" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="ARecordSavedOnOneDeviceReachesTheOther" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CredentialResolverTests.FallsBackToAnyOtherCollectionThisDeviceHolds" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="1c182ae5-f201-71c5-46a6-ed4c74bfea6d">
+      <Execution id="399228a6-2333-492d-8190-4c6e9e787bab" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CredentialResolverTests" name="FallsBackToAnyOtherCollectionThisDeviceHolds" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionCryptoTests.GeneratesADistinctCollectionIdEveryTime" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="5df95f92-d822-2ac4-88f5-db2748997ad7">
+      <Execution id="9de56225-bbd6-495f-ad5d-55dd415aa13f" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionCryptoTests" name="GeneratesADistinctCollectionIdEveryTime" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.RoundTripsAPassphraseWrappedToken" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="d2bc2e0b-f0b1-50b0-b03d-d0f5cf78c923">
+      <Execution id="a87175d0-c81f-451b-b094-f3d0aba57fae" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="RoundTripsAPassphraseWrappedToken" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.WebDavRemoteTests.RejectsAUrlThatIsntHttp" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="8f88247e-66be-e104-f96e-bdc2018f97ab">
+      <Execution id="6b7ab7a3-b924-491a-a41d-ceb683957ee2" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.WebDavRemoteTests" name="RejectsAUrlThatIsntHttp" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CredentialResolverTests.SkipsAnUnresolvableCredentialForOneThatWorks" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="8c3e9572-a4e0-399c-9fe0-0f0550b315b9">
+      <Execution id="4ad956e9-ccaf-475d-9eed-e9f7a754dd39" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CredentialResolverTests" name="SkipsAnUnresolvableCredentialForOneThatWorks" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.HybridLogicalClockTests.ParsesAnythingUnusableAsTheEpoch(value: &quot;&quot;)" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="96324546-0b4c-657a-38bf-87cae044038f">
+      <Execution id="f89230b7-b886-4133-b2ea-5376e566a343" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.HybridLogicalClockTests" name="ParsesAnythingUnusableAsTheEpoch" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.WebDavIntegrationTests.TheServerOnlyEverHoldsCiphertext" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="c7b98515-873e-4c51-15e6-b7d069e96c30">
+      <Execution id="5ce4f297-f855-499f-9710-afdb6df612d3" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.WebDavIntegrationTests" name="TheServerOnlyEverHoldsCiphertext" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.CarriesItsFormatInThePrefix" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="e198fe80-7158-dfe3-2784-6c9576c401c3">
+      <Execution id="ac60d462-295c-42e8-ae24-0d3abe3e1e45" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="CarriesItsFormatInThePrefix" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.RefusesAPassphraseWrappedTokenWithoutOrWithTheWrongPassphrase" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="5206b762-cc18-3e6b-af1c-3dc696e6473a">
+      <Execution id="0c2f1d9b-022d-4029-a945-ad2ed3d47170" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="RefusesAPassphraseWrappedTokenWithoutOrWithTheWrongPassphrase" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.WebDavRemoteTests.ReportsPreconditionFailuresRatherThanThrowing" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="eacf0f88-eeb6-33b8-0e5b-d752d937e9a4">
+      <Execution id="af388053-acc7-40b3-babc-c9a81f129022" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.WebDavRemoteTests" name="ReportsPreconditionFailuresRatherThanThrowing" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CredentialResolverTests.MatchesNamesCaseInsensitively" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="889dff0c-cda9-e59a-b47f-c5ea36b2b1ce">
+      <Execution id="ab3cf2b9-2d7e-49b2-a2c6-399f32b05c49" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CredentialResolverTests" name="MatchesNamesCaseInsensitively" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionCryptoTests.RoundTripsARecordUnderTheCollectionKey" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="0a4e1810-0bf7-19b5-6dfd-536b16e6da89">
+      <Execution id="b08a3822-50e1-453a-a935-e6f436c23b0a" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionCryptoTests" name="RoundTripsARecordUnderTheCollectionKey" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.BothSidesEditingKeepsTheLoserAsAConflictCopy" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="73304184-e608-ecdd-9533-712d61466eb6">
+      <Execution id="37c6f703-9031-4daf-b876-3d7b68f1a63e" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="BothSidesEditingKeepsTheLoserAsAConflictCopy" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.HybridLogicalClockTests.ParsesAnythingUnusableAsTheEpoch(value: null)" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="21170c22-35bc-f34b-f68d-39e80a76a48e">
+      <Execution id="14133765-c01f-4257-9f8c-af88754ea699" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.HybridLogicalClockTests" name="ParsesAnythingUnusableAsTheEpoch" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.WebDavIntegrationTests.TwoDevicesConvergeThroughARealServer" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="27b0f2a2-b48b-3ccb-d1da-68ddd4669ec1">
+      <Execution id="1a0dc0a9-b674-4461-b44a-65282c6bb06a" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.WebDavIntegrationTests" name="TwoDevicesConvergeThroughARealServer" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CredentialResolverTests.TheSameNameResolvesToADifferentLocalKeyOnEachDevice" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="9bc58c4f-cbc4-efed-8f90-e6abb762f55f">
+      <Execution id="5d48c43b-a7fa-4d88-89cb-cdc87ac7fdf2" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CredentialResolverTests" name="TheSameNameResolvesToADifferentLocalKeyOnEachDevice" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CredentialResolverTests.IgnoresCredentialKindsThatArentForConnecting" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="e207733b-4e5c-1b59-c14b-c82e9bb1f146">
+      <Execution id="43277c82-ad63-42d2-9c71-726f3068b592" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CredentialResolverTests" name="IgnoresCredentialKindsThatArentForConnecting" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionCryptoTests.KeyFingerprintIsStableDistinctAndReadable" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="dee05ed0-16b7-2bf7-c3d9-eef784c5f1d8">
+      <Execution id="566aa968-850f-4c41-91e6-5b7b23416398" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionCryptoTests" name="KeyFingerprintIsStableDistinctAndReadable" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionCryptoTests.EncryptingTwiceNeverProducesTheSameBytes" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="0e82ef00-9678-0855-062e-421292b832a9">
+      <Execution id="ea0b8c82-9ed1-4ccf-a9cb-d1c067f07d7c" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionCryptoTests" name="EncryptingTwiceNeverProducesTheSameBytes" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CredentialResolverTests.FallsBackToTheHostsOwnCollection" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="430204c9-0521-a730-6d2e-f3540ef7fdc4">
+      <Execution id="64aee0db-15c3-4a93-8b12-d5e9ccd0a828" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CredentialResolverTests" name="FallsBackToTheHostsOwnCollection" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.HybridLogicalClockTests.OrdersByPhysicalThenCounterThenNode" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="6849cfb4-3363-071d-8910-aa2cbb6a33f2">
+      <Execution id="330e6714-3f9d-4049-bb28-ff3722ca05d8" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.HybridLogicalClockTests" name="OrdersByPhysicalThenCounterThenNode" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.LeavingKeepsTheRecordsLocallyByDefault" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="45f2e750-b21c-b90a-09cf-d05d0a4953f0">
+      <Execution id="187d8b54-1bce-4328-a63d-a45cbafb1e76" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="LeavingKeepsTheRecordsLocallyByDefault" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionCryptoTests.ADifferentKeyCannotReadTheRecord" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="49bd07ab-c8c8-3778-5ebb-ff4ba300a01f">
+      <Execution id="7c646fca-8ea4-4792-a06f-2eee65f806fe" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionCryptoTests" name="ADifferentKeyCannotReadTheRecord" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.AnEditAfterADeleteWinsOverTheTombstone" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="04bfe952-fb94-f9d3-6611-10bdb76d4645">
+      <Execution id="b342e7c5-5336-42ff-aa51-ade06cd2d494" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="AnEditAfterADeleteWinsOverTheTombstone" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.ReportsAReadOnlyShareAsSuchRatherThanAsAGenericFailure" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="80e9bea8-0cd1-e930-6c99-7f1fea9cef6a">
+      <Execution id="baaec37d-ad03-4f74-b9a8-a11ad5999739" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="ReportsAReadOnlyShareAsSuchRatherThanAsAGenericFailure" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CredentialResolverTests.PassesInlineCredentialsStraightThrough" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="045e6a50-629f-2e28-9672-b26a2baab094">
+      <Execution id="44be10d8-4937-4b81-8933-1ac5c8df0365" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CredentialResolverTests" name="PassesInlineCredentialsStraightThrough" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CollectionShareCodecTests.RejectsAnythingThatIsntOneOfItsTokens(token: &quot;&quot;)" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="77349aaa-1753-779f-55d6-ede529593f51">
+      <Execution id="fdd42e11-3bac-4b2c-a042-e9c75480cee8" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CollectionShareCodecTests" name="RejectsAnythingThatIsntOneOfItsTokens" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.CredentialResolverTests.DescribeNeverCarriesTheSecret" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="96bd3bc6-f493-dcc9-71ea-289a724d3fe0">
+      <Execution id="a8b55ac1-4738-4254-9c48-6ff04f5bc89c" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.CredentialResolverTests" name="DescribeNeverCarriesTheSecret" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.RetriesAWriteThatLostAPreconditionRace" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="a373e96e-b62c-eb77-19ec-ac8fabf309f6">
+      <Execution id="1b7fe703-1b06-4a46-a941-9be25e1b8c03" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="RetriesAWriteThatLostAPreconditionRace" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.DoesntSyncAScopeTheCollectionDoesntCarry" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="e5b060c5-66ff-9bf7-42a1-23cec33ce2da">
+      <Execution id="fcf1f8cf-9a25-4bfb-9764-cc079863d5af" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="DoesntSyncAScopeTheCollectionDoesntCarry" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.ATieBetweenTwoDevicesResolvesTheSameWayOnBoth" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="1169cd94-c0e7-0844-b786-b04448fa3759">
+      <Execution id="721a49cd-1be0-4e7f-95d3-74e511d1f3b1" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="ATieBetweenTwoDevicesResolvesTheSameWayOnBoth" />
+    </UnitTest>
+    <UnitTest name="Slopterm.Tests.VaultSyncServiceTests.ADeleteOnOneDevicePropagatesAndStaysDeleted" storage="/workspace/wt-webdav-sync/tests/bin/debug/net10.0/slopterm.tests.dll" id="7e62a782-392b-a478-cebd-8214101a20c5">
+      <Execution id="ca442afc-b0ba-43f4-a12f-f99b8926a83a" />
+      <TestMethod codeBase="/workspace/wt-webdav-sync/tests/bin/Debug/net10.0/Slopterm.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner2/netcoreapp" className="Slopterm.Tests.VaultSyncServiceTests" name="ADeleteOnOneDevicePropagatesAndStaysDeleted" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="4e16dc8e-dcc7-043a-dff8-4c0f731bc698" executionId="c1b9cd96-12be-4ace-b588-47ac7753be89" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="dc3366cd-f140-f2aa-a8b4-dcdc0fcb6960" executionId="632af498-5f8c-40cd-b9a7-ac521742b0c8" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="430204c9-0521-a730-6d2e-f3540ef7fdc4" executionId="64aee0db-15c3-4a93-8b12-d5e9ccd0a828" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="9bc58c4f-cbc4-efed-8f90-e6abb762f55f" executionId="5d48c43b-a7fa-4d88-89cb-cdc87ac7fdf2" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="96324546-0b4c-657a-38bf-87cae044038f" executionId="f89230b7-b886-4133-b2ea-5376e566a343" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="0a4e1810-0bf7-19b5-6dfd-536b16e6da89" executionId="b08a3822-50e1-453a-a935-e6f436c23b0a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="49bd07ab-c8c8-3778-5ebb-ff4ba300a01f" executionId="7c646fca-8ea4-4792-a06f-2eee65f806fe" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="045e6a50-629f-2e28-9672-b26a2baab094" executionId="44be10d8-4937-4b81-8933-1ac5c8df0365" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="8d8dc28c-9c06-eab3-d1c9-135b98593f8f" executionId="28eade55-31f0-4a3b-8e0a-7ec7e06c713e" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="8c3e9572-a4e0-399c-9fe0-0f0550b315b9" executionId="4ad956e9-ccaf-475d-9eed-e9f7a754dd39" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="6849cfb4-3363-071d-8910-aa2cbb6a33f2" executionId="330e6714-3f9d-4049-bb28-ff3722ca05d8" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="7395c2d5-dbf5-675f-dcc3-5b1269890c18" executionId="b8fec3b7-dcd5-4b0e-bc09-1b0b00f82708" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="e198fe80-7158-dfe3-2784-6c9576c401c3" executionId="ac60d462-295c-42e8-ae24-0d3abe3e1e45" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="42eef3d6-1a1b-bc2c-2bb9-eed7f9a6da87" executionId="27d45627-86c4-4913-b4d0-6d069d55b610" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="9bd2e220-c72e-961a-c9c4-81740a2596fd" executionId="241f54dd-3c74-4f62-a9bf-65677aabbdc9" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="a1f4fcbc-e816-b8de-1560-7c097c5babe2" executionId="f50c3328-0284-4796-84a9-9ddcbebcb6d4" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="dee05ed0-16b7-2bf7-c3d9-eef784c5f1d8" executionId="566aa968-850f-4c41-91e6-5b7b23416398" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="04bfe952-fb94-f9d3-6611-10bdb76d4645" executionId="b342e7c5-5336-42ff-aa51-ade06cd2d494" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="0e82ef00-9678-0855-062e-421292b832a9" executionId="ea0b8c82-9ed1-4ccf-a9cb-d1c067f07d7c" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="baa5793b-4d8d-4949-34e9-a10290558d9c" executionId="1c14956b-efb3-4f63-af87-b17783cb1d69" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="02390621-47f6-7eae-b639-73bf5ccfbf0d" executionId="9424070e-6f02-447b-9fe3-b0fd491b6710" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="ffa15a08-53f5-f4ed-b590-9cc41b2148ac" executionId="21ad96f7-3693-482f-99e4-1b3e1071a31d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="77349aaa-1753-779f-55d6-ede529593f51" executionId="fdd42e11-3bac-4b2c-a042-e9c75480cee8" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="017b9ccd-ff1b-0643-3dd1-e788df54300a" executionId="ed23503f-d0e6-4aa7-9455-f6dfe2b6264d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="e5b060c5-66ff-9bf7-42a1-23cec33ce2da" executionId="fcf1f8cf-9a25-4bfb-9764-cc079863d5af" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="8f88247e-66be-e104-f96e-bdc2018f97ab" executionId="6b7ab7a3-b924-491a-a41d-ceb683957ee2" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="444961b3-2c6d-e8bc-d1ef-fa18eda762da" executionId="a3435904-4fed-40c6-93b8-f67fe75202c7" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="d2bc2e0b-f0b1-50b0-b03d-d0f5cf78c923" executionId="a87175d0-c81f-451b-b094-f3d0aba57fae" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="5df95f92-d822-2ac4-88f5-db2748997ad7" executionId="9de56225-bbd6-495f-ad5d-55dd415aa13f" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="e207733b-4e5c-1b59-c14b-c82e9bb1f146" executionId="43277c82-ad63-42d2-9c71-726f3068b592" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="f3280c23-027a-ad8f-0c3d-66466293ec0e" executionId="54974cfb-10c2-4f37-83cb-c88e980b4325" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="465822e1-3dfb-b4f9-7a1c-eaadf5be5c10" executionId="7e5bcf08-f8cd-42bc-8e82-3211765c8fa6" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="50a79d9a-729d-94c5-3c94-9cda87bc27c6" executionId="9fe58028-fc0e-4f16-a5b6-dd6875e6d60a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="1c182ae5-f201-71c5-46a6-ed4c74bfea6d" executionId="399228a6-2333-492d-8190-4c6e9e787bab" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="eacf0f88-eeb6-33b8-0e5b-d752d937e9a4" executionId="af388053-acc7-40b3-babc-c9a81f129022" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="ace97d1e-bb36-4bd8-cb57-74305f304697" executionId="b27d8cd0-62bb-4fe5-8168-9a733208a01e" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="d92550b1-0ca2-1c5e-d0ad-b298d5786c0c" executionId="82468b37-7f07-47c2-92cb-e132213baa0e" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="a373e96e-b62c-eb77-19ec-ac8fabf309f6" executionId="1b7fe703-1b06-4a46-a941-9be25e1b8c03" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="73304184-e608-ecdd-9533-712d61466eb6" executionId="37c6f703-9031-4daf-b876-3d7b68f1a63e" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="7e62a782-392b-a478-cebd-8214101a20c5" executionId="ca442afc-b0ba-43f4-a12f-f99b8926a83a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="ed7bdbc4-8e0d-b459-05e1-5ea6a55b5e1d" executionId="78a3d703-8616-4fd5-b901-0ae70523707d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="27b0f2a2-b48b-3ccb-d1da-68ddd4669ec1" executionId="1a0dc0a9-b674-4461-b44a-65282c6bb06a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="ed219a79-dfe4-17e2-f88b-1555e253229f" executionId="8c9a5c7e-64fd-432d-8fd9-00c1f2f1f27c" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="34e91c7f-8b58-2310-9fbf-5980191d33cb" executionId="630a1985-f263-470e-b7b9-5bece236fff3" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="c366ff22-21b6-eacd-2440-193eee8a9102" executionId="031acf6f-622b-41a4-ad2d-6067f374fc12" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="060cf423-72e3-14b7-68ce-860f034fbcb7" executionId="f7acd64f-44fb-4660-801a-212b0333ca66" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="45f2e750-b21c-b90a-09cf-d05d0a4953f0" executionId="187d8b54-1bce-4328-a63d-a45cbafb1e76" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3502e061-f81d-d8fe-3328-cce0a12c38fe" executionId="3d76bb65-e4ea-4e7f-b3ea-d0068606c037" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="889dff0c-cda9-e59a-b47f-c5ea36b2b1ce" executionId="ab3cf2b9-2d7e-49b2-a2c6-399f32b05c49" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="5206b762-cc18-3e6b-af1c-3dc696e6473a" executionId="0c2f1d9b-022d-4029-a945-ad2ed3d47170" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="96bd3bc6-f493-dcc9-71ea-289a724d3fe0" executionId="a8b55ac1-4738-4254-9c48-6ff04f5bc89c" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="80e9bea8-0cd1-e930-6c99-7f1fea9cef6a" executionId="baaec37d-ad03-4f74-b9a8-a11ad5999739" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="21170c22-35bc-f34b-f68d-39e80a76a48e" executionId="14133765-c01f-4257-9f8c-af88754ea699" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="1169cd94-c0e7-0844-b786-b04448fa3759" executionId="721a49cd-1be0-4e7f-95d3-74e511d1f3b1" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="c7b98515-873e-4c51-15e6-b7d069e96c30" executionId="5ce4f297-f855-499f-9710-afdb6df612d3" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3638f16d-ec7b-19f3-39c7-c4b79b7f1212" executionId="7af2ab7b-3839-4205-940f-63010b8c5419" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Completed">
+    <Counters total="56" executed="51" passed="51" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.01] xUnit.net VSTest Adapter v2.8.2+699d445a1a (64-bit .NET 10.0.0)
+[xUnit.net 00:00:00.36]   Discovering: Slopterm.Tests
+[xUnit.net 00:00:00.64]   Discovered:  Slopterm.Tests
+[xUnit.net 00:00:00.66]   Starting:    Slopterm.Tests
+[xUnit.net 00:00:38.82]       SLOPTERM_WEBDAV_URL not set
+[xUnit.net 00:00:38.82]       SLOPTERM_WEBDAV_URL not set
+[xUnit.net 00:00:38.83]       SLOPTERM_WEBDAV_URL not set
+[xUnit.net 00:00:38.84]       SLOPTERM_WEBDAV_URL not set
+[xUnit.net 00:00:38.84]       SLOPTERM_WEBDAV_URL not set
+Test 'Slopterm.Tests.WebDavIntegrationTests.TheServerOnlyEverHoldsCiphertext' was skipped in the test run.
+Test 'Slopterm.Tests.WebDavIntegrationTests.ConcurrentEditsKeepBothSidesThroughARealServer' was skipped in the test run.
+Test 'Slopterm.Tests.WebDavIntegrationTests.TwoDevicesConvergeThroughARealServer' was skipped in the test run.
+Test 'Slopterm.Tests.WebDavRemoteTests.RoundTripsRecordsThroughEveryVerbTheSyncLoopUses' was skipped in the test run.
+Test 'Slopterm.Tests.WebDavRemoteTests.ReportsPreconditionFailuresRatherThanThrowing' was skipped in the test run.
+[xUnit.net 00:00:41.98]   Finished:    Slopterm.Tests
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="e48a8263a08a" outcome="Warning" timestamp="2026-08-03T17:47:26.9417970+00:00">
+        <Text>[xUnit.net 00:00:38.82]     Slopterm.Tests.WebDavIntegrationTests.TheServerOnlyEverHoldsCiphertext [SKIP]</Text>
+      </RunInfo>
+      <RunInfo computerName="e48a8263a08a" outcome="Warning" timestamp="2026-08-03T17:47:26.9476132+00:00">
+        <Text>[xUnit.net 00:00:38.82]     Slopterm.Tests.WebDavIntegrationTests.ConcurrentEditsKeepBothSidesThroughARealServer [SKIP]</Text>
+      </RunInfo>
+      <RunInfo computerName="e48a8263a08a" outcome="Warning" timestamp="2026-08-03T17:47:26.9587083+00:00">
+        <Text>[xUnit.net 00:00:38.83]     Slopterm.Tests.WebDavIntegrationTests.TwoDevicesConvergeThroughARealServer [SKIP]</Text>
+      </RunInfo>
+      <RunInfo computerName="e48a8263a08a" outcome="Warning" timestamp="2026-08-03T17:47:26.9616109+00:00">
+        <Text>[xUnit.net 00:00:38.84]     Slopterm.Tests.WebDavRemoteTests.RoundTripsRecordsThroughEveryVerbTheSyncLoopUses [SKIP]</Text>
+      </RunInfo>
+      <RunInfo computerName="e48a8263a08a" outcome="Warning" timestamp="2026-08-03T17:47:26.9616210+00:00">
+        <Text>[xUnit.net 00:00:38.84]     Slopterm.Tests.WebDavRemoteTests.ReportsPreconditionFailuresRatherThanThrowing [SKIP]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>

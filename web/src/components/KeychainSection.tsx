@@ -2,8 +2,10 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'r
 import {
   createKeychainEntry,
   deleteKeychainEntry,
+  listCollections,
   listKeychainEntries,
   updateKeychainEntry,
+  type Collection,
   type SavedKeychainEntry,
 } from '../lib/api'
 import { VaultGate } from './VaultGate'
@@ -16,6 +18,15 @@ const inputClasses =
 // Saved SSH private keys, reusable from the shared ConnectionForm (Quick Connect and the
 // "new host" form) instead of re-pasting a key each time - see ConnectionForm.tsx. Same
 // card-grid layout as the Hosts tab (see CardGrid), with create/edit in a modal.
+//
+// Key material is never shown, in any collection, to anyone: the backend's listing carries
+// only names and "has a key" flags, and editing REPLACES rather than reveals. That's a
+// product decision, not a permission - a saved secret is something the app uses, not
+// something it shows back to you - and it stops casual copying and shoulder-surfing, not a
+// patched build or someone reading the vault file.
+//
+// An entry's NAME is also the join key for a host that resolves its credential by name (see
+// CredentialResolver), which is why names have to be unique within a collection.
 export function KeychainSection() {
   return (
     <VaultGate>
@@ -26,6 +37,7 @@ export function KeychainSection() {
 
 function KeychainList() {
   const [entries, setEntries] = useState<SavedKeychainEntry[]>([])
+  const [collections, setCollections] = useState<Collection[]>([])
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState<SavedKeychainEntry | 'new' | null>(null)
 
@@ -35,7 +47,10 @@ function KeychainList() {
 
   function refresh() {
     listKeychainEntries().then(setEntries)
+    listCollections().then(setCollections).catch(() => setCollections([]))
   }
+
+  const collectionName = (id: string) => collections.find((c) => c.id === id)?.name
 
   async function handleDelete(id: string) {
     await deleteKeychainEntry(id)
@@ -61,8 +76,17 @@ function KeychainList() {
             <EntityCard
               key={e.id}
               icon={<KeychainIcon aria-hidden="true" className="h-5 w-5 text-slate-400" />}
-              title={<span className="truncate font-medium text-slate-100">{e.entry.name}</span>}
-              subtitle={<span>{e.entry.passphrase ? 'Passphrase set' : 'Private key'}</span>}
+              title={
+                <>
+                  <span className="truncate font-medium text-slate-100">{e.entry.name}</span>
+                  {collectionName(e.collectionId) && (
+                    <span className="shrink-0 truncate rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-slate-400 uppercase">
+                      {collectionName(e.collectionId)}
+                    </span>
+                  )}
+                </>
+              }
+              subtitle={<span>Stored, not shown{e.entry.hasPassphrase ? ' · passphrase set' : ''}</span>}
               actions={
                 <>
                   <button type="button" onClick={() => setEditing(e)} className={cardSecondaryButton}>
@@ -94,8 +118,10 @@ function KeychainList() {
 
 function KeychainModal({ entry, onClose, onSaved }: { entry: SavedKeychainEntry | null; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState(entry?.entry.name ?? '')
-  const [privateKey, setPrivateKey] = useState(entry?.entry.privateKey ?? '')
-  const [passphrase, setPassphrase] = useState(entry?.entry.passphrase ?? '')
+  // Empty on an edit and it stays empty: the stored key was never sent here. Typing or
+  // browsing one replaces it; leaving it alone keeps what's saved.
+  const [privateKey, setPrivateKey] = useState('')
+  const [passphrase, setPassphrase] = useState('')
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -110,7 +136,7 @@ function KeychainModal({ entry, onClose, onSaved }: { entry: SavedKeychainEntry 
     event.preventDefault()
     setError(null)
     try {
-      if (entry) await updateKeychainEntry(entry.id, { name, privateKey, passphrase: passphrase || undefined })
+      if (entry) await updateKeychainEntry(entry.id, { name, privateKey, passphrase })
       else await createKeychainEntry({ name, privateKey, passphrase: passphrase || undefined })
       onSaved()
     } catch (err) {
@@ -133,17 +159,18 @@ function KeychainModal({ entry, onClose, onSaved }: { entry: SavedKeychainEntry 
         <textarea
           id="keychain-private-key"
           className={`${inputClasses} h-32 font-mono text-xs`}
-          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+          placeholder={entry ? 'Stored — paste a new key to replace it' : '-----BEGIN OPENSSH PRIVATE KEY-----'}
           value={privateKey}
           onChange={(e) => setPrivateKey(e.target.value)}
-          required
+          required={!entry}
         />
         <input
           type="password"
           className={inputClasses}
-          placeholder="Passphrase (optional)"
+          placeholder={entry?.entry.hasPassphrase ? 'Stored — type to replace' : 'Passphrase (optional)'}
           value={passphrase}
           onChange={(e) => setPassphrase(e.target.value)}
+          autoComplete="new-password"
         />
         {error && <p className="text-sm text-red-400">{error}</p>}
         <div className="flex justify-end gap-2">

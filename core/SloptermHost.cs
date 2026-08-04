@@ -16,6 +16,7 @@ using Microsoft.Extensions.FileProviders;
 using Slopterm.Server;
 using Slopterm.Server.Ai;
 using Slopterm.Server.Vault;
+using Slopterm.Server.VaultSync;
 
 namespace Slopterm.Server;
 
@@ -31,7 +32,8 @@ public sealed record SloptermHostContext(
     SessionStore<SftpSession> SftpSessions,
     ForwardingService Forwarding,
     SyncService Sync,
-    SchedulerService Scheduler);
+    SchedulerService Scheduler,
+    VaultSyncService VaultSync);
 
 // Builds, configures and starts the Kestrel web app + every endpoint, then returns the
 // running app and the loopback launch URL. Free of any desktop-window/tray coupling so a
@@ -100,6 +102,8 @@ CrashLogger.LogPhase("vault + settings loaded");
 var forwarding = new ForwardingService(vault);
 var sync = new SyncService(vault);
 var scheduler = new SchedulerService(vault);
+var vaultSync = new VaultSyncService(vault);
+var collections = new CollectionService(vault, vaultSync);
 
 // Best-effort cleanup of a previous update's backup - see UpdateService.ApplyAsync. Not
 // fatal if this fails (e.g. the old process briefly still holds it on Windows); it'll just
@@ -209,6 +213,11 @@ app.UseWebSockets();
 
 app.MapPost("/api/ssh/connect", (ConnectRequest request) =>
 {
+    if (ResolveConnectCredential(vault, request) is { } credentialError)
+    {
+        return Results.BadRequest(new { error = credentialError });
+    }
+
     try
     {
         var session = TerminalSession.Connect(request);
@@ -244,6 +253,11 @@ app.MapPost("/api/ssh/connect", (ConnectRequest request) =>
 
 app.MapPost("/api/sftp/connect", (ConnectRequest request) =>
 {
+    if (ResolveConnectCredential(vault, request) is { } credentialError)
+    {
+        return Results.BadRequest(new { error = credentialError });
+    }
+
     try
     {
         var session = SftpSession.Connect(request);
@@ -339,6 +353,14 @@ app.MapPost("/api/ssh/upload", async (HttpRequest request, CancellationToken ct)
     if (connect is null)
     {
         return Results.BadRequest(new { error = "Invalid connect payload." });
+    }
+
+    // The tab's request carries no credential for a saved host - the frontend never received
+    // one - so it's resolved here, exactly as the connect endpoints do. Without this, a
+    // one-shot upload from an SSH tab would try to authenticate with nothing at all.
+    if (ResolveConnectCredential(vault, connect) is { } uploadCredentialError)
+    {
+        return Results.BadRequest(new { error = uploadCredentialError });
     }
 
     try
@@ -584,9 +606,15 @@ app.MapPost("/api/vault/unlock", (VaultPasswordRequest request) =>
 {
     try
     {
-        return vault.Unlock(request.MasterPassword)
-            ? Results.Ok()
-            : Results.Json(new { error = "Incorrect master password." }, statusCode: StatusCodes.Status401Unauthorized);
+        if (!vault.Unlock(request.MasterPassword))
+        {
+            return Results.Json(new { error = "Incorrect master password." }, statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        // "On unlock" is one of the sync triggers - until now the collections weren't even
+        // readable, so nothing could have been pushed or pulled.
+        vaultSync.RequestSyncAll();
+        return Results.Ok();
     }
     catch (InvalidOperationException ex)
     {
@@ -828,12 +856,26 @@ app.MapPost("/api/vault/reset", () =>
     return Results.NoContent();
 });
 
-app.MapGet("/api/vault/hosts", () =>
+// --- Collections ------------------------------------------------------------------------
+// A collection is the unit of sync and sharing: a set of records that converge with one
+// WebDAV URL, end-to-end encrypted under a key the server never sees (see
+// core/VaultSync/). The implicit `local` collection isn't listed here - it has no remote
+// and never leaves the device, so there is nothing about it to configure.
+
+// The scope catalog, so the UI doesn't hard-code the list (or its warnings) a second time.
+app.MapGet("/api/collections/scopes", () => Results.Ok(SyncScopes.All.Select(scope => new
+{
+    name = scope.Name,
+    label = scope.Label,
+    defaultOn = scope.DefaultOn,
+    warning = scope.Warning,
+})));
+
+app.MapGet("/api/vault/collections", () =>
 {
     try
     {
-        var hosts = vault.ListHosts().Select(h => new { id = h.Id, updatedAt = h.UpdatedAt, host = h.Record });
-        return Results.Ok(hosts);
+        return Results.Ok(collections.List());
     }
     catch (InvalidOperationException ex)
     {
@@ -841,11 +883,158 @@ app.MapGet("/api/vault/hosts", () =>
     }
 });
 
-app.MapPost("/api/vault/hosts", (HostRecord request) =>
+app.MapPost("/api/vault/collections", (CollectionRequest request) =>
 {
     try
     {
-        var id = vault.SaveHost(null, request);
+        return Results.Ok(collections.Create(
+            request.Name ?? "Collection", request.RemoteUrl ?? string.Empty,
+            request.Username, request.Password, request.Scopes));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPut("/api/vault/collections/{id}", (string id, CollectionRequest request) =>
+{
+    try
+    {
+        return Results.Ok(collections.Update(
+            id, request.Name, request.RemoteUrl, request.Username, request.Password, request.Scopes, request.Enabled));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+});
+
+// Leaving is local-only by design: it never touches the shared content everyone else is
+// still using, and by default it keeps this device's copy of the records.
+app.MapDelete("/api/vault/collections/{id}", (string id, bool? keepRecordsLocally) =>
+{
+    try
+    {
+        collections.Leave(id, keepRecordsLocally ?? true);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+});
+
+app.MapGet("/api/collections/status", () => Results.Ok(vaultSync.GetStatus()));
+
+app.MapPost("/api/collections/{id}/sync", async (string id, CancellationToken ct) =>
+{
+    try
+    {
+        await vaultSync.SyncNowAsync(id, ct);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+// The token carries the collection key AND the WebDAV credentials, so the frontend reveals it
+// on demand and warns against pasting it into a chat. Access itself is the server's business:
+// the receiving device can keep these credentials or swap in its own account.
+app.MapGet("/api/collections/{id}/token", (string id, string? passphrase) =>
+{
+    try
+    {
+        return Results.Ok(new { token = collections.BuildInviteToken(id, passphrase) });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+});
+
+// Every collection at once - the "set up my new phone in one paste" path.
+app.MapGet("/api/collections/token", (string? passphrase) =>
+{
+    try
+    {
+        return Results.Ok(new { token = collections.BuildSyncConfigurationToken(passphrase) });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+// Accepts either token format, so the paste box has one code path whichever the user has.
+app.MapPost("/api/collections/join", (JoinCollectionRequest request) =>
+{
+    try
+    {
+        return Results.Ok(collections.Join(request.Token ?? string.Empty, request.Passphrase));
+    }
+    catch (Exception ex) when (ex is FormatException or JsonException or CryptographicException or ArgumentException)
+    {
+        return Results.BadRequest(new { error = "That isn't a valid slopterm collection token, or the passphrase is wrong." });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+// Moves one record between collections - how a private host becomes a shared one.
+app.MapPost("/api/vault/records/{folder}/{id}/collection", (string folder, string id, MoveRecordRequest request) =>
+{
+    if (SyncScopes.FolderFor(folder) is null)
+    {
+        return Results.BadRequest(new { error = $"{folder} isn't a syncable kind of record." });
+    }
+
+    try
+    {
+        vault.MoveRecord(folder, id, request.CollectionId);
+        return Results.NoContent();
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+// Credential material never leaves the backend in a listing: a saved secret is something
+// the app uses, not something it shows back to you. What the UI gets instead is whether a
+// secret exists, and where the credential RESOLVED on this device (see CredentialResolver),
+// so a card can say "your key: prod-deploy" or "no key on this device" without ever
+// handling the key itself. Connecting no longer needs the secret client-side either - see
+// the connect endpoints, which resolve from hostId.
+app.MapGet("/api/vault/hosts", () =>
+{
+    try
+    {
+        return Results.Ok(vault.ListHosts().Select(h => MaskHost(vault, h.Id, h.CollectionId, h.UpdatedAt, h.Record)));
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+app.MapPost("/api/vault/hosts", (HostRecord request, string? collectionId) =>
+{
+    try
+    {
+        var id = vault.SaveHost(null, request, collectionId);
         return Results.Ok(new { id });
     }
     catch (InvalidOperationException ex)
@@ -854,10 +1043,19 @@ app.MapPost("/api/vault/hosts", (HostRecord request) =>
     }
 });
 
+// Replace-don't-reveal: the edit form never received the stored secrets, so a credential
+// that comes back with no secret means "unchanged", not "cleared". Anything the user
+// actually typed arrives populated and replaces what was there.
 app.MapPut("/api/vault/hosts/{id}", (string id, HostRecord request) =>
 {
     try
     {
+        var existing = vault.ListHosts().FirstOrDefault(h => h.Id == id).Record;
+        if (existing is not null)
+        {
+            MergeCredentials(existing.Credentials, request.Credentials);
+        }
+
         vault.SaveHost(id, request);
         return Results.NoContent();
     }
@@ -892,7 +1090,52 @@ app.MapGet("/api/vault/hosts/{id}/share", (string id) =>
             return Results.NotFound();
         }
 
+        // A host whose key resolves by name exports as exactly that - a name, no secret.
+        // Sharing the inventory without shipping anyone's private key is the whole point of
+        // the keychain credential kind.
         return Results.Ok(new { token = HostShareCodec.Encode(match.Record) });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
+// Duplicating has to happen server-side now that credential material never reaches the
+// frontend: a copy built from what the UI holds would arrive with no password or key at all.
+// The name suffix is applied here for the same reason - it's the only place that can see the
+// whole record.
+app.MapPost("/api/vault/hosts/{id}/duplicate", (string id) =>
+{
+    try
+    {
+        var match = vault.ListHosts().FirstOrDefault(h => h.Id == id);
+        if (match.Record is null)
+        {
+            return Results.NotFound();
+        }
+
+        var copy = new HostRecord
+        {
+            Name = $"{match.Record.Name} (copy)",
+            Address = match.Record.Address,
+            Port = match.Record.Port,
+            ParentGroupId = match.Record.ParentGroupId,
+            StartupSnippetIds = [.. match.Record.StartupSnippetIds],
+            // Fresh credential ids: the copy is its own record, and sharing ids with the
+            // original would make an edit to one look like an edit to the other's credential.
+            Credentials = [.. match.Record.Credentials.Select(c => new CredentialRecord
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Kind = c.Kind,
+                Username = c.Username,
+                Secret = c.Secret,
+                Passphrase = c.Passphrase,
+                KeychainName = c.KeychainName,
+            })],
+        };
+
+        return Results.Ok(new { id = vault.SaveHost(null, copy, match.CollectionId) });
     }
     catch (InvalidOperationException ex)
     {
@@ -979,11 +1222,24 @@ app.MapDelete("/api/vault/snippets/{id}", (string id) =>
     }
 });
 
+// Same masking posture as hosts: the key itself never comes back out. The Keychain screen
+// lists names, not key material, and editing replaces rather than reveals.
 app.MapGet("/api/vault/keychain", () =>
 {
     try
     {
-        var entries = vault.ListKeychainEntries().Select(e => new { id = e.Id, updatedAt = e.UpdatedAt, entry = e.Record });
+        var entries = vault.ListKeychainEntries().Select(e => new
+        {
+            id = e.Id,
+            collectionId = e.CollectionId,
+            updatedAt = e.UpdatedAt,
+            entry = new
+            {
+                e.Record.Name,
+                hasPrivateKey = !string.IsNullOrEmpty(e.Record.PrivateKey),
+                hasPassphrase = !string.IsNullOrEmpty(e.Record.Passphrase),
+            },
+        });
         return Results.Ok(entries);
     }
     catch (InvalidOperationException ex)
@@ -992,11 +1248,16 @@ app.MapGet("/api/vault/keychain", () =>
     }
 });
 
-app.MapPost("/api/vault/keychain", (KeychainEntryRecord request) =>
+app.MapPost("/api/vault/keychain", (KeychainEntryRecord request, string? collectionId) =>
 {
     try
     {
-        var id = vault.SaveKeychainEntry(null, request);
+        if (DuplicateKeychainName(vault, request.Name, null, collectionId) is { } duplicate)
+        {
+            return Results.BadRequest(new { error = duplicate });
+        }
+
+        var id = vault.SaveKeychainEntry(null, request, collectionId);
         return Results.Ok(new { id });
     }
     catch (InvalidOperationException ex)
@@ -1009,6 +1270,20 @@ app.MapPut("/api/vault/keychain/{id}", (string id, KeychainEntryRecord request) 
 {
     try
     {
+        var existing = vault.ListKeychainEntries().FirstOrDefault(e => e.Id == id);
+        if (existing.Record is not null)
+        {
+            // Replace-don't-reveal, same as a host credential: an empty key/passphrase from
+            // the edit form means "unchanged", because the form never had them to begin with.
+            request.PrivateKey = string.IsNullOrEmpty(request.PrivateKey) ? existing.Record.PrivateKey : request.PrivateKey;
+            request.Passphrase = string.IsNullOrEmpty(request.Passphrase) ? existing.Record.Passphrase : request.Passphrase;
+        }
+
+        if (DuplicateKeychainName(vault, request.Name, id, existing.Record is null ? null : existing.CollectionId) is { } duplicate)
+        {
+            return Results.BadRequest(new { error = duplicate });
+        }
+
         vault.SaveKeychainEntry(id, request);
         return Results.NoContent();
     }
@@ -2025,10 +2300,153 @@ CrashLogger.LogPhase("auto sync rules started");
 scheduler.Start();
 CrashLogger.LogPhase("job scheduler started");
 
+// Converges every collection with its WebDAV remote. Like the two above it's a no-op with
+// a locked vault - the unlock endpoint re-triggers it, since that's the moment a
+// password-protected vault first has collections to read at all.
+vaultSync.Start();
+vaultSync.RequestSyncAll();
+CrashLogger.LogPhase("vault sync started");
+
 var addressesFeature = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
 var boundPort = new Uri(addressesFeature?.Addresses.First() ?? "http://127.0.0.1:0").Port;
 var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
-        return new SloptermHostContext(app, launchUrl, vault, sessions, sftpSessions, forwarding, sync, scheduler);
+        return new SloptermHostContext(app, launchUrl, vault, sessions, sftpSessions, forwarding, sync, scheduler, vaultSync);
+    }
+
+    /// <summary>
+    /// A saved host as the UI is allowed to see it: no secrets, but everything needed to
+    /// decide whether the card connects and what to say about its credential. `canConnect`
+    /// is computed by the same resolver the connect endpoints use, so the button state and
+    /// what actually happens on click can never disagree.
+    /// </summary>
+    private static object MaskHost(VaultService vault, string id, string collectionId, DateTimeOffset updatedAt, HostRecord host) => new
+    {
+        id,
+        collectionId,
+        updatedAt,
+        canConnect = CredentialResolver.ResolveForHost(vault, collectionId, host)?.CanConnect == true,
+        host = new
+        {
+            host.Name,
+            host.Address,
+            host.Port,
+            host.ParentGroupId,
+            host.StartupSnippetIds,
+            credentials = host.Credentials.Select(credential => new
+            {
+                credential.Id,
+                credential.Kind,
+                credential.Username,
+                credential.KeychainName,
+                hasSecret = !string.IsNullOrEmpty(credential.Secret),
+                hasPassphrase = !string.IsNullOrEmpty(credential.Passphrase),
+                resolution = CredentialResolver.Describe(vault, collectionId, credential),
+            }),
+        },
+    };
+
+    /// <summary>
+    /// Carries stored secrets forward across an edit. The form never received them, so a
+    /// credential arriving with an empty secret means "leave it alone"; one arriving with a
+    /// value is a deliberate replacement. Matching is by credential id - a credential the
+    /// user removed simply isn't in the incoming list and so isn't carried over.
+    /// </summary>
+    private static void MergeCredentials(List<CredentialRecord> existing, List<CredentialRecord> incoming)
+    {
+        foreach (var credential in incoming)
+        {
+            var previous = existing.FirstOrDefault(c => c.Id == credential.Id);
+            if (previous is null)
+            {
+                continue;
+            }
+
+            credential.Secret = string.IsNullOrEmpty(credential.Secret) ? previous.Secret : credential.Secret;
+            credential.Passphrase = string.IsNullOrEmpty(credential.Passphrase) ? previous.Passphrase : credential.Passphrase;
+        }
+    }
+
+    /// <summary>
+    /// Keychain names are the join key for name-resolved host credentials, so two entries
+    /// sharing one inside a collection would make which key a host connects with a coin
+    /// flip. Returns the error message, or null when the name is free.
+    /// </summary>
+    private static string? DuplicateKeychainName(VaultService vault, string name, string? excludeId, string? collectionId)
+    {
+        var target = collectionId ?? CollectionStore.LocalCollectionId;
+        var clash = vault.ListKeychainEntries().Any(e =>
+            e.Id != excludeId &&
+            e.CollectionId == target &&
+            string.Equals(e.Record.Name.Trim(), name.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        return clash
+            ? $"A key called \"{name.Trim()}\" already exists here. Names have to be unique so a host that names a key resolves to exactly one."
+            : null;
+    }
+
+    /// <summary>
+    /// Fills in a connect request's credential from the vault when the client didn't send
+    /// one. The frontend deliberately never holds host secrets any more, so a connect to a
+    /// saved host arrives as hostId (+ optionally credentialId) and nothing else - this is
+    /// where "use a key named prod-deploy" becomes an actual private key, resolved against
+    /// what THIS device holds.
+    /// </summary>
+    private static string? ResolveConnectCredential(VaultService vault, ConnectRequest request)
+    {
+        if (!string.IsNullOrEmpty(request.Password) || !string.IsNullOrEmpty(request.PrivateKey))
+        {
+            return null; // Quick Connect / Recent supply their own
+        }
+
+        // Quick Connect's "use a saved key": no host to resolve against, just a name.
+        if (string.IsNullOrEmpty(request.HostId))
+        {
+            if (string.IsNullOrEmpty(request.KeychainName))
+            {
+                return null;
+            }
+
+            var named = CredentialResolver.Resolve(
+                vault,
+                CollectionStore.LocalCollectionId,
+                new CredentialRecord { Id = "quick-connect", Kind = "keychain", KeychainName = request.KeychainName });
+
+            if (named?.CanConnect != true)
+            {
+                return $"No key called \"{request.KeychainName}\" on this device.";
+            }
+
+            request.AuthMethod = "privateKey";
+            request.PrivateKey = named.PrivateKey;
+            request.Passphrase = named.Passphrase;
+            return null;
+        }
+
+        var match = vault.ListHosts().FirstOrDefault(h => h.Id == request.HostId);
+        if (match.Record is null)
+        {
+            return null;
+        }
+
+        var resolved = CredentialResolver.ResolveForHost(vault, match.CollectionId, match.Record, request.CredentialId);
+        if (resolved is null)
+        {
+            return "That host has no credential saved.";
+        }
+
+        if (!resolved.CanConnect)
+        {
+            return resolved.Source == "none" && resolved.Detail is not null
+                ? $"No key called \"{resolved.Detail}\" on this device. Add one to the Keychain with that name, or attach a key to this host."
+                : "No key on this device for that host.";
+        }
+
+        request.Username = string.IsNullOrEmpty(request.Username) ? resolved.Username ?? string.Empty : request.Username;
+        request.AuthMethod = resolved.Password is not null ? "password" : "privateKey";
+        request.Password = resolved.Password;
+        request.PrivateKey = resolved.PrivateKey;
+        request.Passphrase = resolved.Passphrase;
+        return null;
     }
 
     /// <summary>

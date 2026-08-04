@@ -11,6 +11,9 @@ interface HostCardProps {
   // persistent side panel.
   selected?: boolean
   canConnect: boolean
+  // Name of the collection this host is shared through, if any - so it's visible at a glance
+  // that a host is one the whole team sees rather than a private one.
+  collectionName?: string
   isConnecting?: boolean
   // True if this host has one or more startup snippets attached - shown as a small
   // unobtrusive badge so that's visible without having to open the edit modal.
@@ -36,6 +39,7 @@ export function HostCard({
   authLabel,
   selected,
   canConnect,
+  collectionName,
   isConnecting,
   hasStartupSnippets,
   onSelect,
@@ -59,7 +63,17 @@ export function HostCard({
         className="flex min-w-0 flex-1 flex-col items-start gap-1"
       >
         <HostsIcon aria-hidden="true" className="h-5 w-5 text-slate-400" />
-        <span className="truncate font-medium text-slate-100">{name}</span>
+        <span className="flex w-full min-w-0 items-center gap-1">
+          <span className="truncate font-medium text-slate-100">{name}</span>
+          {collectionName && (
+            <span
+              title={`Shared through ${collectionName}`}
+              className="shrink-0 truncate rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-slate-400 uppercase"
+            >
+              {collectionName}
+            </span>
+          )}
+        </span>
         <span className="flex min-w-0 items-center gap-1 truncate text-xs text-slate-400">
           <span className="truncate">{summary}</span>
           {hasStartupSnippets && (
@@ -68,7 +82,11 @@ export function HostCard({
             </span>
           )}
         </span>
-        {authLabel && <span className="truncate text-xs text-slate-500">{authLabel}</span>}
+        {authLabel && (
+          <span className={`truncate text-xs ${canConnect ? 'text-slate-500' : 'text-amber-500'}`} title={authLabel}>
+            {authLabel}
+          </span>
+        )}
       </button>
       <div className="flex shrink-0 flex-col justify-center gap-1">
         <button

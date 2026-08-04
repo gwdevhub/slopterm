@@ -27,6 +27,16 @@ cp "$apk" ../../slopterm-android.apk
 cd ../core
 dotnet build
 
+# Unit + sync integration tests (offline; the WebDAV ones skip without a server)
+cd ../tests
+dotnet test
+
+# Optional: the same WebDAV suite against real servers, since server disagreement over
+# ETags and preconditions is exactly what this code has to tolerate
+cd ..
+./tests/webdav-servers.sh                    # Apache mod_dav + KaraDAV in Docker
+SLOPTERM_WEBDAV_USER=… SLOPTERM_WEBDAV_PASS=… ./tests/webdav-servers.sh https://your-share/
+
 # Run e2e tests
 cd ../e2e
 npm install

@@ -122,8 +122,13 @@ function requestToOpenTabRecord(tab: SessionTab) {
     port: request.port,
     username: request.username,
     authMethod: request.authMethod,
+    // A tab on a SAVED host carries no secret - the frontend never received one - so it
+    // records what to resolve instead, and the backend re-resolves on restore. That also
+    // means a password changed since the tab was opened is picked up rather than replayed.
     secret: request.authMethod === 'password' ? request.password : request.privateKey,
     passphrase: request.authMethod === 'privateKey' ? request.passphrase : undefined,
+    hostId: request.hostId,
+    credentialId: request.credentialId,
     startupCommands: tab.startupCommands,
     // So a reload lands back on the shell that's still running rather than opening a second
     // connection beside it - see the restore effect, which only trusts this after checking
@@ -334,6 +339,10 @@ function App() {
             sessionId: stillLive ? (t.sessionId ?? null) : null,
             label: t.label,
             kind: t.kind,
+            // A local shell has nothing to reconnect TO, so it carries no request at all.
+            // For the rest, hostId/credentialId are what a saved host reconnects by: the
+            // secret fields are only populated for Quick Connect / Recent tabs, since the
+            // frontend no longer holds a saved host's credential (see CredentialResolver).
             request:
               t.kind === 'local'
                 ? undefined
@@ -345,6 +354,8 @@ function App() {
                     password: t.authMethod === 'password' ? t.secret : undefined,
                     privateKey: t.authMethod === 'privateKey' ? t.secret : undefined,
                     passphrase: t.authMethod === 'privateKey' ? t.passphrase : undefined,
+                    hostId: t.hostId,
+                    credentialId: t.credentialId,
                     columns: 80,
                     rows: 24,
                   },
@@ -354,12 +365,21 @@ function App() {
           }
         })
 
-        if (restored.length > 0) {
-          setTabs(restored)
+        // A local shell is this machine's process and nothing else - it has no destination to
+        // dial and no credential to resolve. Reattaching to one that's STILL RUNNING is the
+        // point of persisting it at all (a page reload must land back on the same shell), but
+        // once that session is gone there is nothing to restore: the tab would sit at
+        // "connecting" forever with no request to connect with. So a restart drops them,
+        // rather than resurrecting a shell the user never asked to reopen.
+        const restorable = restored.filter((tab) => tab.kind !== 'local' || tab.sessionId !== null)
+
+        if (restorable.length > 0) {
+          setTabs(restorable)
           const index = record.activeIndex
-          const active = index !== null && index >= 0 && index < restored.length ? restored[index] : restored[0]
+          const active =
+            index !== null && index >= 0 && index < restorable.length ? restorable[index] : restorable[0]
           setActiveTabId(active.id)
-          restored.filter((tab) => tab.sessionId === null).forEach((tab) => void attemptConnectTab(tab))
+          restorable.filter((tab) => tab.sessionId === null).forEach((tab) => void attemptConnectTab(tab))
         }
       })
       .catch(() => {})

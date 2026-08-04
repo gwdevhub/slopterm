@@ -176,7 +176,7 @@ public sealed class SchedulerService : IDisposable
     private static bool OwnedByThisDevice(JobRecord job, string deviceId) =>
         string.IsNullOrEmpty(job.OwnerDeviceId) || job.OwnerDeviceId == deviceId;
 
-    private IReadOnlyList<(string Id, DateTimeOffset UpdatedAt, JobRecord Record)> SafeListJobs()
+    private IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, JobRecord Record)> SafeListJobs()
     {
         if (!_vault.IsUnlocked)
         {
@@ -259,7 +259,7 @@ public sealed class SchedulerService : IDisposable
                 _tracked.Remove(id);
             }
 
-            foreach (var (id, updatedAt, job) in jobs)
+            foreach (var (id, _, updatedAt, job) in jobs)
             {
                 if (!_tracked.TryGetValue(id, out var tracked))
                 {

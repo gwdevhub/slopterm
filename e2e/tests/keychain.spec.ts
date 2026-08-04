@@ -14,7 +14,7 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
 
 const FAKE_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nplaywright-fake-key-data\n-----END OPENSSH PRIVATE KEY-----'
 
-test('saves a key in the Keychain and reuses it from the shared connection form', async ({ page }) => {
+test('saves a key in the Keychain and reuses it from the shared connection form by name', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Keychain')
   await ensureVaultUnlocked(page)
@@ -27,13 +27,22 @@ test('saves a key in the Keychain and reuses it from the shared connection form'
   await page.click('button:has-text("Save key")')
   await expect(page.getByText('e2e laptop key')).toBeVisible({ timeout: 10_000 })
 
+  // The card says a key is stored without ever showing it - the listing endpoint carries
+  // names and "has a key" flags, never key material.
+  await expect(page.getByText('Stored, not shown')).toBeVisible()
+
   // Reuse it from the "new host" form, which shares ConnectionForm with the Quick
-  // Connect modal (a third caller, triggered from the Hosts screen's own button).
+  // Connect modal (a third caller, triggered from the Hosts screen's own button). A host
+  // NAMES a key rather than copying it, so the same host resolves to whatever key each
+  // device happens to hold under that name.
   await gotoSection(page, 'Hosts')
   await page.click('button:has-text("New host")')
-  await page.getByRole('radio', { name: 'Private key' }).check()
-  await page.selectOption('#keychainEntry', { label: 'e2e laptop key' })
-  await expect(page.locator('#privateKey')).toHaveValue(FAKE_KEY)
+  await page.getByRole('radio', { name: 'Use a key named…' }).check()
+  await expect(page.locator('#namedKey')).toBeVisible()
+  await expect(page.locator('#keychain-names option[value="e2e laptop key"]')).toHaveCount(1)
+
+  // No private-key textarea in this mode at all: there is nothing for the form to hold.
+  await expect(page.locator('#privateKey')).toHaveCount(0)
 
   // The "new host" form is a real modal now (HostModal), unlike the old inline side
   // panel - it covers the whole page and blocks navigating elsewhere until closed, so
@@ -44,7 +53,7 @@ test('saves a key in the Keychain and reuses it from the shared connection form'
   await expect(page.getByText('No saved keys yet.')).toBeVisible({ timeout: 10_000 })
 })
 
-test('a keychain entry can be edited in place, and Cancel discards unsaved changes', async ({ page }) => {
+test('a keychain entry is edited by replacement, never by revealing the key', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Keychain')
   await ensureVaultUnlocked(page)
@@ -55,28 +64,30 @@ test('a keychain entry can be edited in place, and Cancel discards unsaved chang
   await page.fill('input[placeholder="Passphrase (optional)"]', 'original-passphrase')
   await page.click('button:has-text("Save key")')
   await expect(page.getByText('edit test key')).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText('Stored, not shown · passphrase set')).toBeVisible()
 
-  // Edit pre-fills the real key/passphrase (listKeychainEntries already returns them in
-  // full - ConnectionForm's own "use a saved key" dropdown already relies on that), not
-  // just the name. Cancel must discard any changes made while it was open.
+  // Edit shows the NAME and nothing else. The key and passphrase are deliberately empty
+  // with a "stored" placeholder - masking them is a guardrail against casual copying and
+  // shoulder-surfing, not a claim that the key is inaccessible to a determined user.
   await page.click('button:has-text("Edit")')
-  await expect(page.locator('#keychain-private-key')).toHaveValue(FAKE_KEY)
-  await expect(page.locator('input[placeholder="Passphrase (optional)"]')).toHaveValue('original-passphrase')
+  await expect(page.locator('input[placeholder=Name]')).toHaveValue('edit test key')
+  await expect(page.locator('#keychain-private-key')).toHaveValue('')
+  await expect(page.locator('#keychain-private-key')).toHaveAttribute('placeholder', /Stored/)
+  await expect(page.getByPlaceholder('Stored — type to replace')).toHaveValue('')
+
+  // Cancel must discard any changes made while it was open.
   await page.fill('input[placeholder=Name]', 'edit test key SHOULD NOT SAVE')
   await page.click('button:has-text("Cancel")')
   await expect(page.getByText('edit test key', { exact: true })).toBeVisible({ timeout: 10_000 })
   await expect(page.getByText('edit test key SHOULD NOT SAVE')).not.toBeVisible()
 
-  // Save changes does persist.
+  // Renaming without retyping the key keeps the stored key AND passphrase - an empty field
+  // means "unchanged", which is the whole point of replace-don't-reveal.
   await page.click('button:has-text("Edit")')
   await page.fill('input[placeholder=Name]', 'edit test key RENAMED')
-  await page.fill('input[placeholder="Passphrase (optional)"]', 'new-passphrase')
   await page.click('button:has-text("Save changes")')
   await expect(page.getByText('edit test key RENAMED')).toBeVisible({ timeout: 10_000 })
-
-  await page.click('button:has-text("Edit")')
-  await expect(page.locator('input[placeholder="Passphrase (optional)"]')).toHaveValue('new-passphrase')
-  await page.click('button:has-text("Cancel")')
+  await expect(page.getByText('Stored, not shown · passphrase set')).toBeVisible()
 
   await page.click('button:has-text("Delete")')
   await expect(page.getByText('No saved keys yet.')).toBeVisible({ timeout: 10_000 })

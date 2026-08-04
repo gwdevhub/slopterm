@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Slopterm.Server.Ai;
 
 namespace Slopterm.Server.Vault;
@@ -27,6 +28,13 @@ public sealed class RecordEnvelope
     public required DateTimeOffset UpdatedAt { get; set; }
     public required string Nonce { get; set; } // base64
     public required string Ciphertext { get; set; } // base64
+
+    // Hybrid logical clock (see VaultSync/HybridLogicalClock). Nullable because records
+    // written before sync existed don't carry one - they read as the epoch, which loses
+    // every conflict against a freshly stamped peer but still syncs. Stamped on every save
+    // regardless of collection, so a local record promoted into a synced collection later
+    // already has a usable ordering.
+    public string? Hlc { get; set; }
 }
 
 /// <summary>The decrypted content of a HostEnvelope.</summary>
@@ -52,10 +60,28 @@ public sealed class HostRecord
 public sealed class CredentialRecord
 {
     public required string Id { get; set; }
-    public required string Kind { get; set; } // "password" | "privateKey" | "envVar"
+
+    /// <summary>
+    /// "password" | "privateKey" | "envVar" | "keychain".
+    ///
+    /// "keychain" is the one that makes a shared collection genuinely useful: the host
+    /// carries no secret at all, only <see cref="KeychainName"/>, and every device resolves
+    /// that name against a key it holds locally (see CredentialResolver). A team shares
+    /// `prod-db` at 10.0.0.5 as user `deploy` with KeychainName "prod-deploy", and nobody's
+    /// private key ever leaves their own device.
+    /// </summary>
+    public required string Kind { get; set; }
+
     public string? Username { get; set; }
     public string? Secret { get; set; } // password, private key contents, or "NAME=value"
     public string? Passphrase { get; set; } // only meaningful when Kind is "privateKey"
+
+    /// <summary>
+    /// Names a KeychainEntryRecord by its Name - deliberately not by id, because the whole
+    /// point is that it resolves to a DIFFERENT, local entry on every device. Only
+    /// meaningful when Kind is "keychain".
+    /// </summary>
+    public string? KeychainName { get; set; }
 }
 
 /// <summary>
@@ -285,6 +311,15 @@ public sealed class OpenTabRecord
     // always the case after an actual restart, since ids are per-process). Not a credential:
     // an opaque per-process GUID.
     public string? SessionId { get; set; }
+
+    // For a tab on a SAVED host, these replace the credential snapshot above: the frontend
+    // no longer holds host secrets at all, so a restored tab reconnects by asking the
+    // backend to resolve the host's credential again (see CredentialResolver). That also
+    // means a password changed since the tab was opened is picked up on restore rather than
+    // replayed stale. Quick Connect and Recent tabs have no host to resolve against and
+    // still carry Secret/Passphrase.
+    public string? HostId { get; set; }
+    public string? CredentialId { get; set; }
 }
 
 /// <summary>
@@ -325,6 +360,32 @@ public sealed class AiChatRecord
     public string? HostKey { get; set; } // "user@host:port", lowercase - which host's list this belongs to
     public string? Title { get; set; }   // first user message, truncated - the list label
     public required List<ChatMessage> Messages { get; set; }
+}
+
+/// <summary>
+/// preferences/preferences.json - the syncable half of what used to live entirely in
+/// settings.json, plus the appearance blob that used to be secrets/appearance.
+///
+/// The split exists because settings.json has to stay readable BEFORE the vault is
+/// unlocked - it's what decides whether to prompt for a master password at all - while
+/// these fields are ordinary preferences a user would want on both their laptop and their
+/// phone. RequireMasterPassword deliberately stays behind in settings.json and has no
+/// scope: it describes how THIS device's vault is encrypted, and syncing it would tell one
+/// machine to expect a password another machine's vault doesn't have.
+///
+/// settings.json keeps its copy of these fields as the pre-unlock fallback and as what an
+/// older build still reads, so downgrading doesn't lose anyone's toggles.
+/// </summary>
+public sealed class PreferencesRecord
+{
+    public bool CloseToTray { get; set; }
+    public bool ShowSshConfigHosts { get; set; }
+    public string AiBaseUrl { get; set; } = "http://127.0.0.1:11434/v1";
+    public string AiModel { get; set; } = "gemma4:12b";
+
+    // Stored opaquely, exactly as GetAppearance/SaveAppearance already did, so the theme
+    // schema can keep evolving entirely client-side.
+    public JsonElement? Appearance { get; set; }
 }
 
 /// <summary>

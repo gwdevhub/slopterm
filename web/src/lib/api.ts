@@ -11,6 +11,13 @@ export interface ConnectRequest {
   // Set when connecting to a saved host so the backend can auto-start that host's port
   // forwards (see ForwardingService). Absent for Quick Connect / Recent.
   hostId?: string
+  // Which of the host's credentials to use. With hostId set and no secret in the request,
+  // the backend resolves the credential itself - which is why this file never handles a
+  // saved host's password or private key.
+  credentialId?: string
+  // Quick Connect's "use a saved key": names a Keychain entry rather than carrying it, since
+  // the Keychain listing is masked too.
+  keychainName?: string
 }
 
 export interface ConnectResponse {
@@ -189,12 +196,31 @@ export interface VaultStatus {
   unlocked: boolean
 }
 
+// Where a named credential actually resolved on THIS device. `source` is one of 'inline',
+// 'keychain-local', 'keychain-collection', 'keychain-other', 'ssh-default' or 'none' - a host
+// must never silently connect with a different key than its card claims, so this is shown.
+export interface CredentialResolution {
+  source: string
+  detail?: string | null
+  resolved: boolean
+}
+
 export interface CredentialRecord {
   id: string
-  kind: 'password' | 'privateKey' | 'envVar'
+  // 'keychain' carries no secret at all, only keychainName - every device resolves that name
+  // against a key it holds locally, which is what lets a team share hosts without sharing keys.
+  kind: 'password' | 'privateKey' | 'envVar' | 'keychain'
   username?: string
+  // Never populated by the server: stored credential material is something the app uses, not
+  // something it shows back to you. Set it to REPLACE the stored secret; leave it empty to
+  // keep whatever is saved (see the backend's MergeCredentials).
   secret?: string
   passphrase?: string
+  keychainName?: string
+  // Server-computed, read-only.
+  hasSecret?: boolean
+  hasPassphrase?: boolean
+  resolution?: CredentialResolution
 }
 
 export interface HostRecord {
@@ -208,7 +234,12 @@ export interface HostRecord {
 
 export interface SavedHost {
   id: string
+  // Which collection holds this host - 'local' for the implicit, never-synced one.
+  collectionId: string
   updatedAt: string
+  // Whether this device can actually connect: computed server-side by the same resolver the
+  // connect endpoints use, so the button state and what happens on click can't disagree.
+  canConnect: boolean
   host: HostRecord
 }
 
@@ -253,8 +284,9 @@ export async function listHosts(): Promise<SavedHost[]> {
   return res.json()
 }
 
-export async function createHost(host: HostRecord): Promise<{ id: string }> {
-  const res = await fetch('/api/vault/hosts', {
+export async function createHost(host: HostRecord, collectionId?: string): Promise<{ id: string }> {
+  const query = collectionId && collectionId !== 'local' ? `?collectionId=${encodeURIComponent(collectionId)}` : ''
+  const res = await fetch(`/api/vault/hosts${query}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(host),
@@ -270,6 +302,14 @@ export async function updateHost(id: string, host: HostRecord): Promise<void> {
     body: JSON.stringify(host),
   })
   await throwOnError(res)
+}
+
+// Server-side because credential material never reaches this file - a copy assembled here
+// would arrive with no password or key. Returns the new host's id.
+export async function duplicateHost(id: string): Promise<{ id: string }> {
+  const res = await fetch(`/api/vault/hosts/${id}/duplicate`, { method: 'POST' })
+  await throwOnError(res)
+  return res.json()
 }
 
 export async function deleteHost(id: string): Promise<void> {
@@ -619,14 +659,22 @@ export async function deleteSnippet(id: string): Promise<void> {
 
 export interface KeychainEntryRecord {
   name: string
+  // Same masking contract as a host credential: the server never sends these back, and an
+  // empty value on save means "keep what's stored".
   privateKey: string
   passphrase?: string
 }
 
+// What a listing returns - names, never key material.
 export interface SavedKeychainEntry {
   id: string
+  collectionId: string
   updatedAt: string
-  entry: KeychainEntryRecord
+  entry: {
+    name: string
+    hasPrivateKey: boolean
+    hasPassphrase: boolean
+  }
 }
 
 export async function listKeychainEntries(): Promise<SavedKeychainEntry[]> {
@@ -635,8 +683,9 @@ export async function listKeychainEntries(): Promise<SavedKeychainEntry[]> {
   return res.json()
 }
 
-export async function createKeychainEntry(entry: KeychainEntryRecord): Promise<{ id: string }> {
-  const res = await fetch('/api/vault/keychain', {
+export async function createKeychainEntry(entry: KeychainEntryRecord, collectionId?: string): Promise<{ id: string }> {
+  const query = collectionId && collectionId !== 'local' ? `?collectionId=${encodeURIComponent(collectionId)}` : ''
+  const res = await fetch(`/api/vault/keychain${query}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(entry),
@@ -723,8 +772,13 @@ export interface OpenTabRecord {
   port: number
   username: string
   authMethod: 'password' | 'privateKey'
+  // Only for Quick Connect / Recent tabs, which have no saved host to resolve against. A tab
+  // on a SAVED host carries hostId/credentialId instead and re-resolves on restore, so a
+  // password changed since the tab was opened is picked up rather than replayed stale.
   secret?: string
   passphrase?: string
+  hostId?: string
+  credentialId?: string
   startupCommands?: string[]
   // The live backend session this tab was on, so a reload that happens while the session is
   // still held (see listSshSessions) reattaches to the running shell instead of dialing a
@@ -1170,4 +1224,147 @@ export interface WindowPosition {
 // for.
 export async function saveWindowPosition(position: WindowPosition): Promise<void> {
   navigator.sendBeacon('/api/window-position', new Blob([JSON.stringify(position)], { type: 'application/json' }))
+}
+
+// --- Collections ------------------------------------------------------------------------
+// A collection is the unit of sync and sharing: a set of records that converge with one
+// WebDAV URL, end-to-end encrypted under a key the server never sees. The implicit `local`
+// collection has no remote and never leaves the device, so it's never listed here.
+
+export interface SyncScopeInfo {
+  name: string
+  label: string
+  defaultOn: boolean
+  // Shown next to the toggle when turning the scope on has a consequence worth spelling out
+  // (sharing private keys, sharing recent-connection credentials, …).
+  warning?: string | null
+}
+
+export interface Collection {
+  id: string
+  name: string
+  remoteUrl: string
+  // The WebDAV account THIS device uses. Another device in the same collection may well use
+  // a different one against the same folder - who may read and write is the server's call.
+  remoteUsername?: string | null
+  // The password itself is never sent - the form shows an empty field and only replaces the
+  // stored value when the user types one.
+  hasRemotePassword: boolean
+  scopes: string[]
+  enabled: boolean
+  lastSyncUtc?: string | null
+  lastError?: string | null
+  // A short digest of the collection key, so two people can confirm out loud that they pasted
+  // the same token without either of them showing it.
+  keyFingerprint: string
+}
+
+export interface CollectionStatus {
+  collectionId: string
+  name: string
+  state: 'idle' | 'syncing' | 'error' | 'paused'
+  lastSyncUtc?: string | null
+  error?: string | null
+  recordCount: number
+}
+
+export interface CollectionInput {
+  name?: string
+  remoteUrl?: string
+  username?: string
+  // Omit to keep the stored password; empty string clears it.
+  password?: string
+  scopes?: string[]
+  enabled?: boolean
+}
+
+export async function listSyncScopes(): Promise<SyncScopeInfo[]> {
+  const res = await fetch('/api/collections/scopes')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function listCollections(): Promise<Collection[]> {
+  const res = await fetch('/api/vault/collections')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function createCollection(input: CollectionInput): Promise<Collection> {
+  const res = await fetch('/api/vault/collections', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function updateCollection(id: string, input: CollectionInput): Promise<Collection> {
+  const res = await fetch(`/api/vault/collections/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+// Local only - never touches the shared content everyone else is still using. Keeping the
+// records moves this device's copy into the local collection rather than deleting them.
+export async function leaveCollection(id: string, keepRecordsLocally: boolean): Promise<void> {
+  const res = await fetch(`/api/vault/collections/${id}?keepRecordsLocally=${keepRecordsLocally}`, {
+    method: 'DELETE',
+  })
+  await throwOnError(res)
+}
+
+export async function getCollectionStatus(): Promise<CollectionStatus[]> {
+  const res = await fetch('/api/collections/status')
+  await throwOnError(res)
+  return res.json()
+}
+
+export async function syncCollectionNow(id: string): Promise<void> {
+  const res = await fetch(`/api/collections/${id}/sync`, { method: 'POST' })
+  await throwOnError(res)
+}
+
+// Carries the collection key and the WebDAV credentials - everything another device needs.
+// Revealed on demand, never logged, treated like a password.
+export async function getCollectionInviteToken(id: string, passphrase?: string): Promise<string> {
+  const query = passphrase ? `?passphrase=${encodeURIComponent(passphrase)}` : ''
+  const res = await fetch(`/api/collections/${id}/token${query}`)
+  await throwOnError(res)
+  return (await res.json()).token
+}
+
+// Every collection in one blob - the "set up my new phone in one paste" path.
+export async function getSyncConfigurationToken(passphrase?: string): Promise<string> {
+  const query = passphrase ? `?passphrase=${encodeURIComponent(passphrase)}` : ''
+  const res = await fetch(`/api/collections/token${query}`)
+  await throwOnError(res)
+  return (await res.json()).token
+}
+
+// Accepts either token format, so the paste box has one code path whichever the user has.
+export async function joinCollection(token: string, passphrase?: string): Promise<Collection[]> {
+  const res = await fetch('/api/collections/join', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, passphrase }),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+// Moves one record between collections - how a private host becomes a shared one. `folder`
+// is the record kind ('hosts', 'snippets', …).
+export async function moveRecordToCollection(folder: string, id: string, collectionId: string): Promise<void> {
+  const res = await fetch(`/api/vault/records/${folder}/${id}/collection`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ collectionId }),
+  })
+  await throwOnError(res)
 }
