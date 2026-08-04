@@ -312,6 +312,64 @@ public sealed class VaultSyncServiceTests : IDisposable
         Assert.Equal(putsBefore, _store.PutCount);
     }
 
+    /// <summary>
+    /// Open tabs, logs and the GitHub token have no sync scope AT ALL - not "off by default",
+    /// absent. Open tabs is the one that matters most here: a local-shell tab describes a
+    /// process on this machine, and a laptop's shell reappearing on a phone would be
+    /// meaningless at best. This asserts the absence directly, because the cost of someone
+    /// adding a scope for one of them later is that it silently starts leaving the device.
+    /// </summary>
+    [Fact]
+    public void DeviceLocalRecordKindsHaveNoSyncScope()
+    {
+        foreach (var neverSynced in new[] { "open-tabs", "secrets", "logs", "github-token", "jobs", "job-runs", "ai-chats" })
+        {
+            Assert.Null(SyncScopes.Find(neverSynced));
+            Assert.Null(SyncScopes.FolderFor(neverSynced));
+            Assert.DoesNotContain(SyncScopes.All, scope => scope.Folder == neverSynced);
+        }
+    }
+
+    /// <summary>
+    /// The same guarantee end to end: a local-shell tab is saved, a full sync runs, and
+    /// nothing about it reaches the remote - no record, and no trace of it in any byte the
+    /// server ended up holding.
+    /// </summary>
+    [Fact]
+    public async Task ALocalShellTabNeverReachesTheRemote()
+    {
+        var collectionId = await PairAsync();
+
+        _fixture.Laptop.Vault.SaveOpenTabs(new OpenTabsRecord
+        {
+            Tabs =
+            [
+                new OpenTabRecord
+                {
+                    Kind = "local",
+                    Label = "zsh - my-laptop",
+                    Host = "local",
+                    Port = 0,
+                    Username = "shell",
+                    AuthMethod = "password",
+                },
+            ],
+            ActiveIndex = 0,
+        });
+
+        _fixture.Laptop.SaveHost(collectionId, "prod-db", "10.0.0.5");
+        await _fixture.Laptop.SyncAsync(collectionId);
+        await _fixture.Phone.SyncAsync(collectionId);
+
+        // The host went; the tab did not.
+        Assert.Equal(["prod-db"], _fixture.Phone.HostNames());
+        Assert.Empty(_fixture.Phone.Vault.GetOpenTabs().Tabs);
+        Assert.DoesNotContain(_store.Files.Keys, key => key.Contains("open-tabs", StringComparison.Ordinal));
+
+        var everything = string.Join("\n", _store.Files.Values.Select(f => System.Text.Encoding.UTF8.GetString(f.Content)));
+        Assert.DoesNotContain("zsh - my-laptop", everything, StringComparison.Ordinal);
+    }
+
     /// <summary>The local collection is not a collection you can sync - it has no remote at all.</summary>
     [Fact]
     public void TheLocalCollectionIsNeverListedAsSyncable()

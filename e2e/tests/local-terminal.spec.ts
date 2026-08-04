@@ -71,6 +71,25 @@ test('a local tab reattaches to the same shell across a reload', async ({ page }
   await closeTab(page, tabLabel)
 })
 
+test('a local tab is not restored once its shell is gone', async ({ page }) => {
+  await openLocalShell(page)
+  const tabLabel = await localTabLabel(page)
+  await run(page, 'echo LOCAL-TAB-OPEN', 'LOCAL-TAB-OPEN')
+
+  // End the shell, then reload. The tab was persisted so a reload could reattach to a LIVE
+  // session (the test above), but a local shell has no destination and no credential - once
+  // the session is gone there is nothing to restore it from, and bringing the tab back would
+  // either sit at "connecting" forever or silently spawn a shell nobody asked for.
+  await page.keyboard.type('exit')
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('button', { name: `Close ${tabLabel}` })).toHaveCount(0, { timeout: 20_000 })
+
+  await page.reload()
+  await ensureVaultUnlocked(page)
+  await expect(page.getByRole('button', { name: `Close ${tabLabel}` })).toHaveCount(0, { timeout: 20_000 })
+  await expect(page.getByText('Reconnecting')).toHaveCount(0)
+})
+
 test('exiting a local shell closes its tab instead of reconnecting it', async ({ page }) => {
   await openLocalShell(page)
   const tabLabel = await localTabLabel(page)

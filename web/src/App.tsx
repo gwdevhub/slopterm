@@ -365,12 +365,21 @@ function App() {
           }
         })
 
-        if (restored.length > 0) {
-          setTabs(restored)
+        // A local shell is this machine's process and nothing else - it has no destination to
+        // dial and no credential to resolve. Reattaching to one that's STILL RUNNING is the
+        // point of persisting it at all (a page reload must land back on the same shell), but
+        // once that session is gone there is nothing to restore: the tab would sit at
+        // "connecting" forever with no request to connect with. So a restart drops them,
+        // rather than resurrecting a shell the user never asked to reopen.
+        const restorable = restored.filter((tab) => tab.kind !== 'local' || tab.sessionId !== null)
+
+        if (restorable.length > 0) {
+          setTabs(restorable)
           const index = record.activeIndex
-          const active = index !== null && index >= 0 && index < restored.length ? restored[index] : restored[0]
+          const active =
+            index !== null && index >= 0 && index < restorable.length ? restorable[index] : restorable[0]
           setActiveTabId(active.id)
-          restored.filter((tab) => tab.sessionId === null).forEach((tab) => void attemptConnectTab(tab))
+          restorable.filter((tab) => tab.sessionId === null).forEach((tab) => void attemptConnectTab(tab))
         }
       })
       .catch(() => {})
