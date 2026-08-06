@@ -32,6 +32,31 @@
     <_AspNetCoreRuntimePackVersion>10.0.10</_AspNetCoreRuntimePackVersion>
   </PropertyGroup>
 
+  <!--
+    R8 - the "enable app optimization" Play Console recommends. It shrinks and optimises the
+    JAVA/dex side only (the Mono runtime's Java classes, the Android Callable Wrappers generated
+    for our [Activity]/[Service] types, androidx); it does NOT touch managed IL, so it is
+    unrelated to $(PublishTrimmed)/$(AndroidLinkMode), which stay off - see AGENTS.md, trimming
+    breaks SSH.NET's reflection.
+
+    Keep rules come from the SDK: proguard_xamarin.cfg plus the generated
+    obj/**/proguard_project_references.cfg, which keeps every type that has an ACW, so the
+    classes the runtime looks up by name over JNI survive; proguard.cfg adds the one rule they
+    miss (the R classes, which only the managed side reads).
+
+    proguard_xamarin.cfg also sets -dontobfuscate, so this is a shrink/optimise pass with no
+    renaming. R8 still writes bin/Release/net10.0-android/mapping.txt and the .aab carries it in
+    BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map, which is the deobfuscation
+    file Play asks for - no separate upload step needed.
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <AndroidLinkTool>r8</AndroidLinkTool>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <ProguardConfiguration Include="proguard.cfg" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="../core/Slopterm.Core.csproj" />
     <!-- Pull the linux-x64 ASP.NET Core runtime pack into the NuGet cache so we can borrow its

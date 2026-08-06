@@ -146,15 +146,39 @@ not `android/fastlane/service-account.json`. Keep using `File.expand_path(..., _
 and the enforced bounds. A malformed `VERSION` fails the build with `SLOP0001` rather than
 silently producing a lower versionCode than the last release.
 
+## App optimization (R8)
+
+Release builds run R8 — `$(AndroidLinkTool)` is set to `r8` in `Slopterm.Android.csproj`. This is
+Play Console's "enable app optimization" recommendation. It shrinks and optimizes the **Java/dex**
+side only: the Mono runtime's Java classes and the Android Callable Wrappers generated for our
+`[Activity]`/`[Service]` types. It does not touch managed IL, so it is unrelated to
+`PublishTrimmed`/`AndroidLinkMode`, which stay off (trimming breaks SSH.NET's reflection —
+see `AGENTS.md`).
+
+**Don't expect it to shrink anything.** `classes.dex` is 43 KB of a 32 MB package — everything
+that makes slopterm big is the Mono runtime and the AOT'd managed assemblies in
+`lib/*/libassembly-store.so`, which R8 never sees. Measured: `classes.dex` 43,184 → 43,460 bytes
+(it grows slightly — the `R` keep rule below puts back more than the shrink takes out) and the
+`.aab` gains ~5 KB for the embedded mapping. What enabling it actually buys is the Play Console
+recommendation being satisfied and the deobfuscation file being present, not size.
+
+The SDK's `proguard_xamarin.cfg` sets `-dontobfuscate`, so this is a shrink/optimize pass with no
+renaming. Keep rules come from that file plus the generated `proguard_project_references.cfg`,
+which keeps every type with an ACW — that is what stops R8 removing classes only ever looked up
+by name over JNI. `proguard.cfg` next to the csproj (`ProguardConfiguration` build action) adds
+the one rule those miss: the generated `R`/`R$*` classes, which no *Java* code references (R8
+inlines the ids) but the managed resource designer reflects over — without it
+`Resource.Drawable.ic_launcher` in `SessionKeepAliveService` resolves to a bogus id.
+
+R8 writes `android/bin/Release/net10.0-android/mapping.txt` and the `.aab` embeds it at
+`BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map`, which is the deobfuscation
+file Play wants — nothing extra to upload, so the fastlane lanes are unchanged.
+
 ## Play Console warnings that are expected
 
-Two advisory warnings appear on every upload. Neither blocks a release, and neither is worth
-acting on today — don't re-litigate them each time:
+One advisory warning still appears on every upload. It doesn't block a release and isn't worth
+acting on today — don't re-litigate it each time:
 
-- **"There is no deobfuscation file associated with this App Bundle."** We don't run
-  R8/ProGuard, so there is no mapping file to upload and crash reports are already unobfuscated.
-  R8 would shrink the app, but the size checkpoint in `AGENTS.md` already passes without it
-  (~15 MB for the delivered `arm64-v8a` slice against a 40 MB bar).
 - **"This App Bundle contains native code, and you've not uploaded debug symbols."** The `.so`
   files are the AOT-compiled managed assemblies plus the Mono runtime. Play wants a separate
   symbols file under `BUNDLE-METADATA/com.android.tools.build.debugsymbols`, which is an Android
