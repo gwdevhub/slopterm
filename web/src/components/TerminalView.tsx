@@ -274,6 +274,23 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     let lastCols = 0
     let lastRows = 0
     function fitAndSyncSize() {
+      // Nothing to fit to while this tab is hidden. Every open tab stays mounted and the
+      // inactive ones are display:none (see App.tsx), which measures 0x0 - and a
+      // ResizeObserver reports exactly that the moment a tab is switched away from. Fitting
+      // against it doesn't no-op: FitAddon floors its proposal at a couple of cells, so the
+      // background tab's PTY was being resized down to a sliver and back up again on every
+      // switch. The remote notices - readline redraws its prompt on SIGWINCH, a full-screen
+      // app relays out entirely - so a tab the user only switched away from produced output,
+      // which the unseen-activity tracking above then reported as background activity that
+      // was never cleared (the favicon badge sat on its accent color from then on). Coming
+      // back to the tab restores a real size and fires the observer again, which is what
+      // re-fits it.
+      //
+      // Read back off the ref rather than the narrowed `container` above: this is a hoisted
+      // function declaration, so TypeScript gives it the ref's declared (nullable) type
+      // regardless of the early return the effect opens with.
+      const box = containerRef.current
+      if (!box || box.clientWidth === 0 || box.clientHeight === 0) return
       fitAddon.fit()
       if (term.cols === lastCols && term.rows === lastRows) return
       lastCols = term.cols
