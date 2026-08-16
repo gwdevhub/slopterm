@@ -264,10 +264,12 @@ test.describe('with touch emulation', () => {
     await expect(page.getByRole('button', { name: 'Shift+Tab' })).toHaveCount(0)
     expect(await hideCount()).toBe(1)
 
-    // The snippet picker is the same kind of panel and gets the same treatment.
-    await page.getByRole('button', { name: 'Snippets' }).click()
+    // The snippet picker is the same kind of panel and gets the same treatment. Scoped to the
+    // toolbar - the sidebar has its own "Snippets" nav button.
+    const snippetsKey = page.locator('[aria-label="Terminal keys"]').getByRole('button', { name: 'Snippets' })
+    await snippetsKey.click()
     expect(await hideCount()).toBe(2)
-    await page.getByRole('button', { name: 'Snippets' }).click()
+    await snippetsKey.click()
 
     await closeTab(page, tabLabel)
     await gotoSection(page, 'Hosts')
