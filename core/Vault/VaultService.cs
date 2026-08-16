@@ -157,6 +157,7 @@ public sealed class VaultService
         {
             settings.CloseToTray = preferences.CloseToTray;
             settings.ShowSshConfigHosts = preferences.ShowSshConfigHosts;
+            settings.SessionNotificationBadge = preferences.SessionNotificationBadge;
             settings.AiBaseUrl = preferences.AiBaseUrl;
             settings.AiModel = preferences.AiModel;
         }
@@ -206,6 +207,7 @@ public sealed class VaultService
         {
             CloseToTray = fromFile.CloseToTray,
             ShowSshConfigHosts = fromFile.ShowSshConfigHosts,
+            SessionNotificationBadge = fromFile.SessionNotificationBadge,
             AiBaseUrl = fromFile.AiBaseUrl,
             AiModel = fromFile.AiModel,
             Appearance = ReadLegacyAppearance(),
@@ -244,6 +246,7 @@ public sealed class VaultService
 
         settings.CloseToTray = preferences.CloseToTray;
         settings.ShowSshConfigHosts = preferences.ShowSshConfigHosts;
+        settings.SessionNotificationBadge = preferences.SessionNotificationBadge;
         settings.AiBaseUrl = preferences.AiBaseUrl;
         settings.AiModel = preferences.AiModel;
         Directory.CreateDirectory(_vaultDir);
@@ -327,6 +330,16 @@ public sealed class VaultService
         applyToFile(settings);
         Directory.CreateDirectory(_vaultDir);
         File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
+    }
+
+    /// <summary>
+    /// Persists whether the Android keep-alive notification is allowed to badge the launcher
+    /// icon (see SessionKeepAliveService, which picks its notification channel from this).
+    /// Same shape as SetCloseToTray - no encryption key changes, no unlock needed.
+    /// </summary>
+    public void SetSessionNotificationBadge(bool enabled)
+    {
+        UpdatePreferences(p => p.SessionNotificationBadge = enabled, s => s.SessionNotificationBadge = enabled);
     }
 
     /// <summary>

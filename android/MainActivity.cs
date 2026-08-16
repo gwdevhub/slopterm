@@ -132,6 +132,7 @@ public class MainActivity : Activity
             // Auto-start rules come up as part of Start, so this is the first chance to know
             // whether there are forwards to keep alive.
             RefreshForwardCount();
+            RefreshSessionNotificationBadge();
             RunOnUiThread(() => webView.LoadUrl(host.LaunchUrl));
         });
     }
@@ -237,6 +238,7 @@ public class MainActivity : Activity
     {
         base.OnResume();
         RefreshForwardCount();
+        RefreshSessionNotificationBadge();
         try
         {
             StopService(new Intent(this, typeof(SessionKeepAliveService)));
@@ -300,6 +302,40 @@ public class MainActivity : Activity
     }
 
     private static bool HasLiveConnections() => LiveConnectionCount() > 0;
+
+    // AppSettings.SessionNotificationBadge as of the last refresh. Cached for the same reason
+    // as _forwardCount: the keep-alive service reads it inside OnStartCommand, which Android
+    // kills the app for not returning promptly, and GetSettings() is a file read + JSON parse
+    // that can also throw on a corrupt settings.json.
+    private static volatile bool _sessionNotificationBadge;
+
+    internal static bool SessionNotificationBadgeEnabled => _sessionNotificationBadge;
+
+    // Refreshes that cache off the UI thread, on the same two occasions as the forward count.
+    // The setting can only be changed from the app's own Settings page, which means the app is
+    // in the foreground and OnResume has either already run or is about to - so a value read
+    // from the last visit is never stale by the time it matters.
+    internal static void RefreshSessionNotificationBadge()
+    {
+        var host = HostContext;
+        if (host is null)
+        {
+            return;
+        }
+
+        Task.Run(() =>
+        {
+            try
+            {
+                _sessionNotificationBadge = host.Vault.GetSettings().SessionNotificationBadge;
+            }
+            catch (Exception)
+            {
+                // Best-effort, exactly like the forward count: an unreadable settings.json
+                // leaves the previous value rather than taking down the app over a preference.
+            }
+        });
+    }
 
     // Called from the JS bridge (any thread) to save bytes the web app produced (e.g. a vault
     // backup) - opens the system "create document" dialog so the user picks the destination,
@@ -416,6 +452,34 @@ public class MainActivity : Activity
         {
             _activity.RunOnUiThread(() => _activity._webView?.FinishComposingText());
         }
+
+        // Called when the web app opens a panel of its own that the on-screen keyboard would
+        // otherwise cover (the toolbar's "More keys" and snippet panels - see KeyboardToolbar).
+        // The page can't do this itself: blurring is the only lever JavaScript has over the IME,
+        // and the toolbar's whole design is built on *not* moving focus off xterm's textarea
+        // (see usePressProps), so the keyboard simply stayed up over the panel that was just
+        // opened. Hiding it natively leaves focus exactly where it was, so typing carries on
+        // when the keyboard comes back.
+        [JavascriptInterface]
+        [Export("hideKeyboard")]
+        public void HideKeyboard()
+        {
+            _activity.RunOnUiThread(_activity.HideSoftKeyboard);
+        }
+    }
+
+    private void HideSoftKeyboard()
+    {
+        var token = _webView?.WindowToken;
+        if (token is null)
+        {
+            return;
+        }
+
+        var imm = (InputMethodManager?)GetSystemService(InputMethodService);
+        // No flags: an unconditional hide. HideImplicitOnly would refuse for a keyboard the user
+        // brought up by tapping the terminal, which is every keyboard this is asked to hide.
+        imm?.HideSoftInputFromWindow(token, HideSoftInputFlags.None);
     }
 
     // The IME can go away without the page ever hearing about it - the system back gesture and

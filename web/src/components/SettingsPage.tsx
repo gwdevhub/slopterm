@@ -6,6 +6,7 @@ import {
   resetVaultToDefault,
   setCloseToTray,
   setRequireMasterPassword,
+  setSessionNotificationBadge,
   setShowSshConfigHosts,
 } from '../lib/api'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -32,6 +33,10 @@ export function SettingsPage() {
   const [showSshConfigHostsBusy, setShowSshConfigHostsBusy] = useState(false)
   const [showSshConfigHostsError, setShowSshConfigHostsError] = useState<string | null>(null)
 
+  const [sessionBadge, setSessionBadgeState] = useState<boolean | null>(null)
+  const [sessionBadgeBusy, setSessionBadgeBusy] = useState(false)
+  const [sessionBadgeError, setSessionBadgeError] = useState<string | null>(null)
+
   // Client-side visual pref (localStorage), not a backend setting - see lib/tabBadge.ts.
   const [tabBadge, setTabBadge] = useState(isTabBadgeEnabled())
 
@@ -49,6 +54,7 @@ export function SettingsPage() {
       setRequireMasterPasswordState(s.requireMasterPassword)
       setCloseToTrayState(s.closeToTray)
       setShowSshConfigHostsState(s.showSshConfigHosts)
+      setSessionBadgeState(s.sessionNotificationBadge)
     })
   }, [])
 
@@ -167,7 +173,26 @@ export function SettingsPage() {
     }
   }
 
-  if (requireMasterPassword === null || closeToTray === null || showSshConfigHosts === null) {
+  async function handleToggleSessionBadge() {
+    if (sessionBadge === null) return
+    setSessionBadgeBusy(true)
+    setSessionBadgeError(null)
+    try {
+      const result = await setSessionNotificationBadge(!sessionBadge)
+      setSessionBadgeState(result.sessionNotificationBadge)
+    } catch (err) {
+      setSessionBadgeError(err instanceof Error ? err.message : 'Failed to update setting')
+    } finally {
+      setSessionBadgeBusy(false)
+    }
+  }
+
+  if (
+    requireMasterPassword === null ||
+    closeToTray === null ||
+    showSshConfigHosts === null ||
+    sessionBadge === null
+  ) {
     return <p className="p-4 text-slate-400">Loading settings…</p>
   }
 
@@ -292,6 +317,34 @@ export function SettingsPage() {
             </button>
           </div>
           {showSshConfigHostsError && <p className="text-sm text-red-400">{showSshConfigHostsError}</p>}
+        </div>
+      )}
+
+      {isMobileApp() && (
+        <div className="flex flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="font-medium text-slate-100">Badge the app icon while in the background</p>
+              <p className="text-sm text-slate-400">
+                slopterm holds your connections open for a few minutes after you switch away,
+                which Android only allows alongside a notification. Off by default: the
+                notification stays silent, minimized, and puts no dot on the app icon. Turn this
+                on to have it show up normally instead. Applies the next time you leave the app.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleToggleSessionBadge()}
+              disabled={sessionBadgeBusy}
+              aria-label="Badge the app icon while in the background"
+              className={`shrink-0 rounded px-4 py-2 text-sm font-medium disabled:opacity-50 ${
+                sessionBadge ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              }`}
+            >
+              {sessionBadge ? 'On' : 'Off'}
+            </button>
+          </div>
+          {sessionBadgeError && <p className="text-sm text-red-400">{sessionBadgeError}</p>}
         </div>
       )}
 

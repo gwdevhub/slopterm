@@ -234,6 +234,46 @@ test.describe('with touch emulation', () => {
     await deleteHost(page, 'toolbar more keys test host')
   })
 
+  test('opening a panel puts the Android keyboard away, and closing it leaves the keyboard alone', async ({
+    page,
+  }) => {
+    // The native hide has no counterpart a browser can be asked for (see hideAndroidKeyboard),
+    // so the bridge stands in for MainActivity's SloptermAndroid the same way the composition
+    // spec's does, recording the calls instead of performing them.
+    await page.addInitScript(() => {
+      const calls: string[] = []
+      ;(window as unknown as { hideKeyboardCalls: string[] }).hideKeyboardCalls = calls
+      ;(window as unknown as { SloptermAndroid: unknown }).SloptermAndroid = {
+        saveFile: () => {},
+        finishComposing: () => {},
+        hideKeyboard: () => calls.push('hide'),
+      }
+    })
+
+    await connectHost(page, 'toolbar keyboard hide test host')
+    const hideCount = () => page.evaluate(() => (window as unknown as { hideKeyboardCalls: string[] }).hideKeyboardCalls.length)
+
+    const moreKeys = page.getByRole('button', { name: 'More keys' })
+    await moreKeys.click()
+    await expect(page.getByRole('button', { name: 'Shift+Tab' })).toBeVisible()
+    expect(await hideCount()).toBe(1)
+
+    // Closing it doesn't summon the keyboard back, and doesn't hide anything either - there's
+    // nothing up to hide.
+    await moreKeys.click()
+    await expect(page.getByRole('button', { name: 'Shift+Tab' })).toHaveCount(0)
+    expect(await hideCount()).toBe(1)
+
+    // The snippet picker is the same kind of panel and gets the same treatment.
+    await page.getByRole('button', { name: 'Snippets' }).click()
+    expect(await hideCount()).toBe(2)
+    await page.getByRole('button', { name: 'Snippets' }).click()
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'toolbar keyboard hide test host')
+  })
+
   test('a symbol key types its literal character and the ^C key interrupts the line', async ({ page }) => {
     await connectHost(page, 'toolbar symbol test host')
     await page.getByRole('button', { name: 'More keys' }).click()

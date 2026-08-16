@@ -4,6 +4,10 @@
 interface AndroidBridge {
   saveFile(base64Data: string, fileName: string, mimeType: string): void
   finishComposing(): void
+  // Optional: an APK built before this existed still injects a bridge object, and the web
+  // bundle it runs is the one embedded in that same APK - but the desktop/browser fallback
+  // below has to work anyway, so every caller checks first regardless.
+  hideKeyboard?: () => void
 }
 
 function androidBridge(): AndroidBridge | undefined {
@@ -69,6 +73,17 @@ export async function saveFileViaAndroid(blob: Blob, fileName: string, mimeType:
   if (!bridge?.saveFile) return false
   bridge.saveFile(await blobToBase64(blob), fileName, mimeType)
   return true
+}
+
+// Dismisses the on-screen keyboard, for the moments the app puts up something of its own that
+// the keyboard would otherwise sit on top of (the toolbar's key/snippet panels). Native, and a
+// no-op anywhere else: it leaves DOM focus exactly where it was, so the terminal is still the
+// focused element and the keyboard comes straight back when it's tapped. The one thing a page
+// can do by itself here - blurring whatever is focused - is deliberately not used as a
+// fallback: it would take focus off the terminal on every platform to fix a keyboard that only
+// covers the panel on this one.
+export function hideAndroidKeyboard(): void {
+  androidBridge()?.hideKeyboard?.()
 }
 
 // Whether the IME is currently holding a word in its composing region (set from the real

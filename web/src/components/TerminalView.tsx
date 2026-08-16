@@ -99,6 +99,10 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
   // set once the socket exists, reset to a no-op on cleanup so a stale tap after teardown
   // can't throw on a closed socket.
   const sendRawRef = useRef<(data: string) => void>(() => {})
+  // Drags one end of the touch selection (see terminalTouch.ts). Same cross-effect-ref pattern
+  // as sendRawRef: the handles are rendered down in the JSX, the gesture state they move lives
+  // in the [sessionId] effect.
+  const moveSelectionHandleRef = useRef<(which: 'start' | 'end', clientX: number, clientY: number) => void>(() => {})
   // Clears the frozen composition preview (see the .composition-echo handling in the terminal
   // effect below) once real output has actually been drawn - set from that effect, called from
   // the socket effect's message handler, same cross-effect-ref pattern as sendRawRef.
@@ -562,14 +566,25 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     // one gesture handler, since all three start from the same touchstart. Deliberately built on
     // touch events rather than the mouse events a browser synthesizes from them, so a desktop
     // mouse keeps meaning exactly what it always has here: xterm's own selection and wheel.
-    const disposeTouch = registerTerminalTouch(term, container, {
+    const touch = registerTerminalTouch(term, container, {
       onDoubleTap: () => {
-        sendRawRef.current('\t')
-        term.focus()
+        // Through the same commit-first path as the toolbar's own Tab key (see usePressProps in
+        // KeyboardToolbar): a double tap asking for completion is normally aimed at the word
+        // *currently being typed*, which on Android is still sitting in the IME's composing
+        // region and has never reached the shell. Sending a bare \t there completes against
+        // whatever the shell last saw - an empty word, so bash dumps every command it knows -
+        // and the composed text is then torn down on top of it. Awaiting the commit is what
+        // makes the double tap complete the word on screen; it resolves synchronously off
+        // Android and whenever nothing is composing.
+        void finishAndroidComposing().then(() => {
+          sendRawRef.current('\t')
+          term.focus()
+        })
       },
       onSelectionChange: setTouchSelection,
       onSendKey: (data) => sendRawRef.current(data),
     })
+    moveSelectionHandleRef.current = touch.moveHandle
 
     sendRawRef.current = (data: string) => {
       const socket = socketRef.current
@@ -637,7 +652,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       disposeCompositionBridge?.()
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
-      disposeTouch()
+      touch.dispose()
+      moveSelectionHandleRef.current = () => {}
       setTouchSelection(null)
       dataDisposable.dispose()
       term.dispose()
@@ -918,6 +934,46 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
             isMobileApp() ? 'touch-none' : 'touch-manipulation'
           }`}
         />
+        {touchSelection &&
+          (['start', 'end'] as const).map((which) => {
+            const handle = which === 'start' ? touchSelection.startHandle : touchSelection.endHandle
+            if (!handle.visible) return null
+            return (
+              <div
+                key={which}
+                // Decorative to a screen reader (there's nothing to announce about a drag
+                // target for a touch selection), and the hook the e2e touch spec aims at.
+                aria-hidden="true"
+                data-selection-handle={which}
+                onTouchStart={(event) => event.preventDefault()}
+                onTouchMove={(event) => {
+                  // Cancelled so this drag can't also pan the page or hand the terminal's own
+                  // gesture handler a second, contradictory idea of what the finger is doing.
+                  event.preventDefault()
+                  const touch = event.touches[0]
+                  if (touch) moveSelectionHandleRef.current(which, touch.clientX, touch.clientY)
+                }}
+                style={{
+                  left: `${handle.left}px`,
+                  top: `${handle.top}px`,
+                  // Centred on the cell edge it controls and hanging below the row, so it
+                  // marks the boundary without covering the text it belongs to. The teardrop's
+                  // point (rounding, below) is what says which end it is.
+                  transform: 'translate(-50%, 0)',
+                }}
+                // Deliberately larger than it looks (the visible dot is the inner span): a
+                // 10px target is unusable with a fingertip, which is half of why the selection
+                // felt unadjustable even once the handles were there.
+                className="absolute z-10 flex h-9 w-9 touch-none items-start justify-center"
+              >
+                <span
+                  className={`mt-0.5 block h-3.5 w-3.5 bg-indigo-400 shadow ${
+                    which === 'start' ? 'rounded-b-full rounded-tl-full' : 'rounded-b-full rounded-tr-full'
+                  }`}
+                />
+              </div>
+            )
+          })}
         {touchSelection && (
           <button
             type="button"

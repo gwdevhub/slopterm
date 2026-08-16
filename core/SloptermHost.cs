@@ -665,6 +665,16 @@ app.MapPost("/api/settings/show-ssh-config-hosts", (SetShowSshConfigHostsRequest
     return Results.Ok(vault.GetSettings());
 });
 
+// Read by the Android head rather than by anything in here - the keep-alive service picks
+// its notification channel from it (see MainActivity.RefreshSessionNotificationBadge). It
+// lives in settings.json with the rest so it survives reinstalls via the vault backup and is
+// editable from the same Settings page.
+app.MapPost("/api/settings/session-notification-badge", (SetSessionNotificationBadgeRequest request) =>
+{
+    vault.SetSessionNotificationBadge(request.Enabled);
+    return Results.Ok(vault.GetSettings());
+});
+
 // Read-only, sourced live from ~/.ssh/config on every call - no vault unlock needed (same
 // posture as /api/local/list: this app already has full local filesystem access, and
 // nothing here is ever written back to the file). The frontend only surfaces this behind

@@ -254,6 +254,57 @@ test.describe('with touch emulation', () => {
     await deleteHost(page, 'toolbar composition race test host')
   })
 
+  test('a double tap completes the word the IME is still composing, not the one before it', async ({ page }) => {
+    // Same stand-in for MainActivity's SloptermAndroid.finishComposing() as the tests above.
+    await page.addInitScript(() => {
+      ;(window as unknown as { SloptermAndroid: unknown }).SloptermAndroid = {
+        saveFile: () => {},
+        finishComposing: () => {
+          const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
+          setTimeout(() => ta?.dispatchEvent(new CompositionEvent('compositionend', { data: '' })), 20)
+        },
+      }
+    })
+
+    await connectHost(page, 'double tap completion test host')
+
+    // Two files sharing a prefix, so the completion's answer says which text the shell had when
+    // Tab reached it: with the composed half committed first the prefix is unique and completes,
+    // without it the prefix is ambiguous and completes to nothing at all.
+    const stamp = Date.now()
+    await page.keyboard.type(`touch /tmp/tabA${stamp}.log /tmp/tabB${stamp}.log && clear`)
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(500)
+
+    await page.keyboard.type('ls /tmp/tab')
+    await page.evaluate((suffix) => {
+      const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      ta.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }))
+      ta.value += suffix
+      ta.dispatchEvent(new CompositionEvent('compositionupdate', { data: suffix }))
+    }, `A${stamp}`)
+    await expect(page.locator(LIVE_PREVIEW)).toHaveText(`A${stamp}`)
+
+    // Two taps inside the double-tap window (see DOUBLE_TAP_MS in terminalTouch.ts) on the
+    // terminal itself - the gesture that stands in for Tab on a touchscreen.
+    const box = (await page.locator('.xterm-rows.xterm-focus').boundingBox())!
+    const x = box.x + box.width / 2
+    const y = box.y + box.height / 2
+    await page.touchscreen.tap(x, y)
+    await page.touchscreen.tap(x, y)
+
+    await expect(async () => {
+      expect(await terminalText(page)).toContain(`tabA${stamp}.log`)
+    }).toPass({ timeout: 10_000 })
+    // The other half of it: a Tab that raced ahead of the commit would have completed the bare
+    // "/tmp/tab" prefix, which matches both files and lists them.
+    expect(await terminalText(page)).not.toContain(`tabB${stamp}.log`)
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'double tap completion test host')
+  })
+
   test('an armed Ctrl applies to a character the IME is still composing', async ({ page }) => {
     // Same stand-in for MainActivity's SloptermAndroid.finishComposing() as the test above:
     // it commits whatever the IME is holding, which the page then sees as a real
