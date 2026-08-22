@@ -478,10 +478,16 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
                   <code className="text-amber-200">ollama pull {aiStatus.model}</code> or pick another model in
                   Settings under "AI agent".
                 </>
+              ) : aiStatus.unauthorized ? (
+                <>
+                  <code className="text-amber-200">{aiStatus.baseUrl}</code> rejected the request -{' '}
+                  {aiStatus.hasApiKey ? 'the stored API key was refused' : 'this endpoint needs an API key'}. Set
+                  it in Settings under "AI agent".
+                </>
               ) : (
                 <>
-                  Can't reach the local AI server at <code className="text-amber-200">{aiStatus.baseUrl}</code>.
-                  Start Ollama (or fix the address in Settings under "AI agent").
+                  Can't reach the AI server at <code className="text-amber-200">{aiStatus.baseUrl}</code>. Start
+                  Ollama, or fix the address in Settings under "AI agent".
                 </>
               )}
             </div>

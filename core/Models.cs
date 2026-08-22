@@ -138,6 +138,12 @@ public sealed class SetAiSettingsRequest
     // Null/empty on either field means "reset to the default" (local Ollama / its default model).
     public string? BaseUrl { get; set; }
     public string? Model { get; set; }
+
+    // The endpoint's optional bearer token, which - unlike the two above - is a secret and is
+    // never read back out, so "leave it as it is" needs its own value: null (or an absent
+    // field) keeps whatever is stored, "" clears it, anything else replaces it. That's what
+    // lets the agent bar's model switcher POST baseUrl+model without wiping the key.
+    public string? ApiKey { get; set; }
 }
 
 public sealed class UpdateApplyRequest

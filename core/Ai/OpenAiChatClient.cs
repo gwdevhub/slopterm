@@ -42,7 +42,8 @@ public static class OpenAiChatClient
         object? tools,
         Func<string, Task> onTextDelta,
         CancellationToken ct,
-        Func<string, Task>? onReasoningDelta = null)
+        Func<string, Task>? onReasoningDelta = null,
+        string? apiKey = null)
     {
         var body = new Dictionary<string, object?>
         {
@@ -60,6 +61,7 @@ public static class OpenAiChatClient
         {
             Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"),
         };
+        AddAuthorization(request, apiKey);
 
         using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
@@ -204,11 +206,13 @@ public static class OpenAiChatClient
     }
 
     /// <summary>Model ids the server offers (GET /models), for the reachability/status probe.</summary>
-    public static async Task<List<string>> ListModelsAsync(string baseUrl, CancellationToken ct)
+    public static async Task<List<string>> ListModelsAsync(string baseUrl, CancellationToken ct, string? apiKey = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(3));
-        using var response = await Http.GetAsync($"{baseUrl.TrimEnd('/')}/models", timeout.Token);
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl.TrimEnd('/')}/models");
+        AddAuthorization(request, apiKey);
+        using var response = await Http.SendAsync(request, timeout.Token);
         response.EnsureSuccessStatusCode();
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
         var models = new List<string>();
@@ -373,6 +377,19 @@ public static class OpenAiChatClient
 
         value = null;
         return false;
+    }
+
+    // Hosted OpenAI-compatible endpoints authenticate with "Authorization: Bearer <key>";
+    // a local Ollama ignores it, so the header is simply omitted when no key is configured.
+    // Set per request, not on the shared HttpClient, since the key can change between calls
+    // (and TryAddWithoutValidation so a key with unusual characters can't throw here rather
+    // than failing loudly at the server).
+    private static void AddAuthorization(HttpRequestMessage request, string? apiKey)
+    {
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey.Trim()}");
+        }
     }
 
     private static async Task<string> ReadErrorAsync(HttpResponseMessage response, CancellationToken ct)
