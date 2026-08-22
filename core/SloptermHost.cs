@@ -687,12 +687,13 @@ app.MapPost("/api/settings/github-token", (SetGithubTokenRequest request) =>
     }
 });
 
-// The in-terminal AI agent's endpoint/model config - a plain settings.json pair (no secrets,
-// no unlock needed; the local-first default is Ollama's port).
+// The in-terminal AI agent's endpoint/model config - a plain settings.json pair (no unlock
+// needed; the local-first default is Ollama's port). The optional API key a hosted endpoint
+// needs IS a secret, so it lives in the vault and only its presence is ever reported back.
 app.MapGet("/api/settings/ai", () =>
 {
     var settings = vault.GetSettings();
-    return Results.Ok(new { baseUrl = settings.AiBaseUrl, model = settings.AiModel });
+    return Results.Ok(new { baseUrl = settings.AiBaseUrl, model = settings.AiModel, hasApiKey = !string.IsNullOrEmpty(vault.GetAiApiKey()) });
 });
 
 app.MapPost("/api/settings/ai", (SetAiSettingsRequest request) =>
@@ -703,7 +704,23 @@ app.MapPost("/api/settings/ai", (SetAiSettingsRequest request) =>
     var baseUrl = string.IsNullOrWhiteSpace(request.BaseUrl) ? defaults.AiBaseUrl : request.BaseUrl.Trim().TrimEnd('/');
     var model = string.IsNullOrWhiteSpace(request.Model) ? defaults.AiModel : request.Model.Trim();
     vault.SetAiSettings(baseUrl, model);
-    return Results.Ok(new { baseUrl, model });
+
+    // Only touch the key when the caller actually sent the field (null = keep as is), so a
+    // model switch from the agent bar can't clear it. Writing it needs an unlocked vault -
+    // the URL/model half is already saved by then, which is the useful partial outcome.
+    if (request.ApiKey is not null)
+    {
+        try
+        {
+            vault.SetAiApiKey(request.ApiKey.Trim());
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+        }
+    }
+
+    return Results.Ok(new { baseUrl, model, hasApiKey = !string.IsNullOrEmpty(vault.GetAiApiKey()) });
 });
 
 // Live reachability probe: is the local AI server up, is the configured model actually
@@ -712,18 +729,41 @@ app.MapPost("/api/settings/ai", (SetAiSettingsRequest request) =>
 app.MapGet("/api/ai/status", async () =>
 {
     var settings = vault.GetSettings();
+    var apiKey = vault.GetAiApiKey();
     try
     {
-        var models = await OpenAiChatClient.ListModelsAsync(settings.AiBaseUrl, CancellationToken.None);
+        var models = await OpenAiChatClient.ListModelsAsync(settings.AiBaseUrl, CancellationToken.None, apiKey);
         // Ollama ids carry a tag ("gemma4:12b"); treat a missing tag as ":latest" both ways so
         // "qwen3" matches "qwen3:latest" without the user having to spell it exactly.
         static string Norm(string m) => m.Contains(':') ? m : $"{m}:latest";
         var modelAvailable = models.Any(m => string.Equals(Norm(m), Norm(settings.AiModel), StringComparison.OrdinalIgnoreCase));
-        return Results.Ok(new { reachable = true, modelAvailable, baseUrl = settings.AiBaseUrl, model = settings.AiModel, models });
+        return Results.Ok(new
+        {
+            reachable = true,
+            modelAvailable,
+            baseUrl = settings.AiBaseUrl,
+            model = settings.AiModel,
+            models,
+            hasApiKey = !string.IsNullOrEmpty(apiKey),
+            unauthorized = false,
+        });
     }
-    catch
+    catch (Exception ex)
     {
-        return Results.Ok(new { reachable = false, modelAvailable = false, baseUrl = settings.AiBaseUrl, model = settings.AiModel, models = Array.Empty<string>() });
+        // A 401/403 is a different problem from "nothing is listening" - the endpoint is up
+        // and the key is missing, wrong, or unreadable because the vault is locked - so the UI
+        // can point at the key instead of telling the user to start Ollama.
+        var unauthorized = ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden };
+        return Results.Ok(new
+        {
+            reachable = false,
+            modelAvailable = false,
+            baseUrl = settings.AiBaseUrl,
+            model = settings.AiModel,
+            models = Array.Empty<string>(),
+            hasApiKey = !string.IsNullOrEmpty(apiKey),
+            unauthorized,
+        });
     }
 });
 
