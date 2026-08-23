@@ -12,7 +12,7 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { AiSettingsSection } from './AiSettingsSection'
 import { UpdateSection } from './UpdateSection'
 import { isTabBadgeEnabled, setTabBadgeEnabled } from '../lib/tabBadge'
-import { isMobileApp, saveFileViaAndroid } from '../lib/androidBridge'
+import { isAndroidApp, isMobileApp, saveFileViaAndroid } from '../lib/androidBridge'
 
 const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
@@ -321,7 +321,13 @@ export function SettingsPage() {
 
       <AiSettingsSection />
 
-      <UpdateSection />
+      {/* Nothing in the Updates section applies to the Android app: updates come from Google
+          Play (UpdateService bails out before any network call there), and the GitHub token
+          below it only exists to raise the rate limit of the check that never runs. All the
+          card could do on a phone was offer a "Check now" button that reports it doesn't
+          check - so it isn't rendered at all. Keyed off the native bridge, not the user
+          agent: a phone browser pointed at a DESKTOP slopterm can still self-update it. */}
+      {!isAndroidApp() && <UpdateSection />}
 
       <div className="flex flex-col gap-3 border-t border-slate-800 pt-4">
         <h3 className="font-medium text-slate-100">Backup</h3>
