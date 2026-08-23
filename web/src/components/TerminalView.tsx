@@ -497,8 +497,16 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       // leave stale composed text on screen forever if the real echo never arrives.
       compositionFreezeTimeout = setTimeout(unfreezeComposition, 1000)
     }
+    // Marks the terminal as composing for as long as the IME holds a word, which is what the
+    // CSS keys off to move the caret onto the preview (see index.css). Not derived from
+    // xterm's own state: CompositionHelper keeps that private, and the keydown path below
+    // finalizes a composition without any compositionend event to observe.
+    const composingRoot: HTMLDivElement = container
+    const setComposing = (active: boolean) => composingRoot.classList.toggle('xterm-composing', active)
+
     const onCompositionEnd = () => {
       isComposingRef.current = false
+      setComposing(false)
       // The commit xterm is about to send is the one onData turns into a control code, and a
       // control code isn't echoed back as the letter it was composed from - freezing the
       // preview would leave a phantom "o" sitting on screen for the backstop second.
@@ -515,6 +523,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     }
     const onCompositionStart = () => {
       isComposingRef.current = true
+      setComposing(true)
     }
     // A new word being previewed lands on top of the frozen one (same cursor cell, since the
     // echo that would have moved the cursor hasn't arrived yet), so the snapshot has to go the
@@ -554,6 +563,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       if (!isComposingRef.current) return
       if ([16, 17, 18, 20, 229].includes(event.keyCode)) return
       isComposingRef.current = false
+      setComposing(false)
       freezeComposition()
     }
     textarea?.addEventListener('compositionend', onCompositionEnd)
