@@ -495,8 +495,8 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
               {aiStatus.reachable ? (
                 <>
                   Model "{aiStatus.model}" isn't available on the AI server - pull it with{' '}
-                  <code className="text-amber-200">ollama pull {aiStatus.model}</code> or pick another model in
-                  Settings under "AI agent".
+                  <code className="text-amber-200">ollama pull {aiStatus.model}</code>, or pick another one from
+                  the model list above.
                 </>
               ) : aiStatus.unauthorized ? (
                 <>

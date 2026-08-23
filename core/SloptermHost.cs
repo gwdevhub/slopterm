@@ -98,6 +98,10 @@ var vault = new VaultService();
 // If settings (persisted from a previous run) say a master password isn't required, this
 // transparently unlocks the vault right now - the frontend never sees an unlock prompt.
 vault.EnsureUnlockedIfPasswordNotRequired();
+// The AI endpoint used to default to a local Ollama URL; with the agent now opt-in, an
+// install carrying that stale default would still show an AI bar on every terminal tab.
+// Runs once per device and only against that exact URL - see ClearLegacyAiEndpointOnce.
+vault.ClearLegacyAiEndpointOnce();
 CrashLogger.LogPhase("vault + settings loaded");
 var forwarding = new ForwardingService(vault);
 var sync = new SyncService(vault);
@@ -611,6 +615,10 @@ app.MapPost("/api/vault/unlock", (VaultPasswordRequest request) =>
             return Results.Json(new { error = "Incorrect master password." }, statusCode: StatusCodes.Status401Unauthorized);
         }
 
+        // A password-protected vault couldn't be read at startup, so the one-time AI-endpoint
+        // pass gets its chance here instead - it no-ops if it already ran.
+        vault.ClearLegacyAiEndpointOnce();
+
         // "On unlock" is one of the sync triggers - until now the collections weren't even
         // readable, so nothing could have been pushed or pulled.
         vaultSync.RequestSyncAll();
@@ -709,13 +717,15 @@ app.MapGet("/api/settings/ai", () =>
 app.MapPost("/api/settings/ai", (SetAiSettingsRequest request) =>
 {
     // An empty URL is a real setting, not a missing one: it turns the agent off, which is
-    // also the out-of-the-box state. An empty model still falls back to the default, since a
-    // configured endpoint with no model named would just fail on every turn.
-    // A pasted URL gets its trailing slash normalized away so "{base}/chat/completions"
-    // concatenation stays clean.
-    var defaults = new AppSettings();
+    // also the out-of-the-box state. A pasted URL gets its trailing slash normalized away so
+    // "{base}/chat/completions" concatenation stays clean.
+    //
+    // An omitted model keeps whatever is stored. The model is picked from the endpoint's own
+    // /models list in the agent bar, so the Settings form doesn't send one at all - and it
+    // must not wipe the picked model just because the URL was saved.
+    var current = vault.GetSettings();
     var baseUrl = (request.BaseUrl ?? string.Empty).Trim().TrimEnd('/');
-    var model = string.IsNullOrWhiteSpace(request.Model) ? defaults.AiModel : request.Model.Trim();
+    var model = string.IsNullOrWhiteSpace(request.Model) ? current.AiModel : request.Model.Trim();
     vault.SetAiSettings(baseUrl, model);
 
     // Only touch the key when the caller actually sent the field (null = keep as is), so a

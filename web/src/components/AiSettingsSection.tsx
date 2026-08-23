@@ -19,7 +19,8 @@ function isLocalEndpoint(url: string) {
 }
 
 // The one line under the heading. Ordered by what the user can act on: no endpoint at all
-// first (the default, and not a problem), then auth, then reachability, then the model.
+// first (the default, and not a problem), then auth, then reachability, then the model - which
+// is picked in the agent bar, not here, so this only reports on it.
 function describeStatus(status: AiStatus | null, local: boolean): string {
   if (status == null) return 'Status unknown'
   if (!status.configured) return 'Off - no server URL set, so terminal tabs show no AI agent'
@@ -33,18 +34,23 @@ function describeStatus(status: AiStatus | null, local: boolean): string {
   }
   if (status.modelAvailable) return `Connected - model "${status.model}" is available`
   return local
-    ? `Connected, but model "${status.model}" isn't pulled (run: ollama pull ${status.model})`
-    : `Connected, but the endpoint doesn't list a model named "${status.model}"`
+    ? `Connected, but model "${status.model}" isn't pulled - run: ollama pull ${status.model}, or pick another in a session's AI agent panel`
+    : `Connected, but the endpoint doesn't list a model named "${status.model}" - pick another in a session's AI agent panel`
 }
 
-// Settings card for the in-terminal AI agent: an OpenAI-compatible endpoint, the model to
-// use, and an optional API key for hosted endpoints that want one. The endpoint is empty out
-// of the box, and that is what makes the agent opt-in - a terminal tab shows no AI bar at all
-// until one is entered here. Distinct accessible names ("AI agent" heading, "Save AI
-// settings" button) keep the e2e specs' exact-match lookups for other sections unambiguous.
+// Settings card for the in-terminal AI agent: an OpenAI-compatible endpoint plus an optional
+// API key for hosted endpoints that want one. The endpoint is empty out of the box, and that
+// is what makes the agent opt-in - a terminal tab shows no AI bar at all until one is entered
+// here.
+//
+// There is deliberately no model field: the endpoint answers /models with what it actually
+// has, and the agent bar turns that into a picker inside a session. A text box here could
+// only ever be a second, unvalidated way to type a name that list already knows.
+//
+// Distinct accessible names ("AI agent" heading, "Save AI settings" button) keep the e2e
+// specs' exact-match lookups for other sections unambiguous.
 export function AiSettingsSection() {
   const [baseUrl, setBaseUrl] = useState('')
-  const [model, setModel] = useState('')
   // Write-only: the stored key never comes back from the server, so this box starts empty
   // and staying empty means "keep whatever is saved" (hasApiKey is what we show instead).
   const [apiKey, setApiKey] = useState('')
@@ -57,7 +63,6 @@ export function AiSettingsSection() {
     getAiSettings()
       .then((s) => {
         setBaseUrl(s.baseUrl)
-        setModel(s.model)
         setHasApiKey(s.hasApiKey)
       })
       .catch(() => {})
@@ -77,9 +82,9 @@ export function AiSettingsSection() {
     setBusy(true)
     setError(null)
     try {
-      const saved = await setAiSettings({ baseUrl, model, apiKey: key })
+      // No model in the payload: whatever was picked in the agent bar stays picked.
+      const saved = await setAiSettings({ baseUrl, apiKey: key })
       setBaseUrl(saved.baseUrl)
-      setModel(saved.model)
       setHasApiKey(saved.hasApiKey)
       setApiKey('')
       // Terminal tabs decide whether to show their AI bar from this - tell them now rather
@@ -122,6 +127,8 @@ export function AiSettingsSection() {
         <label htmlFor="ai-base-url" className="text-sm font-medium text-slate-300">
           Server URL <span className="font-normal text-slate-500">(empty = agent off)</span>
         </label>
+        {/* The greyed-out placeholder doubles as the suggestion for the common local setup:
+            leave the field empty and it shows the address a default Ollama listens on. */}
         <input
           id="ai-base-url"
           type="text"
@@ -155,26 +162,17 @@ export function AiSettingsSection() {
             </button>
           </div>
         )}
-        <label htmlFor="ai-model" className="text-sm font-medium text-slate-300">
-          Model
-        </label>
-        <div className="flex gap-2">
-          <input
-            id="ai-model"
-            type="text"
-            className={inputClasses}
-            placeholder="gemma4:12b"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-          />
-          <button
-            type="submit"
-            disabled={busy}
-            className="shrink-0 rounded bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 disabled:opacity-50"
-          >
-            Save AI settings
-          </button>
-        </div>
+        <p className="text-xs text-slate-500">
+          The model is chosen per session in the AI agent panel, from whatever the endpoint reports
+          on <span className="font-mono">/models</span>.
+        </p>
+        <button
+          type="submit"
+          disabled={busy}
+          className="self-start rounded bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+        >
+          Save AI settings
+        </button>
         {error && <p className="text-sm text-red-400">{error}</p>}
       </form>
     </div>

@@ -442,4 +442,10 @@ public sealed class AppSettings
     public string AiBaseUrl { get; set; } = string.Empty;
 
     public string AiModel { get; set; } = "gemma4:12b";
+
+    // Marks that the one-time "clear the old Ollama default" pass has run on THIS device
+    // (see VaultService.ClearLegacyAiEndpointOnce). Deliberately here rather than in the
+    // synced preferences: it describes what has been done to this machine's settings, and
+    // it must not stop the pass running on another device that still holds the old value.
+    public bool AiEndpointDefaultCleared { get; set; }
 }

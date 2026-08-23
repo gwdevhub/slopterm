@@ -944,9 +944,13 @@ export interface AiSettings {
 // `apiKey` is write-only and tri-state: omit it (or send null) to keep the stored key as it
 // is, '' to clear it, anything else to replace it. Omitting is what lets the agent bar's
 // model switcher save baseUrl+model without touching the key.
+//
+// `model` is omitted by the Settings form for the same reason in reverse: models come from
+// the endpoint's /models list and are chosen in the agent bar, so saving a URL must not
+// reset the model that was picked there.
 export interface AiSettingsUpdate {
   baseUrl: string
-  model: string
+  model?: string
   apiKey?: string | null
 }
 
@@ -956,7 +960,7 @@ export async function getAiSettings(): Promise<AiSettings> {
   return res.json()
 }
 
-// An empty baseUrl turns the agent off; an empty model falls back to the default model name.
+// An empty baseUrl turns the agent off; an omitted model keeps the one already stored.
 export async function setAiSettings(settings: AiSettingsUpdate): Promise<AiSettings> {
   const res = await fetch('/api/settings/ai', {
     method: 'POST',

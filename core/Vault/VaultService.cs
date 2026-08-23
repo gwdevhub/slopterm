@@ -165,6 +165,62 @@ public sealed class VaultService
         return settings;
     }
 
+    private const string LegacyDefaultAiBaseUrl = "http://127.0.0.1:11434/v1";
+
+    /// <summary>
+    /// One-time, per device: clears the AI endpoint if it is still the local-Ollama URL the
+    /// setting used to default to.
+    ///
+    /// The agent is opt-in now - an empty endpoint means off, and a terminal tab shows no AI
+    /// bar at all (see AgentBar). Changing the default alone would only have covered fresh
+    /// installs: every existing one has that URL written into its preferences record, so it
+    /// would keep an AI bar pointed at a port that, on most machines, has nothing behind it.
+    ///
+    /// Only the exact old default is cleared, and only once - the marker lives in
+    /// settings.json, which is device-local and never synced, so re-entering that same URL
+    /// deliberately keeps it, and another device holding the old value still gets its own
+    /// pass. No-op while locked; the callers run it again after an unlock.
+    /// </summary>
+    public void ClearLegacyAiEndpointOnce()
+    {
+        if (!IsUnlocked || ReadSettingsFileOrDefault().AiEndpointDefaultCleared)
+        {
+            return;
+        }
+
+        if (GetPreferences() is { AiBaseUrl: LegacyDefaultAiBaseUrl } preferences)
+        {
+            preferences.AiBaseUrl = string.Empty;
+            SavePreferences(preferences);
+        }
+
+        // Re-read rather than reusing the copy above: SavePreferences mirrors the record back
+        // into settings.json, so that copy is stale by now.
+        var settings = ReadSettingsFileOrDefault();
+        settings.AiEndpointDefaultCleared = true;
+        Directory.CreateDirectory(_vaultDir);
+        File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
+    }
+
+    /// <summary>
+    /// settings.json as it is on disk, with no preferences overlay and no throwing - unlike
+    /// <see cref="GetSettings"/>, which is deliberately strict because RequireMasterPassword
+    /// lives in there. Used where a corrupt file should just mean "do nothing this time".
+    /// </summary>
+    private AppSettings ReadSettingsFileOrDefault()
+    {
+        try
+        {
+            return File.Exists(_settingsPath)
+                ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(_settingsPath)) ?? new AppSettings()
+                : new AppSettings();
+        }
+        catch (JsonException)
+        {
+            return new AppSettings();
+        }
+    }
+
     private const string PreferencesFolder = "preferences";
     private const string PreferencesRecordId = "preferences";
 
