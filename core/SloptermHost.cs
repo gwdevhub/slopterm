@@ -708,11 +708,16 @@ app.MapGet("/api/settings/ai", () =>
 
 app.MapPost("/api/settings/ai", (SetAiSettingsRequest request) =>
 {
-    // Empty fields reset to the defaults; a pasted URL gets its trailing slash normalized away
-    // so "{base}/chat/completions" concatenation stays clean.
-    var defaults = new AppSettings();
-    var baseUrl = string.IsNullOrWhiteSpace(request.BaseUrl) ? defaults.AiBaseUrl : request.BaseUrl.Trim().TrimEnd('/');
-    var model = string.IsNullOrWhiteSpace(request.Model) ? defaults.AiModel : request.Model.Trim();
+    // An empty URL is a real setting, not a missing one: it turns the agent off, which is
+    // also the out-of-the-box state. A pasted URL gets its trailing slash normalized away so
+    // "{base}/chat/completions" concatenation stays clean.
+    //
+    // An omitted model keeps whatever is stored. The model is picked from the endpoint's own
+    // /models list in the agent bar, so the Settings form doesn't send one at all - and it
+    // must not wipe the picked model just because the URL was saved.
+    var current = vault.GetSettings();
+    var baseUrl = (request.BaseUrl ?? string.Empty).Trim().TrimEnd('/');
+    var model = string.IsNullOrWhiteSpace(request.Model) ? current.AiModel : request.Model.Trim();
     vault.SetAiSettings(baseUrl, model);
 
     // Only touch the key when the caller actually sent the field (null = keep as is), so a
@@ -740,6 +745,24 @@ app.MapGet("/api/ai/status", async () =>
 {
     var settings = vault.GetSettings();
     var apiKey = vault.GetAiApiKey();
+
+    // No endpoint configured is the default state, not an error: the agent is off, the UI
+    // renders no bar on a terminal tab, and there is nothing to probe.
+    if (string.IsNullOrWhiteSpace(settings.AiBaseUrl))
+    {
+        return Results.Ok(new
+        {
+            configured = false,
+            reachable = false,
+            modelAvailable = false,
+            baseUrl = settings.AiBaseUrl,
+            model = settings.AiModel,
+            models = Array.Empty<string>(),
+            hasApiKey = !string.IsNullOrEmpty(apiKey),
+            unauthorized = false,
+        });
+    }
+
     try
     {
         var models = await OpenAiChatClient.ListModelsAsync(settings.AiBaseUrl, CancellationToken.None, apiKey);
@@ -749,6 +772,7 @@ app.MapGet("/api/ai/status", async () =>
         var modelAvailable = models.Any(m => string.Equals(Norm(m), Norm(settings.AiModel), StringComparison.OrdinalIgnoreCase));
         return Results.Ok(new
         {
+            configured = true,
             reachable = true,
             modelAvailable,
             baseUrl = settings.AiBaseUrl,
@@ -766,6 +790,7 @@ app.MapGet("/api/ai/status", async () =>
         var unauthorized = ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden };
         return Results.Ok(new
         {
+            configured = true,
             reachable = false,
             modelAvailable = false,
             baseUrl = settings.AiBaseUrl,

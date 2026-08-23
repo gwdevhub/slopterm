@@ -927,10 +927,13 @@ export async function setGithubToken(token: string | null): Promise<GithubTokenS
 }
 
 // --- AI agent ---------------------------------------------------------------------------
-// The agent talks to an OpenAI-compatible server (a local Ollama by default) - a base URL
-// and model name in plaintext settings, plus an optional API key for hosted endpoints that
-// require one. The key is a vault secret: it goes out on save and never comes back, so the
-// read side only reports whether one is stored.
+// The agent talks to an OpenAI-compatible server - a base URL and model name in plaintext
+// settings, plus an optional API key for hosted endpoints that require one. The key is a
+// vault secret: it goes out on save and never comes back, so the read side only reports
+// whether one is stored.
+//
+// An empty base URL means no endpoint is configured, which is the default and switches the
+// agent off entirely (no bar on a terminal tab).
 
 export interface AiSettings {
   baseUrl: string
@@ -941,9 +944,13 @@ export interface AiSettings {
 // `apiKey` is write-only and tri-state: omit it (or send null) to keep the stored key as it
 // is, '' to clear it, anything else to replace it. Omitting is what lets the agent bar's
 // model switcher save baseUrl+model without touching the key.
+//
+// `model` is omitted by the Settings form for the same reason in reverse: models come from
+// the endpoint's /models list and are chosen in the agent bar, so saving a URL must not
+// reset the model that was picked there.
 export interface AiSettingsUpdate {
   baseUrl: string
-  model: string
+  model?: string
   apiKey?: string | null
 }
 
@@ -953,7 +960,7 @@ export async function getAiSettings(): Promise<AiSettings> {
   return res.json()
 }
 
-// Empty baseUrl/model reset that field to its default (local Ollama / its default model).
+// An empty baseUrl turns the agent off; an omitted model keeps the one already stored.
 export async function setAiSettings(settings: AiSettingsUpdate): Promise<AiSettings> {
   const res = await fetch('/api/settings/ai', {
     method: 'POST',
@@ -968,6 +975,9 @@ export async function setAiSettings(settings: AiSettingsUpdate): Promise<AiSetti
 // which models are available to switch to? Drives the agent bar's status dot + model picker
 // and the Settings readout. `models` is empty when the server is unreachable.
 export interface AiStatus {
+  // False when no endpoint is set at all - the default. The agent bar isn't rendered on a
+  // terminal tab in that state, and nothing was probed.
+  configured: boolean
   reachable: boolean
   modelAvailable: boolean
   baseUrl: string

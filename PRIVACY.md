@@ -106,8 +106,11 @@ exits before opening any connection. No check happens on development builds eith
 terminal somewhere. When you talk to the agent, slopterm sends your messages plus **recent
 terminal output** from that session to the OpenAI-compatible endpoint set in Settings.
 
-- **By default that endpoint is `http://127.0.0.1:11434/v1`** — a local Ollama server on your own
-  machine. With the default, this data does not leave your device.
+- **By default there is no endpoint at all**, so the agent is off: a terminal tab shows no AI
+  bar, and no request is ever made. It starts existing only once you enter a server URL in
+  Settings → AI agent.
+- **A local model server** — e.g. Ollama at `http://127.0.0.1:11434/v1` — keeps this data on
+  your own machine: it never leaves the device.
 - **If you change it to a remote or hosted provider, your terminal output goes to that provider**
   and is governed by their privacy policy and retention, not this one. Terminal output routinely
   contains hostnames, file paths, environment details, and sometimes secrets, so choose that

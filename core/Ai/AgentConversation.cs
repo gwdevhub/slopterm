@@ -349,8 +349,8 @@ public sealed class AgentConversation : IDisposable
         EnsureLoaded(vault);
         var settings = vault.GetSettings();
         // Read once per turn (not per request): the endpoint's optional bearer token lives in
-        // the vault, so it's null for the keyless local-Ollama default - and also whenever the
-        // vault is locked, which surfaces as the endpoint's own 401 rather than a special case.
+        // the vault, so it's null for a keyless local Ollama - and also whenever the vault is
+        // locked, which surfaces as the endpoint's own 401 rather than a special case.
         var apiKey = vault.GetAiApiKey();
         var assistantId = Guid.NewGuid().ToString("N");
         var assistant = new ChatMessage { Id = assistantId, Role = "assistant", Mode = mode };
@@ -628,6 +628,15 @@ public sealed class AgentConversation : IDisposable
         catch (OperationCanceledException)
         {
             stopReason = "stopped";
+        }
+        catch (InvalidOperationException) when (string.IsNullOrWhiteSpace(settings.AiBaseUrl))
+        {
+            // Defensive: with no endpoint configured the UI shows no agent bar to type into,
+            // so this is only reachable by a direct WebSocket call. An empty base URL makes
+            // the request URI relative, which HttpClient rejects - say what's actually missing
+            // instead of passing that on.
+            stopReason = "error";
+            error = "No AI endpoint is configured. Add one in Settings under \"AI agent\" to use the agent.";
         }
         catch (HttpRequestException)
         {
