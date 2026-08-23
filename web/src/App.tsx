@@ -9,6 +9,7 @@ import { SectionContent } from './components/SectionContent'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { TitleBar } from './components/TitleBar'
 import { isDesktopApp } from './lib/photino'
+import { isAndroidApp } from './lib/androidBridge'
 import {
   checkForUpdate,
   connect,
@@ -40,6 +41,9 @@ import { useMobileKeyboardScroll, useVisualViewportHeight } from './hooks/useMob
 function useUpdateAvailable() {
   const [updateAvailable, setUpdateAvailable] = useState(false)
   useEffect(() => {
+    // The Android app has no update UI at all (Play ships updates; see SettingsPage), so
+    // there is nothing for a dot to point at - don't even ask.
+    if (isAndroidApp()) return
     checkForUpdate()
       .then((result) => setUpdateAvailable(result.supported && !result.error && result.updateAvailable))
       .catch(() => setUpdateAvailable(false))
