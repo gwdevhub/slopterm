@@ -973,6 +973,23 @@ app.MapDelete("/api/vault/collections/{id}", (string id, bool? keepRecordsLocall
     }
 });
 
+// What a collection actually carries, grouped by scope - "which of my hosts does the team
+// see?", which the record count on the card can't answer. Labels only; the same rule as the
+// listing endpoints applies, so no secret is in the response.
+app.MapGet("/api/collections/{id}/contents", (string id) =>
+{
+    try
+    {
+        return collections.DescribeContents(id) is { } contents
+            ? Results.Ok(contents)
+            : Results.NotFound(new { error = "No such collection on this device." });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+});
+
 app.MapGet("/api/collections/status", () => Results.Ok(vaultSync.GetStatus()));
 
 app.MapPost("/api/collections/{id}/sync", async (string id, CancellationToken ct) =>

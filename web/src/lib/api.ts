@@ -1335,6 +1335,36 @@ export async function leaveCollection(id: string, keepRecordsLocally: boolean): 
   await throwOnError(res)
 }
 
+// What a collection actually carries, grouped by scope. `syncing` is false for a group
+// whose scope has been turned off: those records still sit in the collection on this device,
+// they just don't converge any more - which is exactly what this view exists to reveal.
+// Labels and short details only; the backend never puts a secret in here.
+export interface CollectionContentItem {
+  id: string
+  label: string
+  detail: string | null
+  updatedAt: string
+}
+
+export interface CollectionContentGroup {
+  scope: string
+  label: string
+  syncing: boolean
+  items: CollectionContentItem[]
+}
+
+export interface CollectionContents {
+  collectionId: string
+  name: string
+  groups: CollectionContentGroup[]
+}
+
+export async function getCollectionContents(id: string): Promise<CollectionContents> {
+  const res = await fetch(`/api/collections/${id}/contents`)
+  await throwOnError(res)
+  return res.json()
+}
+
 export async function getCollectionStatus(): Promise<CollectionStatus[]> {
   const res = await fetch('/api/collections/status')
   await throwOnError(res)
