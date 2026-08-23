@@ -408,7 +408,9 @@ public static class OpenAiChatClient
 
                 if (error.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String)
                 {
-                    return message.GetString() ?? body;
+                    var text = message.GetString() ?? body;
+                    var upstream = UpstreamDetail(error);
+                    return upstream is null ? text : $"{text} {upstream}";
                 }
             }
         }
@@ -417,6 +419,68 @@ public static class OpenAiChatClient
         }
 
         return $"AI server returned {(int)response.StatusCode}: {body}";
+    }
+
+    /// <summary>
+    /// A gateway in front of the real provider (Claude Code Router, LiteLLM, OpenRouter, …)
+    /// reports its OWN failure at the top level and buries the provider's reason one or two
+    /// levels down. "All target providers failed." on its own is unactionable, while the
+    /// attempt underneath it says "429 - you've reached your weekly usage limit". Returns a
+    /// short "(upstream 429: …)" suffix for the first attempt that carries either a status or
+    /// a message, or null when the payload has no such shape (plain Ollama/OpenAI errors).
+    /// </summary>
+    private static string? UpstreamDetail(JsonElement error)
+    {
+        if (!error.TryGetProperty("attempts", out var attempts) || attempts.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var attempt in attempts.EnumerateArray())
+        {
+            if (attempt.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var status = attempt.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.Number
+                ? s.GetInt32()
+                : (int?)null;
+
+            // details.error is the provider's own error body, verbatim - either a string or
+            // the usual { "message": ... }. The attempt's own "message" is the gateway's
+            // wording again ("Upstream request failed."), so it's only the fallback.
+            string? detail = null;
+            if (attempt.TryGetProperty("details", out var details)
+                && details.ValueKind == JsonValueKind.Object
+                && details.TryGetProperty("error", out var inner))
+            {
+                if (inner.ValueKind == JsonValueKind.String)
+                {
+                    detail = inner.GetString();
+                }
+                else if (TryGetString(inner, "message", out var innerMessage))
+                {
+                    detail = innerMessage;
+                }
+            }
+
+            if (string.IsNullOrEmpty(detail) && TryGetString(attempt, "message", out var attemptMessage))
+            {
+                detail = attemptMessage;
+            }
+
+            if (status is null && string.IsNullOrEmpty(detail))
+            {
+                continue;
+            }
+
+            return status is null ? $"(upstream: {detail})"
+                : string.IsNullOrEmpty(detail) ? $"(upstream HTTP {status})"
+                : $"(upstream {status}: {detail})";
+        }
+
+        return null;
     }
 }
 
