@@ -122,6 +122,17 @@ async function centreOf(page: Page, word: string) {
 test.describe('with touch emulation', () => {
   test.use({ hasTouch: true })
 
+  // Every test here ends by closing its tab, but a test that fails earlier never gets there -
+  // and the tab it leaves behind is enough to fail every later terminal spec on this shared
+  // server with "resolved to N elements". One real failure should cost one red test, not nine,
+  // so sweep up whatever is still open. Failures themselves are untouched by this.
+  test.afterEach(async ({ page }) => {
+    const stillOpen = page.getByRole('button', { name: `Close ${tabLabel}` })
+    for (let remaining = await stillOpen.count(); remaining > 0; remaining--) {
+      await closeTab(page, tabLabel, { first: true }).catch(() => {})
+    }
+  })
+
   test('a one-finger drag scrolls back through the scrollback and back to the bottom', async ({ page }) => {
     const hostName = 'touch scroll test host'
     await connect(page, hostName)
@@ -130,12 +141,14 @@ test.describe('with touch emulation', () => {
     // exactly where in the buffer it is.
     await page.keyboard.type('seq 1 400')
     await page.keyboard.press('Enter')
+    // Wait for a line that IS a number, not merely for the text "400" - the echoed command
+    // ("seq 1 400") satisfies that the instant it's typed, so on a slow runner the sample
+    // below could land after the echo but before any output, and read NaN.
     await expect(async () => {
-      expect(await terminalText(page)).toContain('400')
+      expect(firstVisibleNumber(await terminalText(page))).toBeGreaterThan(1)
     }).toPass({ timeout: 10_000 })
 
     const atBottom = firstVisibleNumber(await terminalText(page))
-    expect(atBottom).toBeGreaterThan(1)
 
     // Finger down the screen = the content follows it = earlier lines come into view.
     await swipe(page, 300)
