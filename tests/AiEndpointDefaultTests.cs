@@ -4,15 +4,14 @@ using Xunit;
 namespace Slopterm.Tests;
 
 /// <summary>
-/// The one-time pass that clears the AI endpoint's old local-Ollama default, so an install
-/// upgraded into the opt-in agent doesn't keep an AI bar pointed at a port nothing answers on
-/// (see VaultService.ClearLegacyAiEndpointOnce).
+/// The AI agent is opt-in: a vault that has never been told about an endpoint has none, which
+/// is what makes a terminal tab render no AI bar at all (see AgentBar). Nothing rewrites an
+/// endpoint that is already stored - an install carrying the old local-Ollama default keeps
+/// it, and keeps its bar, until someone clears the field themselves.
 /// </summary>
 [Collection("vault-dir")]
 public sealed class AiEndpointDefaultTests : IDisposable
 {
-    private const string LegacyDefault = "http://127.0.0.1:11434/v1";
-
     private readonly string _dir = Path.Combine(
         Path.GetTempPath(), "slopterm-ai-endpoint-tests", Guid.NewGuid().ToString("N"));
 
@@ -37,58 +36,24 @@ public sealed class AiEndpointDefaultTests : IDisposable
         Assert.Equal(string.Empty, NewVault().GetSettings().AiBaseUrl);
     }
 
+    /// <summary>Including the URL that used to be the default - it is not special-cased.</summary>
     [Fact]
-    public void TheOldOllamaDefaultIsClearedOnce()
+    public void AStoredEndpointSurvivesARestart()
     {
-        var vault = NewVault();
-        vault.SetAiSettings(LegacyDefault, "gemma4:12b");
+        NewVault().SetAiSettings("http://127.0.0.1:11434/v1", "gemma4:12b");
 
-        vault.ClearLegacyAiEndpointOnce();
-
-        Assert.Equal(string.Empty, vault.GetSettings().AiBaseUrl);
+        Assert.Equal("http://127.0.0.1:11434/v1", NewVault().GetSettings().AiBaseUrl);
     }
 
-    /// <summary>
-    /// The point of the marker: someone who genuinely runs Ollama can type that same URL back
-    /// in and keep it. A pass that ran on every start would take it away again.
-    /// </summary>
+    /// <summary>Clearing the field is the only thing that turns the agent back off.</summary>
     [Fact]
-    public void ReEnteringThatUrlAfterwardsSurvives()
-    {
-        var vault = NewVault();
-        vault.SetAiSettings(LegacyDefault, "gemma4:12b");
-        vault.ClearLegacyAiEndpointOnce();
-
-        vault.SetAiSettings(LegacyDefault, "gemma4:12b");
-        vault.ClearLegacyAiEndpointOnce();
-
-        Assert.Equal(LegacyDefault, vault.GetSettings().AiBaseUrl);
-    }
-
-    /// <summary>Only that exact URL is touched - a real, chosen endpoint is not a default.</summary>
-    [Fact]
-    public void AnEndpointTheUserChoseIsLeftAlone()
+    public void ClearingTheFieldStoresAnEmptyEndpoint()
     {
         var vault = NewVault();
         vault.SetAiSettings("https://ccr.example.com/v1", "some/model");
 
-        vault.ClearLegacyAiEndpointOnce();
+        vault.SetAiSettings(string.Empty, "some/model");
 
-        Assert.Equal("https://ccr.example.com/v1", vault.GetSettings().AiBaseUrl);
-    }
-
-    /// <summary>The marker is on disk, so a restart doesn't get a second go at it.</summary>
-    [Fact]
-    public void TheMarkerSurvivesARestart()
-    {
-        var first = NewVault();
-        first.SetAiSettings(LegacyDefault, "gemma4:12b");
-        first.ClearLegacyAiEndpointOnce();
-        first.SetAiSettings(LegacyDefault, "gemma4:12b");
-
-        var afterRestart = NewVault();
-        afterRestart.ClearLegacyAiEndpointOnce();
-
-        Assert.Equal(LegacyDefault, afterRestart.GetSettings().AiBaseUrl);
+        Assert.Equal(string.Empty, vault.GetSettings().AiBaseUrl);
     }
 }

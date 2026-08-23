@@ -98,10 +98,6 @@ var vault = new VaultService();
 // If settings (persisted from a previous run) say a master password isn't required, this
 // transparently unlocks the vault right now - the frontend never sees an unlock prompt.
 vault.EnsureUnlockedIfPasswordNotRequired();
-// The AI endpoint used to default to a local Ollama URL; with the agent now opt-in, an
-// install carrying that stale default would still show an AI bar on every terminal tab.
-// Runs once per device and only against that exact URL - see ClearLegacyAiEndpointOnce.
-vault.ClearLegacyAiEndpointOnce();
 CrashLogger.LogPhase("vault + settings loaded");
 var forwarding = new ForwardingService(vault);
 var sync = new SyncService(vault);
@@ -614,10 +610,6 @@ app.MapPost("/api/vault/unlock", (VaultPasswordRequest request) =>
         {
             return Results.Json(new { error = "Incorrect master password." }, statusCode: StatusCodes.Status401Unauthorized);
         }
-
-        // A password-protected vault couldn't be read at startup, so the one-time AI-endpoint
-        // pass gets its chance here instead - it no-ops if it already ran.
-        vault.ClearLegacyAiEndpointOnce();
 
         // "On unlock" is one of the sync triggers - until now the collections weren't even
         // readable, so nothing could have been pushed or pulled.
