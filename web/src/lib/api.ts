@@ -832,6 +832,7 @@ export interface AppSettingsInfo {
   requireMasterPassword: boolean
   closeToTray: boolean
   showSshConfigHosts: boolean
+  sessionNotificationBadge: boolean
 }
 
 export async function getSettings(): Promise<AppSettingsInfo> {
@@ -866,6 +867,19 @@ export async function setCloseToTray(enabled: boolean): Promise<AppSettingsInfo>
 
 export async function setShowSshConfigHosts(enabled: boolean): Promise<AppSettingsInfo> {
   const res = await fetch('/api/settings/show-ssh-config-hosts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  await throwOnError(res)
+  return res.json()
+}
+
+// Android only - the keep-alive notification exists on no other platform. Harmless
+// elsewhere (it's just a settings.json field), but the Settings page only offers it in the
+// mobile app.
+export async function setSessionNotificationBadge(enabled: boolean): Promise<AppSettingsInfo> {
+  const res = await fetch('/api/settings/session-notification-badge', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),

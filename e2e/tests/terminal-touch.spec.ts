@@ -214,6 +214,55 @@ test.describe('with touch emulation', () => {
     await cleanup(page, hostName)
   })
 
+  test('the handles under a finished selection extend it across lines afterwards', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+    const hostName = 'touch handle select test host'
+    const stamp = Date.now()
+    const [first, second, third] = [`one${stamp}`, `two${stamp}`, `three${stamp}`]
+    await connect(page, hostName)
+
+    await page.keyboard.type(`printf '%s\\n' ${first} ${second} ${third}`)
+    await page.keyboard.press('Enter')
+    await expect(async () => {
+      expect(await terminalText(page)).toContain(third)
+    }).toPass({ timeout: 10_000 })
+
+    // A plain long press on the middle word - one line, finger already off the screen. Before
+    // the handles existed this was as much as could ever be selected without starting over.
+    const middle = await centreOf(page, second)
+    await longPress(page, middle.x, middle.y)
+    const copy = page.getByRole('button', { name: 'Copy', exact: true })
+    await expect(copy).toBeVisible()
+
+    const startHandle = page.locator('[data-selection-handle="start"]')
+    const endHandle = page.locator('[data-selection-handle="end"]')
+    await expect(startHandle).toBeVisible()
+    await expect(endHandle).toBeVisible()
+
+    // Drag the end handle past the last character of the line below, then the start handle back
+    // up to the beginning of the line above: three lines, from two gestures neither of which
+    // touched the terminal itself.
+    const last = await centreOf(page, third)
+    const endBox = (await endHandle.boundingBox())!
+    const touch = await finger(page)
+    await touch.down(endBox.x + endBox.width / 2, endBox.y + endBox.height / 2)
+    await touch.moveTo(last.box.x + last.box.width + 4, last.y, 10)
+    await touch.up()
+
+    const top = await centreOf(page, first)
+    const startBox = (await startHandle.boundingBox())!
+    const secondFinger = await finger(page)
+    await secondFinger.down(startBox.x + startBox.width / 2, startBox.y + startBox.height / 2)
+    await secondFinger.moveTo(top.box.x, top.y, 10)
+    await secondFinger.up()
+
+    await copy.click()
+    const copied = await page.evaluate(() => navigator.clipboard.readText())
+    expect(copied.split('\n').map((line) => line.trim())).toEqual([first, second, third])
+
+    await cleanup(page, hostName)
+  })
+
   test('a tap dismisses the selection instead of leaving it and its Copy button behind', async ({ page }) => {
     const hostName = 'touch dismiss test host'
     const marker = `dismissmarker${Date.now()}`

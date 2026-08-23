@@ -109,6 +109,58 @@ test('two concurrent tabs keep separate live sessions when switching between the
   await deleteHost(page, 'tabs test host')
 })
 
+test('switching away from a tab leaves its PTY size alone instead of shrinking it to a sliver', async ({ page }) => {
+  await page.goto(ctx.baseUrl)
+  await gotoSection(page, 'Hosts')
+  await ensureVaultUnlocked(page)
+
+  await page.click('button:has-text("New host")')
+  await page.fill('#name', 'tabs test host')
+  await page.fill('#host', ctx.sshHost)
+  await page.fill('#port', String(ctx.sshPort))
+  await page.fill('#username', ctx.sshUsername)
+  await page.fill('#password', ctx.sshPassword)
+  await page.click('button:has-text("Save host")')
+  await expect(page.getByText('tabs test host')).toBeVisible({ timeout: 10_000 })
+
+  await openTab(page)
+  await openTab(page)
+
+  // An inactive tab is display:none, which its ResizeObserver reports as 0x0 - and FitAddon
+  // floors its proposal at a couple of cells rather than declining to fit, so a tab that was
+  // merely switched away from used to resize its remote PTY down to a sliver (and back up on
+  // return). The remote answers a SIGWINCH with a redraw, which is output arriving in a
+  // background tab: the unseen-activity flag that drives the favicon badge (see
+  // favicon-badge.spec.ts) got set for a tab the user had done nothing in, and nothing ever
+  // cleared it. Watching the resize requests themselves rather than the badge pins the cause.
+  const resizes: { cols: number; rows: number }[] = []
+  page.on('request', (request) => {
+    if (!/\/api\/ssh\/[^/]+\/resize$/.test(new URL(request.url()).pathname)) return
+    try {
+      resizes.push(JSON.parse(request.postData() ?? '{}'))
+    } catch {
+      // A resize we can't parse isn't evidence of anything - ignore it.
+    }
+  })
+
+  const tabs = page.getByRole('button', { name: `${ctx.sshUsername}@${ctx.sshHost}` })
+  await tabs.first().click()
+  await expect(async () => {
+    expect(await terminalText(page)).toContain('Welcome to OpenSSH Server')
+  }).toPass({ timeout: 10_000 })
+  // Comfortably past the 75ms resize debounce, so a resize that was going to happen has.
+  await page.waitForTimeout(1_000)
+
+  // Any resize at all here would be suspect, but the assertion is on the thing that actually
+  // broke: nobody gets told the terminal is now two cells wide.
+  expect(resizes.filter((size) => size.cols < 20 || size.rows < 5)).toEqual([])
+
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`, { first: true })
+  await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
+  await gotoSection(page, 'Hosts')
+  await deleteHost(page, 'tabs test host')
+})
+
 test('a tab can be renamed inline and the new name survives a restart', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')

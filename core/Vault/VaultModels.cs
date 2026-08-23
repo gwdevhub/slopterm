@@ -391,6 +391,7 @@ public sealed class PreferencesRecord
 {
     public bool CloseToTray { get; set; }
     public bool ShowSshConfigHosts { get; set; }
+    public bool SessionNotificationBadge { get; set; }
     public string AiBaseUrl { get; set; } = "http://127.0.0.1:11434/v1";
     public string AiModel { get; set; } = "gemma4:12b";
 
@@ -422,6 +423,12 @@ public sealed class AppSettings
     // literal aliases from ~/.ssh/config as read-only cards (see SshConfigService) -
     // convenience for aliases already managed outside slopterm, not a second host store.
     public bool ShowSshConfigHosts { get; set; }
+
+    // Off by default - the Android keep-alive notification is a platform requirement, not
+    // something the user asked to see, so it shouldn't also put a dot on the launcher icon
+    // and a row in the notification-count. When on, its channel is created with a badge and
+    // normal (still silent) importance. Android only; see SessionKeepAliveService.
+    public bool SessionNotificationBadge { get; set; }
 
     // The in-terminal AI agent talks to an OpenAI-compatible server (a local Ollama on its
     // default port out of the box). Plaintext settings, not vault secrets: a URL and a model

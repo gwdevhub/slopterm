@@ -34,6 +34,14 @@ namespace Slopterm.Mobile;
 // notification back for ten seconds before drawing it, that withdrawal beats the draw and
 // nothing is ever shown.
 //
+// What it cannot be is absent: an app cannot hold a foreground service without a notification,
+// so the only thing actually on the table is how loudly it's presented - which is what the two
+// channels below are for. A client that appears to keep connections open with no notification
+// at all is either doing what the quiet channel here does (Min importance: silent, sorted to
+// the bottom, collapsed out of the shade, no badge) or simply running without the
+// POST_NOTIFICATIONS permission, which is the user's to grant or deny in the system settings
+// and costs nothing either way - the service still runs and the connections still survive.
+//
 // It is deliberately short-lived, and the cap below is what "keep connections open for a few
 // minutes in the background" actually means. Note that while this service is running the
 // WebView usually keeps its terminal WebSocket open too, so the backend's own five-minute
@@ -57,7 +65,22 @@ namespace Slopterm.Mobile;
 public sealed class SessionKeepAliveService : Service
 {
     private const int NotificationId = 2;
-    private const string ChannelId = "slopterm_sessions_channel";
+
+    // Two channels rather than one reconfigured on the fly, because a channel's badge and
+    // importance are fixed at creation: the platform ignores both fields on a channel that
+    // already exists (and recreating a deleted id restores the old values), so the only way to
+    // honor the setting is to post on a different channel. The quiet one is the default and
+    // takes the importance all the way down to Min, which is as close to Termius' "no
+    // notification" as an app is allowed to get from the inside - Android still requires a
+    // notification for the foreground service that keeps the connections alive, but a Min
+    // channel is silent, sorted to the bottom, collapsed by the shade, and badges nothing.
+    private const string QuietChannelId = "slopterm_sessions_quiet";
+    private const string BadgeChannelId = "slopterm_sessions_badge";
+
+    // Superseded by the pair above, which differ from it in badge/importance. Deleted on the
+    // way past so upgrading installs don't leave a dead entry in the app's notification
+    // settings - the user never chose it, so there's nothing of theirs to preserve.
+    private const string LegacyChannelId = "slopterm_sessions_channel";
 
     // The whole point of the exercise: how long connections survive the user switching apps.
     // Bounded so a forgotten app can't hold a wake-worthy service (and a notification) all
@@ -113,24 +136,38 @@ public sealed class SessionKeepAliveService : Service
             new Intent(this, typeof(MainActivity)).SetFlags(ActivityFlags.SingleTop),
             PendingIntentFlags.Immutable | PendingIntentFlags.UpdateCurrent);
 
+        // Off by default: this notification is a requirement of running in the foreground, not
+        // something the user asked to be told about, so it shouldn't also mark the launcher
+        // icon. Settings turns it back up for anyone who wants to see at a glance that
+        // connections are being held (see AppSettings.SessionNotificationBadge).
+        var badge = MainActivity.SessionNotificationBadgeEnabled;
+
         Notification.Builder builder;
         if (OperatingSystem.IsAndroidVersionAtLeast(26))
         {
-            // Low importance: no sound, no heads-up. This notification is a requirement of
-            // running in the foreground, not something the user needs to look at.
+            // Low even when badging: no sound and no heads-up either way, the setting only
+            // decides how visible the thing is once it's in the shade.
             var manager = (NotificationManager?)GetSystemService(NotificationService);
-            manager?.CreateNotificationChannel(
-                new NotificationChannel(ChannelId, "Active sessions", NotificationImportance.Low)
-                {
-                    Description = "Shown while slopterm is holding connections open in the background",
-                });
-            builder = new Notification.Builder(this, ChannelId);
+            manager?.DeleteNotificationChannel(LegacyChannelId);
+            var channelId = badge ? BadgeChannelId : QuietChannelId;
+            var channel = new NotificationChannel(
+                channelId,
+                "Active sessions",
+                badge ? NotificationImportance.Low : NotificationImportance.Min)
+            {
+                Description = "Shown while slopterm is holding connections open in the background",
+            };
+            channel.SetShowBadge(badge);
+            manager?.CreateNotificationChannel(channel);
+            builder = new Notification.Builder(this, channelId);
         }
         else
         {
 #pragma warning disable CA1422 // the channel-less builder is the correct one below API 26
             builder = new Notification.Builder(this);
-            builder.SetPriority((int)NotificationPriority.Low);
+            // Pre-channel, priority is the only knob: Min keeps it out of the status bar
+            // entirely (shade only), Low merely keeps it quiet.
+            builder.SetPriority((int)(badge ? NotificationPriority.Low : NotificationPriority.Min));
 #pragma warning restore CA1422
         }
 

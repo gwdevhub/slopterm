@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent, PointerEvent, ReactElement, SVGProps } from 'react'
 import { ArrowDownIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, MoreHorizontalIcon, SnippetsIcon } from './icons'
 import { listSnippets, type SavedSnippet } from '../lib/api'
-import { finishAndroidComposing } from '../lib/androidBridge'
+import { finishAndroidComposing, hideAndroidKeyboard } from '../lib/androidBridge'
 
 // One tappable key: the label the user reads, and the exact bytes it puts on the wire.
 interface KeyDef {
@@ -299,8 +299,17 @@ export function KeyboardToolbar({
     }
   }, [panel])
 
+  // Opening a panel puts the on-screen keyboard away first. A panel shrinks the terminal to
+  // make room for itself (it doesn't overlay), so with the keyboard also up the terminal is
+  // left with a couple of rows between the two - the keys are open precisely because the user
+  // wants something the keyboard doesn't have. Closing a panel deliberately doesn't bring the
+  // keyboard back: tapping the terminal does that, and re-summoning it on every close would
+  // make dipping into the panel for one key a way to lose the screen again.
   function togglePanel(next: 'keys' | 'snippets') {
-    setPanel((current) => (current === next ? 'none' : next))
+    // Read from the rendered value rather than from inside the updater: the hide is a side
+    // effect, and an updater can be called more than once for the same tap.
+    if (panel !== next) hideAndroidKeyboard()
+    setPanel(panel === next ? 'none' : next)
   }
 
   return (

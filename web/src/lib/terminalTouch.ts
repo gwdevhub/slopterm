@@ -4,7 +4,10 @@ import type { Terminal } from '@xterm/xterm'
 // the scrollback, a long press selects the word under the finger (and dragging on from there
 // extends the selection), and a double tap sends Tab. They belong together rather than in three
 // separate listeners because they all begin with the same touchstart and only diverge later - on
-// how far the finger moved and how long it stayed down.
+// how far the finger moved and how long it stayed down. A selection that outlives the press that
+// made it stays adjustable through the two drag handles the caller draws under its ends (see
+// TouchSelection/moveHandle) - without them a selection is whatever one continuous drag managed
+// to cover, which on a phone is one line and a lot of luck.
 //
 // None of this comes from xterm.js. Its SelectionService runs on mouse events, which a touchscreen
 // only ever synthesizes for a tap - never for the press-and-drag a selection needs - and since v6
@@ -24,6 +27,16 @@ const MOVE_TOLERANCE_PX = 12
 const DOUBLE_TAP_MS = 400
 const DOUBLE_TAP_SLOP_PX = 30
 
+// One of the two drag handles under the ends of a selection, in the same container-relative
+// coordinates as the bubble. `visible` is false when that end has scrolled off the viewport (a
+// selection can outlive the rows it was made on), so the caller just doesn't draw it - the
+// other end stays draggable.
+export interface TouchHandle {
+  left: number
+  top: number
+  visible: boolean
+}
+
 // Where the "Copy" bubble goes and what it would put on the clipboard. Coordinates are relative to
 // the terminal's own container element, so the caller can position it with no geometry of its own;
 // `placement` is which side of the selection there was room on.
@@ -32,6 +45,17 @@ export interface TouchSelection {
   left: number
   top: number
   placement: 'above' | 'below'
+  startHandle: TouchHandle
+  endHandle: TouchHandle
+}
+
+export interface TerminalTouchController {
+  dispose: () => void
+  // Drags one end of the live selection to the cell under the given screen point. The caller
+  // owns the handle elements themselves (they're React's, drawn from TouchSelection above) and
+  // forwards their touchmoves here - the gesture handler can't receive them itself, since a
+  // handle sits outside the terminal container it listens on.
+  moveHandle: (which: 'start' | 'end', clientX: number, clientY: number) => void
 }
 
 interface TerminalTouchCallbacks {
@@ -59,7 +83,7 @@ export function registerTerminalTouch(
   term: Terminal,
   container: HTMLElement,
   { onDoubleTap, onSelectionChange, onSendKey }: TerminalTouchCallbacks,
-): () => void {
+): TerminalTouchController {
   // Measured off the rendered screen layer rather than tracked: the cell size changes with the
   // font (Appearance settings) and the row/column count with every resize, and a getBoundingClientRect
   // per gesture step is far cheaper than keeping a copy of xterm's internal render dimensions in
@@ -115,11 +139,21 @@ export function registerTerminalTouch(
     const topOfStart = offsetY + (start.row - viewportY) * m.cellHeight
     const bottomOfEnd = offsetY + (end.row - viewportY + 1) * m.cellHeight
     const placement = topOfStart > 44 ? 'above' : 'below'
+    // Under each end of the selection, the way the platform's own text handles sit: the first
+    // one under the left edge of the first selected cell, the second under the right edge of
+    // the last (end.col is exclusive, so it already *is* that right edge).
+    const handleAt = (cell: Cell): TouchHandle => ({
+      left: clamp(offsetX + cell.col * m.cellWidth, 0, containerRect.width),
+      top: offsetY + (cell.row - viewportY + 1) * m.cellHeight,
+      visible: cell.row >= viewportY && cell.row < viewportY + term.rows,
+    })
     return {
       text,
       left: clamp(offsetX + (start.col + 0.5) * m.cellWidth, 0, containerRect.width),
       top: placement === 'above' ? topOfStart : bottomOfEnd,
       placement,
+      startHandle: handleAt(start),
+      endHandle: handleAt({ col: end.col, row: end.row }),
     }
   }
 
@@ -127,6 +161,10 @@ export function registerTerminalTouch(
   // it, in whichever direction the finger drags - which is both easier to control on a small
   // screen than a free anchor and impossible to collapse to nothing by accident.
   let anchor: { start: Cell; end: Cell } | null = null
+  // What's actually selected right now, which is the word plus however far the finger has
+  // dragged past it. Kept separately from the anchor because the anchor must stay put for the
+  // grow-from-the-word rule above, while this is what the handles below adjust afterwards.
+  let range: { start: Cell; end: Cell } | null = null
 
   function applySelection(dragPoint?: Cell) {
     if (!anchor) return
@@ -135,17 +173,41 @@ export function registerTerminalTouch(
       if (distance(start, dragPoint) < 0) start = dragPoint
       if (distance(end, dragPoint) > 0) end = dragPoint
     }
+    selectRange(start, end)
+  }
+
+  function selectRange(start: Cell, end: Cell) {
     const length = distance(start, end)
     if (length <= 0) {
       clearSelection()
       return
     }
+    range = { start, end }
     term.select(start.col, start.row, length)
     onSelectionChange(bubbleFor(start, end))
   }
 
+  // Drags one end of the existing selection to wherever the finger is, which is what makes a
+  // selection extendable across lines after the press that created it has ended - a long press
+  // alone only ever selects within the row it landed on. Neither end can be dragged through the
+  // other: the far end holds still and the selection never collapses to nothing under a finger
+  // that overshoots, which is the same rule the platform's own handles follow.
+  function moveHandle(which: 'start' | 'end', clientX: number, clientY: number) {
+    if (!range) return
+    const cell = pointToCell(clientX, clientY)
+    if (!cell) return
+    if (which === 'start') {
+      if (distance(cell, range.end) <= 0) return
+      selectRange(cell, range.end)
+      return
+    }
+    if (distance(range.start, cell) <= 0) return
+    selectRange(range.start, cell)
+  }
+
   function clearSelection() {
     anchor = null
+    range = null
     term.clearSelection()
     onSelectionChange(null)
   }
@@ -310,11 +372,14 @@ export function registerTerminalTouch(
   container.addEventListener('touchend', onTouchEnd, { passive: false })
   container.addEventListener('touchcancel', onTouchCancel)
 
-  return () => {
-    cancelLongPress()
-    container.removeEventListener('touchstart', onTouchStart)
-    container.removeEventListener('touchmove', onTouchMove)
-    container.removeEventListener('touchend', onTouchEnd)
-    container.removeEventListener('touchcancel', onTouchCancel)
+  return {
+    dispose: () => {
+      cancelLongPress()
+      container.removeEventListener('touchstart', onTouchStart)
+      container.removeEventListener('touchmove', onTouchMove)
+      container.removeEventListener('touchend', onTouchEnd)
+      container.removeEventListener('touchcancel', onTouchCancel)
+    },
+    moveHandle,
   }
 }
