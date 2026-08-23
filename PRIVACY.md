@@ -38,6 +38,8 @@ What ends up in there:
 - **AI chat transcripts**, if you use the AI agent — including the terminal output that was sent
   as context.
 - **A GitHub token**, if you enter one for updates.
+- **An AI API key**, if the AI endpoint you configured needs one — encrypted like any other
+  credential, and only ever sent to that endpoint.
 - **Settings** — including the AI endpoint URL and model name, which are stored in plain text
   since neither is a secret.
 - **`crash.log` and `startup.log`** — local diagnostic files. If slopterm crashes, the details
@@ -109,7 +111,8 @@ terminal output** from that session to the OpenAI-compatible endpoint set in Set
 - **If you change it to a remote or hosted provider, your terminal output goes to that provider**
   and is governed by their privacy policy and retention, not this one. Terminal output routinely
   contains hostnames, file paths, environment details, and sometimes secrets, so choose that
-  endpoint deliberately.
+  endpoint deliberately. If that endpoint needs an API key, it is stored encrypted in the vault
+  and sent as an `Authorization: Bearer` header to that endpoint only.
 - Sending nothing is always an option: if you don't use the agent, no request is made.
 
 That is the complete list. slopterm loads no remote fonts, scripts, or other third-party

@@ -42,7 +42,8 @@ public static class OpenAiChatClient
         object? tools,
         Func<string, Task> onTextDelta,
         CancellationToken ct,
-        Func<string, Task>? onReasoningDelta = null)
+        Func<string, Task>? onReasoningDelta = null,
+        string? apiKey = null)
     {
         var body = new Dictionary<string, object?>
         {
@@ -60,6 +61,7 @@ public static class OpenAiChatClient
         {
             Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"),
         };
+        AddAuthorization(request, apiKey);
 
         using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
@@ -204,11 +206,13 @@ public static class OpenAiChatClient
     }
 
     /// <summary>Model ids the server offers (GET /models), for the reachability/status probe.</summary>
-    public static async Task<List<string>> ListModelsAsync(string baseUrl, CancellationToken ct)
+    public static async Task<List<string>> ListModelsAsync(string baseUrl, CancellationToken ct, string? apiKey = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(3));
-        using var response = await Http.GetAsync($"{baseUrl.TrimEnd('/')}/models", timeout.Token);
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl.TrimEnd('/')}/models");
+        AddAuthorization(request, apiKey);
+        using var response = await Http.SendAsync(request, timeout.Token);
         response.EnsureSuccessStatusCode();
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
         var models = new List<string>();
@@ -375,6 +379,19 @@ public static class OpenAiChatClient
         return false;
     }
 
+    // Hosted OpenAI-compatible endpoints authenticate with "Authorization: Bearer <key>";
+    // a local Ollama ignores it, so the header is simply omitted when no key is configured.
+    // Set per request, not on the shared HttpClient, since the key can change between calls
+    // (and TryAddWithoutValidation so a key with unusual characters can't throw here rather
+    // than failing loudly at the server).
+    private static void AddAuthorization(HttpRequestMessage request, string? apiKey)
+    {
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {apiKey.Trim()}");
+        }
+    }
+
     private static async Task<string> ReadErrorAsync(HttpResponseMessage response, CancellationToken ct)
     {
         var body = await response.Content.ReadAsStringAsync(ct);
@@ -391,7 +408,9 @@ public static class OpenAiChatClient
 
                 if (error.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String)
                 {
-                    return message.GetString() ?? body;
+                    var text = message.GetString() ?? body;
+                    var upstream = UpstreamDetail(error);
+                    return upstream is null ? text : $"{text} {upstream}";
                 }
             }
         }
@@ -400,6 +419,68 @@ public static class OpenAiChatClient
         }
 
         return $"AI server returned {(int)response.StatusCode}: {body}";
+    }
+
+    /// <summary>
+    /// A gateway in front of the real provider (Claude Code Router, LiteLLM, OpenRouter, …)
+    /// reports its OWN failure at the top level and buries the provider's reason one or two
+    /// levels down. "All target providers failed." on its own is unactionable, while the
+    /// attempt underneath it says "429 - you've reached your weekly usage limit". Returns a
+    /// short "(upstream 429: …)" suffix for the first attempt that carries either a status or
+    /// a message, or null when the payload has no such shape (plain Ollama/OpenAI errors).
+    /// </summary>
+    private static string? UpstreamDetail(JsonElement error)
+    {
+        if (!error.TryGetProperty("attempts", out var attempts) || attempts.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var attempt in attempts.EnumerateArray())
+        {
+            if (attempt.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var status = attempt.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.Number
+                ? s.GetInt32()
+                : (int?)null;
+
+            // details.error is the provider's own error body, verbatim - either a string or
+            // the usual { "message": ... }. The attempt's own "message" is the gateway's
+            // wording again ("Upstream request failed."), so it's only the fallback.
+            string? detail = null;
+            if (attempt.TryGetProperty("details", out var details)
+                && details.ValueKind == JsonValueKind.Object
+                && details.TryGetProperty("error", out var inner))
+            {
+                if (inner.ValueKind == JsonValueKind.String)
+                {
+                    detail = inner.GetString();
+                }
+                else if (TryGetString(inner, "message", out var innerMessage))
+                {
+                    detail = innerMessage;
+                }
+            }
+
+            if (string.IsNullOrEmpty(detail) && TryGetString(attempt, "message", out var attemptMessage))
+            {
+                detail = attemptMessage;
+            }
+
+            if (status is null && string.IsNullOrEmpty(detail))
+            {
+                continue;
+            }
+
+            return status is null ? $"(upstream: {detail})"
+                : string.IsNullOrEmpty(detail) ? $"(upstream HTTP {status})"
+                : $"(upstream {status}: {detail})";
+        }
+
+        return null;
     }
 }
 
