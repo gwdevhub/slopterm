@@ -134,6 +134,9 @@ test('lists what a collection actually carries', async ({ page }) => {
   await page.fill('#host', ctx.sshHost)
   await page.fill('#port', String(ctx.sshPort))
   await page.fill('#username', ctx.sshUsername)
+  // The password field is `required` under the default auth method, so the form simply
+  // doesn't submit without it - this host is never connected to, the value is irrelevant.
+  await page.fill('#password', 'e2e-secret')
   await page.click('button:has-text("Save host")')
   await expect(page.getByText('e2e listed host')).toBeVisible({ timeout: 10_000 })
 
