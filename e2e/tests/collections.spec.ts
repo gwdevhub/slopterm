@@ -114,6 +114,49 @@ test('a host can be assigned to a collection and is badged as shared', async ({ 
   await removeAllCollections(page)
 })
 
+test('lists what a collection actually carries', async ({ page }) => {
+  await page.goto(ctx.baseUrl)
+  await gotoSection(page, 'Hosts')
+  await ensureVaultUnlocked(page)
+  await removeAllCollections(page)
+
+  await gotoSection(page, 'Collections')
+  await page.click('button:has-text("New collection")')
+  await page.fill('#col-name', 'e2e contents')
+  await page.fill('#col-url', UNREACHABLE_WEBDAV)
+  await page.click('button:has-text("Create collection")')
+  await expect(page.getByText('e2e contents')).toBeVisible({ timeout: 10_000 })
+
+  await gotoSection(page, 'Hosts')
+  await page.click('button:has-text("New host")')
+  await page.fill('#name', 'e2e listed host')
+  await page.selectOption('#collection', { label: 'e2e contents' })
+  await page.fill('#host', ctx.sshHost)
+  await page.fill('#port', String(ctx.sshPort))
+  await page.fill('#username', ctx.sshUsername)
+  await page.click('button:has-text("Save host")')
+  await expect(page.getByText('e2e listed host')).toBeVisible({ timeout: 10_000 })
+
+  // The point of the view: the card's count says how many records converge, this says which.
+  await gotoSection(page, 'Collections')
+  await page.getByRole('button', { name: 'Contents' }).click()
+  // Scoped to the modal: "Hosts" and the host's name both also exist behind it, on the page
+  // it opened over.
+  const modal = page.locator('form', { has: page.getByRole('heading', { name: 'Inside e2e contents' }) })
+  await expect(modal).toBeVisible({ timeout: 10_000 })
+  await expect(modal.getByText('1 record syncing')).toBeVisible()
+  await expect(modal.getByRole('heading', { name: 'Hosts', exact: true })).toBeVisible()
+  await expect(modal.getByText('e2e listed host')).toBeVisible()
+  // The address line is what tells two same-named hosts apart.
+  await expect(modal.getByText(`${ctx.sshUsername}@${ctx.sshHost}:${ctx.sshPort}`)).toBeVisible()
+  await page.getByRole('button', { name: 'Done' }).click()
+  await expect(page.getByRole('heading', { name: 'Inside e2e contents' })).not.toBeVisible()
+
+  await gotoSection(page, 'Hosts')
+  await deleteHost(page, 'e2e listed host')
+  await removeAllCollections(page)
+})
+
 test('rejects a token that isn\'t one of ours', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Collections')

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Slopterm.Server.Vault;
 
 namespace Slopterm.Server.VaultSync;
@@ -21,6 +22,29 @@ public sealed record CollectionSummary(
     // pasted the same token without either of them showing it.
     string KeyFingerprint);
 
+/// <summary>What one collection carries, for the "what is actually shared?" view.</summary>
+public sealed record CollectionContents(
+    string CollectionId,
+    string Name,
+    IReadOnlyList<CollectionContentGroup> Groups);
+
+/// <summary>
+/// One scope's worth of that. <paramref name="Syncing"/> is false for records that live in
+/// the collection while its scope is switched off - present on this device, going nowhere.
+/// </summary>
+public sealed record CollectionContentGroup(
+    string Scope,
+    string Label,
+    bool Syncing,
+    IReadOnlyList<CollectionContentItem> Items);
+
+/// <summary>One record, named and described - never its secret.</summary>
+public sealed record CollectionContentItem(
+    string Id,
+    string Label,
+    string? Detail,
+    DateTimeOffset UpdatedAt);
+
 /// <summary>
 /// Creating, joining, leaving and describing collections. The actual converging lives in
 /// <see cref="VaultSyncService"/>; this decides what exists on this device.
@@ -39,6 +63,136 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// What this collection actually carries, grouped by scope - the answer to "which of my
+    /// hosts does the team see?", which a record count alone can't give.
+    ///
+    /// Every scope is reported, not just the enabled ones: a record stays in the collection
+    /// after its scope is turned off, it just stops converging, and a view that hid those
+    /// would hide precisely the surprising case. <c>Syncing</c> is what says which is which.
+    ///
+    /// Labels only, never secrets - a keychain entry is its name, a recent connection is
+    /// user@host, and neither the key nor the password goes anywhere near this.
+    /// </summary>
+    public CollectionContents? DescribeContents(string collectionId)
+    {
+        if (vault.Collections.GetCollection(collectionId) is not { } collection)
+        {
+            return null;
+        }
+
+        var groups = new List<CollectionContentGroup>();
+        foreach (var scope in SyncScopes.All)
+        {
+            var syncing = collection.Scopes.Contains(scope.Name, StringComparer.OrdinalIgnoreCase);
+            var items = vault.Collections.ListRecords(collectionId, scope.Folder)
+                .Select(record => Summarize(scope.Name, record))
+                .Where(item => item is not null)
+                .Select(item => item!)
+                .OrderBy(item => item.Label, StringComparer.CurrentCultureIgnoreCase)
+                .ToList();
+
+            // An off scope with nothing in it is just noise - there is no story to tell about
+            // records that neither exist nor would sync.
+            if (!syncing && items.Count == 0)
+            {
+                continue;
+            }
+
+            groups.Add(new CollectionContentGroup(scope.Name, scope.Label, syncing, items));
+        }
+
+        return new CollectionContents(collectionId, collection.Name, groups);
+    }
+
+    /// <summary>
+    /// One record as a line of text. Returns null for a record this build can't read (an
+    /// older/newer schema, or corruption): the count it contributes is still visible in the
+    /// group above it, and a half-parsed line would be worse than an honest omission.
+    /// </summary>
+    private static CollectionContentItem? Summarize(string scope, StoredRecord record)
+    {
+        static string Trim(string text, int max)
+        {
+            var flat = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            return flat.Length <= max ? flat : string.Concat(flat.AsSpan(0, max), "…");
+        }
+
+        switch (scope)
+        {
+            case SyncScopes.Hosts:
+            {
+                if (TryRead<HostRecord>(record) is not { } host) return null;
+                var user = host.Credentials.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Username))?.Username;
+                var address = $"{host.Address}:{host.Port}";
+                return Item(record, host.Name, string.IsNullOrEmpty(user) ? address : $"{user}@{address}");
+            }
+
+            case SyncScopes.Snippets:
+            {
+                if (TryRead<SnippetRecord>(record) is not { } snippet) return null;
+                return Item(record, snippet.Name, Trim(snippet.Command, 80));
+            }
+
+            case SyncScopes.Keychain:
+            {
+                // The name is the whole point of a keychain entry (hosts reference it by
+                // name), and it is also all that can safely be shown - never the key itself.
+                if (TryRead<KeychainEntryRecord>(record) is not { } entry) return null;
+                return Item(record, entry.Name, string.IsNullOrEmpty(entry.Passphrase) ? "private key" : "private key, passphrase set");
+            }
+
+            case SyncScopes.PortForwards:
+            {
+                if (TryRead<PortForwardRecord>(record) is not { } forward) return null;
+                var mapping = $"{forward.BindAddress}:{forward.BindPort} → {forward.DestinationAddress}:{forward.DestinationPort}";
+                return Item(record, string.IsNullOrWhiteSpace(forward.Description) ? mapping : forward.Description, $"{forward.Type} · {mapping}");
+            }
+
+            case SyncScopes.SyncRules:
+            {
+                if (TryRead<SyncRuleRecord>(record) is not { } rule) return null;
+                var arrow = rule.Direction switch
+                {
+                    "remoteToLocal" => "←",
+                    "twoWay" => "↔",
+                    _ => "→",
+                };
+                var mapping = $"{rule.LocalPath} {arrow} {rule.RemotePath}";
+                return Item(record, string.IsNullOrWhiteSpace(rule.Description) ? mapping : rule.Description, mapping);
+            }
+
+            case SyncScopes.Preferences:
+                // A single fixed-id record, so there is nothing to name it by.
+                return Item(record, "Preferences", "appearance, AI endpoint and model, UI toggles");
+
+            case SyncScopes.RecentConnections:
+            {
+                if (TryRead<RecentConnectionRecord>(record) is not { } recent) return null;
+                var method = recent.AuthMethod == "privateKey" ? "private key" : "password";
+                return Item(record, $"{recent.Username}@{recent.Host}:{recent.Port}", method);
+            }
+
+            default:
+                return null;
+        }
+    }
+
+    private static CollectionContentItem Item(StoredRecord record, string label, string? detail) =>
+        new(record.Id, string.IsNullOrWhiteSpace(label) ? "(unnamed)" : label, detail, record.UpdatedAt);
+
+    private static T? TryRead<T>(StoredRecord record) where T : class
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<T>(record.Json);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     public CollectionSummary? Describe(string collectionId)

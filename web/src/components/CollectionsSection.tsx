@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import {
   createCollection,
+  getCollectionContents,
   getCollectionInviteToken,
   getCollectionStatus,
   getSyncConfigurationToken,
@@ -11,6 +12,7 @@ import {
   syncCollectionNow,
   updateCollection,
   type Collection,
+  type CollectionContents,
   type CollectionInput,
   type CollectionStatus,
   type SyncScopeInfo,
@@ -55,6 +57,7 @@ function CollectionList() {
   const [editing, setEditing] = useState<Collection | 'new' | null>(null)
   const [joining, setJoining] = useState(false)
   const [tokenFor, setTokenFor] = useState<Collection | 'all' | null>(null)
+  const [showingContents, setShowingContents] = useState<Collection | null>(null)
   const [leaving, setLeaving] = useState<Collection | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -178,6 +181,13 @@ function CollectionList() {
                     >
                       {busy === collection.id ? 'Syncing…' : 'Sync now'}
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowingContents(collection)}
+                      className={cardSecondaryButton}
+                    >
+                      Contents
+                    </button>
                     <button type="button" onClick={() => setTokenFor(collection)} className={cardSecondaryButton}>
                       Invite
                     </button>
@@ -237,6 +247,10 @@ function CollectionList() {
             refresh()
           }}
         />
+      )}
+
+      {showingContents && (
+        <ContentsModal collection={showingContents} onClose={() => setShowingContents(null)} />
       )}
 
       {tokenFor && <TokenModal target={tokenFor} onClose={() => setTokenFor(null)} />}
@@ -472,6 +486,90 @@ function JoinModal({ onClose, onJoined }: { onClose: () => void; onJoined: () =>
       {error && <p className="text-sm text-red-400">{error}</p>}
 
       <ModalButtons onClose={onClose} submitLabel="Join" busy={busy} />
+    </ModalShell>
+  )
+}
+
+// "Which of my hosts does the team actually see?" - the card's record count says how many
+// records converge, not which. This lists them by scope, by name, so sharing a collection is
+// something you can check rather than infer. Read-only on purpose: moving a record between
+// collections belongs on the record's own card, where the rest of its editing lives.
+function ContentsModal({ collection, onClose }: { collection: Collection; onClose: () => void }) {
+  const [contents, setContents] = useState<CollectionContents | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getCollectionContents(collection.id)
+      .then((c) => !cancelled && setContents(c))
+      .catch((err) => !cancelled && setError(err instanceof Error ? err.message : 'Failed to read the collection'))
+    return () => {
+      cancelled = true
+    }
+  }, [collection.id])
+
+  const total = contents?.groups.reduce((sum, g) => sum + (g.syncing ? g.items.length : 0), 0) ?? 0
+
+  return (
+    <ModalShell onSubmit={(e) => { e.preventDefault(); onClose() }} title={`Inside ${collection.name}`}>
+      <p className="text-sm text-slate-400">
+        Everything this collection syncs to <span className="font-mono text-xs">{collection.remoteUrl || 'no remote set'}</span>{' '}
+        — and so everything anyone holding its token can read.
+      </p>
+
+      {error && <p className="text-sm text-red-400">{error}</p>}
+      {!contents && !error && <p className="text-sm text-slate-500">Reading…</p>}
+
+      {contents && (
+        <>
+          <p className="text-xs text-slate-500">
+            {total} record{total === 1 ? '' : 's'} syncing
+          </p>
+
+          {contents.groups.length === 0 && (
+            <p className="text-sm text-slate-500">This collection has no syncable scopes turned on.</p>
+          )}
+
+          {contents.groups.map((group) => (
+            <div key={group.scope} className="flex flex-col gap-1">
+              <div className="flex items-baseline gap-2">
+                <h4 className="text-sm font-medium text-slate-200">{group.label}</h4>
+                <span className="text-xs text-slate-500">{group.items.length}</span>
+                {!group.syncing && (
+                  <span className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-medium tracking-wide text-amber-300 uppercase">
+                    Not syncing
+                  </span>
+                )}
+              </div>
+
+              {/* A group is only listed when it is on OR holds records, so "off with records"
+                  is the one case that needs explaining: they stay here, they just stop moving. */}
+              {!group.syncing && (
+                <p className="text-xs text-slate-500">
+                  This scope is off, so these stay on this device and no longer reach the share.
+                </p>
+              )}
+
+              {group.items.length === 0 ? (
+                <p className="text-xs text-slate-600">Nothing yet.</p>
+              ) : (
+                <ul className="flex flex-col gap-1">
+                  {group.items.map((item) => (
+                    <li key={item.id} className="rounded border border-slate-800 bg-slate-950/40 px-2 py-1">
+                      <p className="truncate text-sm text-slate-200" title={item.label}>{item.label}</p>
+                      {item.detail && (
+                        <p className="truncate font-mono text-xs text-slate-500" title={item.detail}>{item.detail}</p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </>
+      )}
+
+      <ModalButtons onClose={onClose} submitLabel="Done" />
     </ModalShell>
   )
 }
