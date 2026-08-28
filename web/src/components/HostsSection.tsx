@@ -241,9 +241,9 @@ export function HostsSection({
             setHostModal(null)
             refreshHosts()
           }}
-          onDeleted={() => {
+          onDeleted={(hostId) => {
             setHostModal(null)
-            refreshHosts()
+            setHosts((current) => current.filter((host) => host.id !== hostId))
           }}
           onDuplicated={handleHostDuplicated}
           isConnecting={isConnecting}
