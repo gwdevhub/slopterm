@@ -115,11 +115,9 @@ export function AiSettingsSection() {
     <div className="flex flex-col gap-3 rounded border border-slate-700 bg-slate-900 p-4">
       <h3 className="font-medium text-slate-100">AI agent</h3>
       <p className="text-xs text-slate-500">
-        Off until you set a server URL: with this empty, terminal tabs carry no AI bar at all. Any
-        OpenAI-compatible endpoint works. A local <span className="text-slate-400">Ollama</span> at{' '}
-        <span className="font-mono text-slate-400">http://127.0.0.1:11434/v1</span> is free and private -
-        your terminal output never leaves this machine. Point it at a hosted endpoint instead and add
-        its API key below; your terminal output then goes to that provider.
+        With this empty, terminal tabs carry no AI bar at all. Any OpenAI-compatible endpoint works. A
+        local <span className="text-slate-400">Ollama</span> defaults to{' '}
+        <span className="font-mono text-slate-400">http://127.0.0.1:11434/v1</span>.
       </p>
 
       <p className={`text-sm ${statusColor}`}>{statusLine}</p>
