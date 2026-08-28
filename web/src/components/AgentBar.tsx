@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   agentSocketUrl,
   getAiStatus,
-  setAiSettings,
   type AgentClientMessage,
   type AgentMode,
   type AgentServerEvent,
@@ -43,7 +42,7 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
   const [input, setInput] = useState('')
   const [running, setRunning] = useState(false)
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null)
-  const [switchingModel, setSwitchingModel] = useState(false)
+  const [selectedModel, setSelectedModel] = useState('')
   const [socketReady, setSocketReady] = useState(false)
   const [disconnected, setDisconnected] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -72,7 +71,10 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     const refresh = () =>
       getAiStatus()
         .then((s) => {
-          if (!cancelled) setAiStatus(s)
+          if (!cancelled) {
+            setAiStatus(s)
+            setSelectedModel((current) => (s.models.includes(current) ? current : (s.models[0] ?? '')))
+          }
         })
         .catch(() => {
           if (!cancelled) setAiStatus(null)
@@ -225,7 +227,7 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     const socket = socketRef.current
     // Sending while a turn runs is allowed - the backend queues messages and processes
     // them in order (a queued message also interrupts waiting-for-Enter on a suggestion).
-    if (!text || !socket || socket.readyState !== WebSocket.OPEN) return
+    if (!text || !selectedModel || !socket || socket.readyState !== WebSocket.OPEN) return
     // Sending while the saved-chats list is open starts a fresh conversation for this message -
     // the same as pressing "New chat" first. Otherwise it would append to the current chat behind
     // the hidden transcript and look like it just vanished. The backend folds the new-chat into
@@ -243,7 +245,7 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     // appends to what's already shown.
     setMessages((prev) => (startNewChat ? [userMessage] : [...prev, userMessage]))
     setNotice(null)
-    const frame: AgentClientMessage = { type: 'send', mode, text, newChat: startNewChat }
+    const frame: AgentClientMessage = { type: 'send', mode, model: selectedModel, text, newChat: startNewChat }
     socket.send(JSON.stringify(frame))
     setInput('')
   }
@@ -326,33 +328,10 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     handle.addEventListener('pointercancel', stop)
   }
 
-  // Persists the pick via the same settings endpoint the Settings page uses; the backend
-  // re-reads settings per turn, so the next send uses the new model with no reconnect.
-  // The refresh afterwards re-syncs the picker (and dot/banner) with what actually saved,
-  // which also handles a failed save by snapping the select back.
-  async function switchModel(model: string) {
-    if (!aiStatus) return
-    setSwitchingModel(true)
-    try {
-      await setAiSettings({ baseUrl: aiStatus.baseUrl, model })
-    } catch {
-      // fall through - the refresh below re-syncs the picker with reality
-    }
-    try {
-      setAiStatus(await getAiStatus())
-    } catch {
-      setAiStatus(null)
-    }
-    setSwitchingModel(false)
-  }
-
-  const ready = aiStatus?.reachable === true && aiStatus.modelAvailable
+  const ready = aiStatus?.reachable === true && selectedModel.length > 0
   const dotColor = aiStatus == null ? 'bg-slate-500' : ready ? 'bg-emerald-500' : 'bg-amber-500'
-  // Everything the server has pulled, plus the configured model if it isn't among them
-  // (e.g. not pulled yet) so the select always shows the real current setting.
-  const modelOptions =
-    aiStatus == null ? [] : aiStatus.models.includes(aiStatus.model) ? aiStatus.models : [aiStatus.model, ...aiStatus.models]
-  const sendDisabled = !input.trim() || !socketReady
+  const modelOptions = aiStatus?.models ?? []
+  const sendDisabled = !input.trim() || !socketReady || !selectedModel
 
   // Shared between the collapsed strip and the expanded header row - the toggle and the
   // status dot live in whichever of the two is currently rendered, so the expanded panel
@@ -378,9 +357,9 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
         aiStatus == null
           ? 'Checking AI server…'
           : ready
-            ? `AI ready (${aiStatus.model})`
+            ? `AI ready (${selectedModel})`
             : aiStatus.reachable
-              ? `Model "${aiStatus.model}" not pulled`
+              ? 'AI server returned no models'
               : 'AI server not reachable'
       }
     />
@@ -451,9 +430,9 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
             {modelOptions.length > 0 && (
               <select
                 aria-label="AI model"
-                value={aiStatus?.model}
-                disabled={running || switchingModel}
-                onChange={(e) => void switchModel(e.target.value)}
+                value={selectedModel}
+                disabled={running}
+                onChange={(e) => setSelectedModel(e.target.value)}
                 className="min-w-0 max-w-[45%] rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-300 focus:border-slate-400 focus:outline-none disabled:opacity-50"
               >
                 {modelOptions.map((m) => (
@@ -493,11 +472,7 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
           {aiStatus && !ready && (
             <div className="mx-2 mb-1 shrink-0 rounded border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
               {aiStatus.reachable ? (
-                <>
-                  Model "{aiStatus.model}" isn't available on the AI server - pull it with{' '}
-                  <code className="text-amber-200">ollama pull {aiStatus.model}</code>, or pick another one from
-                  the model list above.
-                </>
+                <>The AI server returned no models. Add one on the server, then reopen this panel.</>
               ) : aiStatus.unauthorized ? (
                 <>
                   <code className="text-amber-200">{aiStatus.baseUrl}</code> rejected the request -{' '}

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Slopterm.Server.Vault;
 using Xunit;
 
@@ -40,7 +41,7 @@ public sealed class AiEndpointDefaultTests : IDisposable
     [Fact]
     public void AStoredEndpointSurvivesARestart()
     {
-        NewVault().SetAiSettings("http://127.0.0.1:11434/v1", "gemma4:12b");
+        NewVault().SetAiSettings("http://127.0.0.1:11434/v1");
 
         Assert.Equal("http://127.0.0.1:11434/v1", NewVault().GetSettings().AiBaseUrl);
     }
@@ -50,10 +51,22 @@ public sealed class AiEndpointDefaultTests : IDisposable
     public void ClearingTheFieldStoresAnEmptyEndpoint()
     {
         var vault = NewVault();
-        vault.SetAiSettings("https://ccr.example.com/v1", "some/model");
+        vault.SetAiSettings("https://ccr.example.com/v1");
 
-        vault.SetAiSettings(string.Empty, "some/model");
+        vault.SetAiSettings(string.Empty);
 
         Assert.Equal(string.Empty, vault.GetSettings().AiBaseUrl);
+    }
+
+    [Fact]
+    public void LegacyModelFieldsAreNotPartOfEitherSettingsSchema()
+    {
+        const string legacyJson = """{"AiBaseUrl":"http://localhost/v1","AiModel":"qwen3.5:9b"}""";
+
+        var appSettings = JsonSerializer.Deserialize<AppSettings>(legacyJson)!;
+        var preferences = JsonSerializer.Deserialize<PreferencesRecord>(legacyJson)!;
+
+        Assert.DoesNotContain("AiModel", JsonSerializer.Serialize(appSettings));
+        Assert.DoesNotContain("AiModel", JsonSerializer.Serialize(preferences));
     }
 }

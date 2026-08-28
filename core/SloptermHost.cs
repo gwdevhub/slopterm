@@ -697,13 +697,13 @@ app.MapPost("/api/settings/github-token", (SetGithubTokenRequest request) =>
     }
 });
 
-// The in-terminal AI agent's endpoint/model config - a plain settings.json pair (no unlock
-// needed; the local-first default is Ollama's port). The optional API key a hosted endpoint
-// needs IS a secret, so it lives in the vault and only its presence is ever reported back.
+// The in-terminal AI agent's endpoint config. The optional API key a hosted endpoint needs IS
+// a secret, so it lives in the vault and only its presence is ever reported back. Models are
+// never settings: the agent panel chooses only from the endpoint's live /models response.
 app.MapGet("/api/settings/ai", () =>
 {
     var settings = vault.GetSettings();
-    return Results.Ok(new { baseUrl = settings.AiBaseUrl, model = settings.AiModel, hasApiKey = !string.IsNullOrEmpty(vault.GetAiApiKey()) });
+    return Results.Ok(new { baseUrl = settings.AiBaseUrl, hasApiKey = !string.IsNullOrEmpty(vault.GetAiApiKey()) });
 });
 
 app.MapPost("/api/settings/ai", (SetAiSettingsRequest request) =>
@@ -711,18 +711,12 @@ app.MapPost("/api/settings/ai", (SetAiSettingsRequest request) =>
     // An empty URL is a real setting, not a missing one: it turns the agent off, which is
     // also the out-of-the-box state. A pasted URL gets its trailing slash normalized away so
     // "{base}/chat/completions" concatenation stays clean.
-    //
-    // An omitted model keeps whatever is stored. The model is picked from the endpoint's own
-    // /models list in the agent bar, so the Settings form doesn't send one at all - and it
-    // must not wipe the picked model just because the URL was saved.
-    var current = vault.GetSettings();
     var baseUrl = (request.BaseUrl ?? string.Empty).Trim().TrimEnd('/');
-    var model = string.IsNullOrWhiteSpace(request.Model) ? current.AiModel : request.Model.Trim();
-    vault.SetAiSettings(baseUrl, model);
+    vault.SetAiSettings(baseUrl);
 
     // Only touch the key when the caller actually sent the field (null = keep as is), so a
-    // model switch from the agent bar can't clear it. Writing it needs an unlocked vault -
-    // the URL/model half is already saved by then, which is the useful partial outcome.
+    // saving the URL can't clear it. Writing it needs an unlocked vault - the URL is already
+    // saved by then, which is the useful partial outcome.
     if (request.ApiKey is not null)
     {
         try
@@ -735,12 +729,11 @@ app.MapPost("/api/settings/ai", (SetAiSettingsRequest request) =>
         }
     }
 
-    return Results.Ok(new { baseUrl, model, hasApiKey = !string.IsNullOrEmpty(vault.GetAiApiKey()) });
+    return Results.Ok(new { baseUrl, hasApiKey = !string.IsNullOrEmpty(vault.GetAiApiKey()) });
 });
 
-// Live reachability probe: is the local AI server up, is the configured model actually
-// pulled, and what models are available to switch to? Drives the status dot, the model
-// picker in the agent bar, and the Settings readout.
+// Live reachability probe and the only source of model choices. Drives the status dot, model
+// picker in the agent bar, and Settings readout without creating a model setting.
 app.MapGet("/api/ai/status", async () =>
 {
     var settings = vault.GetSettings();
@@ -754,9 +747,7 @@ app.MapGet("/api/ai/status", async () =>
         {
             configured = false,
             reachable = false,
-            modelAvailable = false,
             baseUrl = settings.AiBaseUrl,
-            model = settings.AiModel,
             models = Array.Empty<string>(),
             hasApiKey = !string.IsNullOrEmpty(apiKey),
             unauthorized = false,
@@ -766,17 +757,11 @@ app.MapGet("/api/ai/status", async () =>
     try
     {
         var models = await OpenAiChatClient.ListModelsAsync(settings.AiBaseUrl, CancellationToken.None, apiKey);
-        // Ollama ids carry a tag ("gemma4:12b"); treat a missing tag as ":latest" both ways so
-        // "qwen3" matches "qwen3:latest" without the user having to spell it exactly.
-        static string Norm(string m) => m.Contains(':') ? m : $"{m}:latest";
-        var modelAvailable = models.Any(m => string.Equals(Norm(m), Norm(settings.AiModel), StringComparison.OrdinalIgnoreCase));
         return Results.Ok(new
         {
             configured = true,
             reachable = true,
-            modelAvailable,
             baseUrl = settings.AiBaseUrl,
-            model = settings.AiModel,
             models,
             hasApiKey = !string.IsNullOrEmpty(apiKey),
             unauthorized = false,
@@ -792,9 +777,7 @@ app.MapGet("/api/ai/status", async () =>
         {
             configured = true,
             reachable = false,
-            modelAvailable = false,
             baseUrl = settings.AiBaseUrl,
-            model = settings.AiModel,
             models = Array.Empty<string>(),
             hasApiKey = !string.IsNullOrEmpty(apiKey),
             unauthorized,
@@ -1976,7 +1959,7 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
     var sendLock = new SemaphoreSlim(1, 1);
     // User messages queue instead of erroring while a turn runs; the pump below is the ONLY
     // place turns are started, draining this in order. Stop/clear empty it.
-    var queue = new ConcurrentQueue<(string Mode, string Text)>();
+    var queue = new ConcurrentQueue<(string Mode, string Model, string Text)>();
     var signal = new SemaphoreSlim(0);
     // Cancels only the "waiting for the user's Enter" watch - a new user message, stop, or
     // clear must all end it (deliberately never disposed mid-flight: the receive loop may
@@ -2060,6 +2043,7 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
     // until the next signal. Serializing everything here is what makes message queueing,
     // the continuation loop, and stop/clear compose without races.
     var lastMode = "chat";
+    var lastModel = "";
     var pumpTask = Task.Run(async () =>
     {
         try
@@ -2077,9 +2061,10 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
                         }
 
                         lastMode = message.Mode;
+                        lastModel = message.Model;
                         try
                         {
-                            await session.Agent.RunTurnAsync(vault, message.Mode, message.Text, Emit, turnToken);
+                            await session.Agent.RunTurnAsync(vault, message.Mode, message.Model, message.Text, Emit, turnToken);
                         }
                         finally
                         {
@@ -2108,7 +2093,7 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
                         {
                             try
                             {
-                                await session.Agent.RunTurnAsync(vault, lastMode,
+                                await session.Agent.RunTurnAsync(vault, lastMode, lastModel,
                                     $"(I pressed Enter and the terminal ran: {suggested}. Read the terminal output, report the "
                                     + "result, and continue with the next single step. If the task is complete, say so and stop suggesting.)",
                                     Emit, continuationToken, isContinuation: true);
@@ -2180,6 +2165,12 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
             switch (msg?.Type)
             {
                 case "send":
+                    if (string.IsNullOrWhiteSpace(msg.Model))
+                    {
+                        await Emit(new { type = "error", message = "Choose a model from the AI server's model list." });
+                        break;
+                    }
+
                     // Sending while the saved-chats list is open starts a fresh conversation for
                     // this one message - the "New chat then send" flow the user expects - instead
                     // of appending it to the now-hidden current chat, where it would look like the
@@ -2197,7 +2188,7 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
                     // Never rejected: messages queue in order and the pump drains them one
                     // turn at a time. A new message also supersedes any watch still waiting
                     // on a previous suggestion's Enter.
-                    queue.Enqueue((msg.Mode ?? "chat", msg.Text ?? ""));
+                    queue.Enqueue((msg.Mode ?? "chat", msg.Model, msg.Text ?? ""));
                     watchCts?.Cancel();
                     signal.Release();
                     break;

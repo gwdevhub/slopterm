@@ -119,7 +119,7 @@ the defaults just have to be sensible.
 | `github-token` | never | a credential for something unrelated to this collection |
 
 **Preferences need a split before they can sync.** `settings.json` today holds
-`RequireMasterPassword` next to `CloseToTray` / `ShowSshConfigHosts` / `AiBaseUrl` / `AiModel`,
+`RequireMasterPassword` next to `CloseToTray` / `ShowSshConfigHosts` / `AiBaseUrl`,
 and it has to stay readable *before* the vault is unlocked, because it's what decides whether
 to prompt at all. `RequireMasterPassword` describes how *this device's* vault is encrypted and
 must never sync. So: leave `settings.json` as the pre-unlock device file, and move the syncable
