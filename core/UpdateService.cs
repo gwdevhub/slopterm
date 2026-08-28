@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.InteropServices;
@@ -41,6 +42,13 @@ public sealed record UpdateProgress(string Phase, double Percent, string? Error 
 public sealed class UpdateService
 {
     private const string Repo = "gwdevhub/slopterm";
+    private static readonly byte[] BundleHeaderSignature =
+    [
+        0x8b, 0x12, 0x02, 0xb9, 0x6a, 0x61, 0x20, 0x38,
+        0x72, 0x7b, 0x93, 0x02, 0x14, 0xd7, 0xa0, 0x32,
+        0x13, 0xf5, 0xb9, 0xe6, 0xef, 0xae, 0x33, 0x18,
+        0xee, 0x3b, 0x2d, 0xce, 0x24, 0xb3, 0x6a, 0xae
+    ];
     private static readonly HttpClient Http = new();
 
     private string? _cachedCurrentSha256;
@@ -223,34 +231,57 @@ public sealed class UpdateService
             return null;
         }
 
-        // Only a genuine published single-file build is updatable - there's no single exe
-        // that *is* the app to hash/swap otherwise. Two independent guards, because neither
-        // alone is sufficient:
-        //
-        //  - Empty Assembly.Location is the reliable single-file signal. When the app is
-        //    bundled into one self-contained exe, the runtime loads assemblies straight from
-        //    the bundle rather than from disk, so GetEntryAssembly().Location is an empty
-        //    string. Under `dotnet run`, `dotnet build`, or any normal framework-dependent
-        //    run it's the real on-disk DLL path instead. This is the documented way to detect
-        //    a single-file publish at runtime. In a real single-file build ProcessPath is the
-        //    single-file exe itself, so we still return it (the real update path is preserved).
-        //
-        //  - The filename == "dotnet" guard alone is NOT enough. `dotnet run` does not leave
-        //    us running under the shared `dotnet` host: it builds and launches the project's
-        //    own apphost executable (Slopterm.Server.exe in bin/Debug/net10.0/), so
-        //    ProcessPath is that apphost and its filename is "Slopterm.Server", never
-        //    "dotnet". Relying on the filename check alone would wrongly treat a dev build as
-        //    publishable, hash the apphost, find its SHA differs from the release asset, and
-        //    report a bogus "update available" (plus the update dot). We keep the "dotnet"
-        //    check as cheap belt-and-suspenders (covers `dotnet exec` on non-Windows).
-        var isSingleFile = string.IsNullOrEmpty(System.Reflection.Assembly.GetEntryAssembly()?.Location);
-        if (!isSingleFile)
+        var fileName = Path.GetFileNameWithoutExtension(path);
+        if (string.Equals(fileName, "dotnet", StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
 
-        var fileName = Path.GetFileNameWithoutExtension(path);
-        return string.Equals(fileName, "dotnet", StringComparison.OrdinalIgnoreCase) ? null : path;
+        // IncludeAllContentForSelfExtract extracts managed assemblies before startup, so
+        // Assembly.Location is non-empty even for our genuine single-file releases. Inspect
+        // the apphost's bundle marker instead; an ordinary apphost has the same marker with a
+        // zero header offset, while dotnet publish fills in the real bundle header offset.
+        return IsSingleFileBundle(path) ? path : null;
+    }
+
+    internal static bool IsSingleFileBundle(string path)
+    {
+        const int bufferSize = 64 * 1024;
+        var overlap = BundleHeaderSignature.Length + sizeof(long) - 1;
+        var buffer = new byte[bufferSize + overlap];
+        var preserved = 0;
+
+        using var stream = File.OpenRead(path);
+        while (true)
+        {
+            var read = stream.Read(buffer, preserved, bufferSize);
+            if (read == 0)
+            {
+                return false;
+            }
+
+            var bytes = buffer.AsSpan(0, preserved + read);
+            var searchOffset = 0;
+            while (searchOffset < bytes.Length)
+            {
+                var relativeIndex = bytes[searchOffset..].IndexOf(BundleHeaderSignature);
+                if (relativeIndex < 0)
+                {
+                    break;
+                }
+
+                var signatureIndex = searchOffset + relativeIndex;
+                if (signatureIndex >= sizeof(long))
+                {
+                    return BinaryPrimitives.ReadInt64LittleEndian(bytes[(signatureIndex - sizeof(long))..]) != 0;
+                }
+
+                searchOffset = signatureIndex + 1;
+            }
+
+            preserved = Math.Min(overlap, bytes.Length);
+            bytes[^preserved..].CopyTo(buffer);
+        }
     }
 
     private string? ComputeCurrentExeSha256()

@@ -31,6 +31,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Slopterm.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Remove="wwwroot/**" />
     <EmbeddedResource Include="wwwroot/**" />
   </ItemGroup>
