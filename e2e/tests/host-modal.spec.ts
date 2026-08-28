@@ -64,13 +64,21 @@ test('a host card\'s edit icon opens a modal to rename, duplicate, and delete (w
   await page.click('button:has-text("Cancel")')
   await expect(page.getByText('edit modal test host COPY')).toBeVisible({ timeout: 10_000 })
 
-  // Confirming actually deletes it.
+  // A slow list refresh must not leave the deleted card hanging around or interfere with
+  // immediately deleting another host.
+  await page.route('**/api/vault/hosts', async (route) => {
+    if (route.request().method() === 'GET') {
+      await new Promise((resolve) => setTimeout(resolve, 3_000))
+    }
+    await route.continue()
+  })
+
   await page.getByRole('button', { name: 'Edit edit modal test host COPY' }).click()
   await page.getByRole('button', { name: 'Delete host' }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
-  await expect(page.getByText('edit modal test host COPY')).not.toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText('edit modal test host COPY')).not.toBeVisible({ timeout: 1_000 })
 
-  // Clean up the original (renamed) host too.
+  // Delete the original immediately, without waiting for any host-list request to settle.
   await page.getByRole('button', { name: 'Edit edit modal test host RENAMED' }).click()
   await page.getByRole('button', { name: 'Delete host' }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()

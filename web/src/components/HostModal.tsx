@@ -19,7 +19,7 @@ interface HostModalProps {
   host?: SavedHost
   onClose: () => void
   onSaved: () => void
-  onDeleted: () => void
+  onDeleted: (hostId: string) => void
   // Fired after "Duplicate" creates the copy, with its new id - the caller re-opens this
   // same modal for that copy so the user can immediately adjust the address/username
   // rather than having to find and re-open it themselves (issue #54).
@@ -132,8 +132,13 @@ export function HostModal({ host, onClose, onSaved, onDeleted, onDuplicated, isC
 
   async function handleDelete() {
     if (!host) return
-    await deleteHost(host.id)
-    onDeleted()
+    setError(null)
+    try {
+      await deleteHost(host.id)
+      onDeleted(host.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete host')
+    }
   }
 
   async function handleDuplicate() {

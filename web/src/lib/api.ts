@@ -313,7 +313,8 @@ export async function duplicateHost(id: string): Promise<{ id: string }> {
 }
 
 export async function deleteHost(id: string): Promise<void> {
-  await fetch(`/api/vault/hosts/${id}`, { method: 'DELETE' })
+  const res = await fetch(`/api/vault/hosts/${id}`, { method: 'DELETE' })
+  await throwOnError(res)
 }
 
 // Returns a portable, encrypted token encoding this host (address/port/credentials) that
