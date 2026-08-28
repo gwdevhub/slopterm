@@ -40,6 +40,10 @@ jobs:
 
   build:
     needs: version
+    env:
+      CERTUM_OTP_URI: ${{ secrets.CERTUM_OTP_URI }}
+      CERTUM_USERID: ${{ secrets.CERTUM_USERID }}
+      CERTUM_CERT_SHA1: ${{ secrets.CERTUM_CERT_SHA1 }}
     strategy:
       fail-fast: false
       matrix:
@@ -79,6 +83,24 @@ jobs:
       - name: Rename to a friendly asset name
         shell: bash
         run: cp "server/bin/Release/net10.0/${{ matrix.rid }}/publish/${{ matrix.binary }}" "${{ matrix.asset }}"
+
+      - name: Set up Certum SimplySign
+        if: matrix.rid == 'win-x64' && env.CERTUM_OTP_URI != ''
+        shell: bash
+        run: |
+          chmod +x ./.github/scripts/install-simplysign.sh
+          ./.github/scripts/install-simplysign.sh
+          powershell -ExecutionPolicy Bypass -File "./.github/scripts/configure-simplysign.ps1"
+
+      - name: Authenticate Certum SimplySign
+        if: matrix.rid == 'win-x64' && env.CERTUM_OTP_URI != ''
+        shell: bash
+        run: powershell -ExecutionPolicy Bypass -File "./.github/scripts/connect-simplysign.ps1"
+
+      - name: Sign Windows release binary
+        if: matrix.rid == 'win-x64' && env.CERTUM_OTP_URI != ''
+        shell: pwsh
+        run: ./.github/scripts/sign-certum.ps1 -Files @("${{ matrix.asset }}")
 
       - uses: actions/upload-artifact@v4
         with:
