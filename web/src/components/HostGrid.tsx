@@ -33,6 +33,21 @@ function matchesQuery(host: SavedHost, q: string): boolean {
   )
 }
 
+function compareHosts(a: SavedHost, b: SavedHost): number {
+  const aName = a.host.name.trim()
+  const bName = b.host.name.trim()
+  const options: Intl.CollatorOptions = { sensitivity: 'base', numeric: true }
+
+  if (aName && bName) {
+    const byName = aName.localeCompare(bName, undefined, options)
+    if (byName !== 0) return byName
+  } else if (aName || bName) {
+    return aName ? -1 : 1
+  }
+
+  return a.host.address.localeCompare(b.host.address, undefined, options)
+}
+
 // The searchable card grid from the Termius reference (issue #10). Single column on
 // narrow screens, more columns as space allows - full mobile spec is issue #11. Hosts
 // sharing the same HostRecord.ParentGroupId collapse into a single GroupCard (issue #14)
@@ -61,16 +76,18 @@ export function HostGrid({
   // user already knows what they're looking for. Clearing the search resumes whichever
   // group was expanded (expandedGroup itself is left untouched while searching).
   const { groups, individualHosts } = useMemo(() => {
+    const sortedHosts = hosts.toSorted(compareHosts)
+
     if (q) {
-      return { groups: [], individualHosts: hosts.filter((h) => matchesQuery(h, q)) }
+      return { groups: [], individualHosts: sortedHosts.filter((h) => matchesQuery(h, q)) }
     }
 
     if (expandedGroup !== null) {
-      return { groups: [], individualHosts: hosts.filter((h) => h.host.parentGroupId === expandedGroup) }
+      return { groups: [], individualHosts: sortedHosts.filter((h) => h.host.parentGroupId === expandedGroup) }
     }
 
     const byGroup = new Map<string, SavedHost[]>()
-    for (const h of hosts) {
+    for (const h of sortedHosts) {
       const groupName = h.host.parentGroupId
       if (!groupName) continue
       const members = byGroup.get(groupName)
@@ -84,7 +101,7 @@ export function HostGrid({
     // the grid until a second host actually joins it).
     const realGroups: { name: string; members: SavedHost[] }[] = []
     const ungrouped: SavedHost[] = []
-    for (const h of hosts) {
+    for (const h of sortedHosts) {
       const groupName = h.host.parentGroupId
       const members = groupName ? byGroup.get(groupName) : undefined
       if (!members || members.length < 2) {
