@@ -161,10 +161,6 @@ export function AiSettingsSection() {
             </button>
           </div>
         )}
-        <p className="text-xs text-slate-500">
-          The model is chosen per session in the AI agent panel, from whatever the endpoint reports
-          on <span className="font-mono">/models</span>.
-        </p>
         <button
           type="submit"
           disabled={busy}
