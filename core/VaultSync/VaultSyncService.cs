@@ -457,6 +457,20 @@ public sealed class VaultSyncService : IAsyncDisposable
             collection.Records[stateKey] = new RecordSyncState { ETag = entry.ETag, Hlc = envelope.Hlc };
         }
 
+        // Leaving with "keep records" preserves the same stable ids in the local collection.
+        // If this device later rejoins, the pull above restores those records to their original
+        // collection; keeping both copies would show every host twice and make edits ambiguous.
+        var joinedIds = _vault.Collections.ListRecords(collectionId, folder)
+            .Select(record => record.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var localCopy in _vault.Collections.ListRecords(CollectionStore.LocalCollectionId, folder))
+        {
+            if (joinedIds.Contains(localCopy.Id))
+            {
+                _vault.Collections.DeleteRecord(CollectionStore.LocalCollectionId, folder, localCopy.Id, scope);
+            }
+        }
+
         // --- push -------------------------------------------------------------------------
         foreach (var record in _vault.Collections.ListRecords(collectionId, folder))
         {
