@@ -32,6 +32,19 @@ async function removeAllCollections(page: Page) {
   }
 }
 
+async function createNamedKeyHost(page: Page, name: string, collection?: string) {
+  await page.getByRole('button', { name: 'New host' }).click()
+  await page.fill('#name', name)
+  await page.fill('#host', ctx.sshHost)
+  await page.fill('#port', String(ctx.sshPort))
+  await page.fill('#username', ctx.sshUsername)
+  await page.getByRole('radio', { name: 'Use a key named…' }).check()
+  await page.fill('#namedKey', 'e2e-bulk-key')
+  if (collection) await page.selectOption('#collection', { label: collection })
+  await page.getByRole('button', { name: 'Save host' }).click()
+  await expect(page.getByText(name, { exact: true })).toBeVisible({ timeout: 10_000 })
+}
+
 test('creates a collection, copies its invite token, and leaves it again', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')
@@ -111,6 +124,55 @@ test('a host can be assigned to a collection and is badged as shared', async ({ 
   await expect(page.getByRole('button', { name: 'SSH to e2e shared host' })).toBeDisabled()
 
   await deleteHost(page, 'e2e shared host')
+  await removeAllCollections(page)
+})
+
+test('multiple hosts can be moved to a collection and deleted together', async ({ page }) => {
+  await page.goto(ctx.baseUrl)
+  await gotoSection(page, 'Hosts')
+  await ensureVaultUnlocked(page)
+  await removeAllCollections(page)
+
+  await page.getByRole('button', { name: 'New collection' }).click()
+  await page.fill('#col-name', 'e2e bulk collection')
+  await page.fill('#col-url', UNREACHABLE_WEBDAV)
+  await page.getByRole('button', { name: 'Create collection' }).click()
+  await expect(page.getByText('e2e bulk collection')).toBeVisible({ timeout: 10_000 })
+
+  await gotoSection(page, 'Hosts')
+  await createNamedKeyHost(page, 'e2e bulk local one')
+  await createNamedKeyHost(page, 'e2e bulk local two')
+  await createNamedKeyHost(page, 'e2e bulk already shared', 'e2e bulk collection')
+
+  let moveRequests = 0
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /\/api\/vault\/records\/hosts\/[^/]+\/collection$/.test(request.url())) {
+      moveRequests++
+    }
+  })
+
+  await page.getByRole('button', { name: 'Select', exact: true }).click()
+  await page.getByLabel('Select e2e bulk local one').check()
+  await page.getByLabel('Select e2e bulk local two').check()
+  await page.getByLabel('Select e2e bulk already shared').check()
+  await page.getByLabel('Destination collection').selectOption({ label: 'e2e bulk collection' })
+  await page.getByRole('button', { name: 'Move', exact: true }).click()
+
+  await expect(page.getByText('Moved 2 hosts to e2e bulk collection; skipped 1 already there')).toBeVisible()
+  await expect(page.locator('[title="Shared through e2e bulk collection"]')).toHaveCount(3)
+  expect(moveRequests).toBe(2)
+
+  await page.getByRole('button', { name: 'Select', exact: true }).click()
+  await page.getByLabel('Select e2e bulk local one').check()
+  await page.getByLabel('Select e2e bulk local two').check()
+  await page.getByLabel('Select e2e bulk already shared').check()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Delete selected hosts?' })).toBeVisible()
+  await page.getByRole('button', { name: 'Delete hosts' }).click()
+
+  await expect(page.getByText('e2e bulk local one', { exact: true })).not.toBeVisible()
+  await expect(page.getByText('e2e bulk local two', { exact: true })).not.toBeVisible()
+  await expect(page.getByText('e2e bulk already shared', { exact: true })).not.toBeVisible()
   await removeAllCollections(page)
 })
 

@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
 import {
+  deleteHost,
   getHostShareToken,
   getLocalShellSupport,
   getSettings,
   listCollections,
   listHosts,
   listSnippets,
+  moveRecordToCollection,
   upsertRecentConnection,
   type ConnectRequest,
+  type Collection,
   type SavedHost,
   type SavedRecentConnection,
   type SavedSnippet,
@@ -23,6 +26,7 @@ import { QuickConnectModal } from './QuickConnectModal'
 import { ContextMenu } from './ContextMenu'
 import { ImportHostModal } from './ImportHostModal'
 import { ShareTokenModal } from './ShareTokenModal'
+import { ConfirmDialog } from './ConfirmDialog'
 import { isMobileApp } from '../lib/androidBridge'
 import type { ConnectionFormValues } from './ConnectionForm'
 
@@ -56,8 +60,11 @@ export function HostsSection({
   const [shareToken, setShareToken] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [showSshConfigHosts, setShowSshConfigHosts] = useState(false)
-  // Collection id -> name, for the badge that marks a host as one the whole team sees.
-  const [collectionNames, setCollectionNames] = useState<Record<string, string>>({})
+  const [collections, setCollections] = useState<Collection[]>([])
+  const [selectedHostIds, setSelectedHostIds] = useState<Set<string>>(new Set())
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
   // Null until the support probe answers, and left null where the answer is no - see
   // HostGrid's localShell prop.
   const [localShell, setLocalShell] = useState<{ platform: string; shell: string } | null>(null)
@@ -71,8 +78,8 @@ export function HostsSection({
       .then((s) => setShowSshConfigHosts(s.showSshConfigHosts))
       .catch(() => setShowSshConfigHosts(false))
     listCollections()
-      .then((cs) => setCollectionNames(Object.fromEntries(cs.map((c) => [c.id, c.name]))))
-      .catch(() => setCollectionNames({}))
+      .then(setCollections)
+      .catch(() => setCollections([]))
     getLocalShellSupport()
       .then((s) => setLocalShell(s.supported && s.shell ? { platform: s.platform, shell: s.shell } : null))
       .catch(() => setLocalShell(null))
@@ -90,6 +97,52 @@ export function HostsSection({
       setHosts(updated)
       return updated
     })
+  }
+
+  function setBulkSelectionMode(enabled: boolean) {
+    setSelectionMode(enabled)
+    if (!enabled) setSelectedHostIds(new Set())
+  }
+
+  async function handleMoveSelected(collectionId: string) {
+    const selected = hosts.filter((host) => selectedHostIds.has(host.id))
+    const toMove = selected.filter((host) => host.collectionId !== collectionId)
+    const skipped = selected.length - toMove.length
+    const destination = collectionId === 'local' ? 'Private' : collections.find((c) => c.id === collectionId)?.name ?? 'collection'
+
+    setBulkBusy(true)
+    try {
+      await Promise.all(toMove.map((host) => moveRecordToCollection('hosts', host.id, collectionId)))
+      setHosts((current) => current.map((host) => selectedHostIds.has(host.id) ? { ...host, collectionId } : host))
+      setNotice(
+        toMove.length === 0
+          ? `Selected hosts are already in ${destination}`
+          : `Moved ${toMove.length} host${toMove.length === 1 ? '' : 's'} to ${destination}${skipped ? `; skipped ${skipped} already there` : ''}`,
+      )
+      setBulkSelectionMode(false)
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Failed to move selected hosts')
+      await refreshHosts().catch(() => undefined)
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  async function handleDeleteSelected() {
+    const ids = new Set(selectedHostIds)
+    setConfirmBulkDelete(false)
+    setBulkBusy(true)
+    try {
+      await Promise.all([...ids].map(deleteHost))
+      setHosts((current) => current.filter((host) => !ids.has(host.id)))
+      setNotice(`Deleted ${ids.size} host${ids.size === 1 ? '' : 's'}`)
+      setBulkSelectionMode(false)
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Failed to delete selected hosts')
+      await refreshHosts().catch(() => undefined)
+    } finally {
+      setBulkBusy(false)
+    }
   }
 
   // After "Duplicate" creates a copy, re-open this same modal for the new host so its
@@ -195,6 +248,7 @@ export function HostsSection({
   // showing it a second time here would be redundant (and an ambiguous duplicate match
   // in tests).
   const showBannerHere = hostModal === null && !quickConnectOpen
+  const collectionNames = Object.fromEntries(collections.map((collection) => [collection.id, collection.name]))
 
   return (
     <VaultGate>
@@ -217,6 +271,14 @@ export function HostsSection({
           onHostContextMenu={(host, x, y) => setMenu({ host, x, y })}
           isConnecting={isConnecting}
           collectionNames={collectionNames}
+          collections={collections}
+          selectedHostIds={selectedHostIds}
+          selectionMode={selectionMode}
+          bulkBusy={bulkBusy}
+          onSelectionModeChange={setBulkSelectionMode}
+          onSelectionChange={setSelectedHostIds}
+          onMoveSelected={(collectionId) => void handleMoveSelected(collectionId)}
+          onDeleteSelected={() => setConfirmBulkDelete(true)}
         />
         <RecentConnections
           refreshToken={recentsRefreshToken}
@@ -268,6 +330,16 @@ export function HostsSection({
         />
       )}
       {shareToken && <ShareTokenModal token={shareToken} onClose={() => setShareToken(null)} />}
+      {confirmBulkDelete && (
+        <ConfirmDialog
+          title="Delete selected hosts?"
+          message={`Delete ${selectedHostIds.size} selected host${selectedHostIds.size === 1 ? '' : 's'}? This can't be undone.`}
+          confirmLabel="Delete hosts"
+          danger
+          onConfirm={() => void handleDeleteSelected()}
+          onCancel={() => setConfirmBulkDelete(false)}
+        />
+      )}
       {menu && (
         <ContextMenu
           x={menu.x}
