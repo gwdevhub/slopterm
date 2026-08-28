@@ -226,14 +226,6 @@ export function SettingsPage() {
         </button>
       </div>
 
-      <p className="rounded border border-amber-800 bg-amber-950/40 px-3 py-2 text-sm text-amber-300">
-        When disabled, your vault is still encrypted at rest, but with a fixed key built into
-        slopterm's own (public) source code instead of a real secret. That only protects
-        against casually opening the vault files - it does not protect against anyone who has
-        both those files and this app, since they could derive the same key. Only turn this off
-        if that trade-off is fine for your use case.
-      </p>
-
       {mode !== 'idle' && (
         <form onSubmit={handleConfirm} className="flex flex-col gap-2 border-t border-slate-800 pt-4">
           <label htmlFor="settings-password" className="text-sm font-medium text-slate-300">
