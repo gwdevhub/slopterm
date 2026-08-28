@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { SavedHost } from '../lib/api'
+import type { Collection, SavedHost } from '../lib/api'
 import { describeCredentialResolution, resolveConnectRequest } from '../lib/hosts'
 import { HostCard } from './HostCard'
 import { GroupCard } from './GroupCard'
@@ -23,6 +23,14 @@ interface HostGridProps {
   // Collection id -> name, for the badge on a shared host's card. Absent while the list is
   // still loading, or when this device holds no collections at all.
   collectionNames?: Record<string, string>
+  collections: Collection[]
+  selectedHostIds: Set<string>
+  selectionMode: boolean
+  bulkBusy: boolean
+  onSelectionModeChange: (enabled: boolean) => void
+  onSelectionChange: (ids: Set<string>) => void
+  onMoveSelected: (collectionId: string) => void
+  onDeleteSelected: () => void
 }
 
 function matchesQuery(host: SavedHost, q: string): boolean {
@@ -65,9 +73,18 @@ export function HostGrid({
   onHostContextMenu,
   isConnecting,
   collectionNames,
+  collections,
+  selectedHostIds,
+  selectionMode,
+  bulkBusy,
+  onSelectionModeChange,
+  onSelectionChange,
+  onMoveSelected,
+  onDeleteSelected,
 }: HostGridProps) {
   const [query, setQuery] = useState('')
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
+  const [targetCollectionId, setTargetCollectionId] = useState('')
 
   const q = query.trim().toLowerCase()
 
@@ -78,7 +95,7 @@ export function HostGrid({
   const { groups, individualHosts } = useMemo(() => {
     const sortedHosts = hosts.toSorted(compareHosts)
 
-    if (q) {
+    if (q || selectionMode) {
       return { groups: [], individualHosts: sortedHosts.filter((h) => matchesQuery(h, q)) }
     }
 
@@ -113,7 +130,24 @@ export function HostGrid({
     }
 
     return { groups: realGroups, individualHosts: ungrouped }
-  }, [hosts, q, expandedGroup])
+  }, [hosts, q, expandedGroup, selectionMode])
+
+  const visibleIds = individualHosts.map((host) => host.id)
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedHostIds.has(id))
+
+  function toggleHost(id: string) {
+    const next = new Set(selectedHostIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    onSelectionChange(next)
+  }
+
+  function toggleAllVisible() {
+    const next = new Set(selectedHostIds)
+    if (allVisibleSelected) visibleIds.forEach((id) => next.delete(id))
+    else visibleIds.forEach((id) => next.add(id))
+    onSelectionChange(next)
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-3 p-3 sm:p-4">
@@ -124,6 +158,14 @@ export function HostGrid({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        <button
+          type="button"
+          onClick={() => onSelectionModeChange(!selectionMode)}
+          disabled={hosts.length === 0 || bulkBusy}
+          className="rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+        >
+          {selectionMode ? 'Cancel selection' : 'Select'}
+        </button>
         <button
           type="button"
           onClick={onQuickConnect}
@@ -159,7 +201,50 @@ export function HostGrid({
         </button>
       </div>
 
-      {expandedGroup !== null && !q && (
+      {selectionMode && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-slate-800 bg-slate-900/60 p-2">
+          <label className="flex items-center gap-2 px-1 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={toggleAllVisible}
+              className="h-4 w-4 accent-indigo-500"
+            />
+            Select {q ? 'matches' : 'all'}
+          </label>
+          <span className="text-sm text-slate-400">{selectedHostIds.size} selected</span>
+          <select
+            aria-label="Destination collection"
+            value={targetCollectionId}
+            onChange={(event) => setTargetCollectionId(event.target.value)}
+            className="min-w-44 flex-1 rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 focus:border-slate-500 focus:outline-none"
+          >
+            <option value="">Move to collection...</option>
+            <option value="local">Private (this device)</option>
+            {collections.map((collection) => (
+              <option key={collection.id} value={collection.id}>{collection.name}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={selectedHostIds.size === 0 || !targetCollectionId || bulkBusy}
+            onClick={() => onMoveSelected(targetCollectionId)}
+            className="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          >
+            Move
+          </button>
+          <button
+            type="button"
+            disabled={selectedHostIds.size === 0 || bulkBusy}
+            onClick={onDeleteSelected}
+            className="rounded bg-red-900/60 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-900 disabled:opacity-50"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+
+      {expandedGroup !== null && !q && !selectionMode && (
         <button
           type="button"
           onClick={() => setExpandedGroup(null)}
@@ -203,10 +288,13 @@ export function HostGrid({
               name={saved.host.name}
               summary={summary}
               authLabel={authLabel}
+              selected={selectedHostIds.has(saved.id)}
+              selectable={selectionMode}
               canConnect={canConnect}
               collectionName={collectionNames?.[saved.collectionId]}
               isConnecting={isConnecting}
               hasStartupSnippets={(saved.host.startupSnippetIds?.length ?? 0) > 0}
+              onSelect={selectionMode ? () => toggleHost(saved.id) : undefined}
               onSsh={() => onSsh(saved)}
               onSftp={() => onSftp(saved)}
               onEdit={() => onEditHost(saved)}

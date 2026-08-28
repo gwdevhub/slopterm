@@ -10,6 +10,7 @@ interface HostCardProps {
   // has nothing to select *into* anymore now that host details are a modal, not a
   // persistent side panel.
   selected?: boolean
+  selectable?: boolean
   canConnect: boolean
   // Name of the collection this host is shared through, if any - so it's visible at a glance
   // that a host is one the whole team sees rather than a private one.
@@ -38,6 +39,7 @@ export function HostCard({
   summary,
   authLabel,
   selected,
+  selectable,
   canConnect,
   collectionName,
   isConnecting,
@@ -50,16 +52,25 @@ export function HostCard({
 }: HostCardProps) {
   return (
     <div
-      onContextMenu={onContextMenu}
+      onContextMenu={selectable ? undefined : onContextMenu}
       className={`flex items-stretch gap-2 rounded border p-3 text-left ${
         selected ? 'border-indigo-500 bg-slate-900' : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
       }`}
     >
+      {selectable && (
+        <input
+          type="checkbox"
+          aria-label={`Select ${name}`}
+          checked={selected}
+          onChange={onSelect}
+          className="mt-1 h-4 w-4 shrink-0 accent-indigo-500"
+        />
+      )}
       <button
         type="button"
         onClick={onSelect}
-        onDoubleClick={() => canConnect && onSsh()}
-        title={canConnect ? 'Double-click to connect via SSH' : undefined}
+        onDoubleClick={() => !selectable && canConnect && onSsh()}
+        title={selectable ? `Select ${name}` : canConnect ? 'Double-click to connect via SSH' : undefined}
         className="flex min-w-0 flex-1 flex-col items-start gap-1"
       >
         <HostsIcon aria-hidden="true" className="h-5 w-5 text-slate-400" />
@@ -88,7 +99,7 @@ export function HostCard({
           </span>
         )}
       </button>
-      <div className="flex shrink-0 flex-col justify-center gap-1">
+      {!selectable && <div className="flex shrink-0 flex-col justify-center gap-1">
         <button
           type="button"
           aria-label={`SSH to ${name}`}
@@ -117,7 +128,7 @@ export function HostCard({
             <PencilIcon aria-hidden="true" className="h-3.5 w-3.5" />
           </button>
         )}
-      </div>
+      </div>}
     </div>
   )
 }
