@@ -394,4 +394,22 @@ public sealed class VaultSyncServiceTests : IDisposable
         Assert.Equal("prod-db", kept.Record.Name);
         Assert.Equal(CollectionStore.LocalCollectionId, kept.CollectionId);
     }
+
+    [Fact]
+    public async Task RejoiningRemovesCopiesPreviouslyKeptLocally()
+    {
+        var collectionId = await PairAsync();
+        _fixture.Laptop.SaveHost(collectionId, "prod-db", "10.0.0.5");
+        await _fixture.Laptop.SyncAsync(collectionId);
+        await _fixture.Phone.SyncAsync(collectionId);
+
+        var token = _fixture.Laptop.Collections.BuildInviteToken(collectionId, null);
+        _fixture.Phone.Collections.Leave(collectionId, keepRecordsLocally: true);
+        _fixture.Phone.Collections.Join(token, null);
+        await _fixture.Phone.SyncAsync(collectionId);
+
+        var host = Assert.Single(_fixture.Phone.Vault.ListHosts());
+        Assert.Equal("prod-db", host.Record.Name);
+        Assert.Equal(collectionId, host.CollectionId);
+    }
 }
