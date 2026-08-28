@@ -11,6 +11,7 @@ import {
   type ChatSummary,
 } from '../lib/api'
 import { AiAgentIcon } from './icons'
+import { onAiSettingsChanged } from '../lib/aiSettingsEvents'
 
 const inputClasses =
   'w-full resize-none rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none'
@@ -26,11 +27,15 @@ type UiMessage = ChatMessage & {
   reasoningEnd?: number
 }
 
-// The optional AI-agent bottom region of an SSH terminal tab. It is ALWAYS present (as a
-// fixed-height collapsed strip) so wrapping TerminalView in a flex column never induces an
-// extra xterm fit()/redraw during first paint - only expanding it (a user action, well
-// after the terminal-resize measurement window) grows the bar and re-fits the terminal via
-// its existing ResizeObserver. See the pinned agent WS contract for the wire protocol.
+// The optional AI-agent bottom region of an SSH terminal tab, present only when an AI
+// endpoint has actually been configured (Settings -> AI agent). With no URL set - the
+// out-of-the-box state - this renders nothing at all: an SSH client shouldn't carry an AI
+// strip for a feature that can't run.
+//
+// Nothing is rendered until that answer is known either, so an unconfigured tab never shows
+// a strip that then vanishes. A configured one gains the strip a moment after first paint,
+// which costs one xterm re-fit through the ResizeObserver the expand/collapse already
+// relies on. See the pinned agent WS contract for the wire protocol.
 export function AgentBar({ sessionId }: { sessionId: string }) {
   const [expanded, setExpanded] = useState(false)
   const [mode, setMode] = useState<AgentMode>('chat')
@@ -64,15 +69,22 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
   // throws. Only the dot's color changes, never the collapsed strip's height.
   useEffect(() => {
     let cancelled = false
-    getAiStatus()
-      .then((s) => {
-        if (!cancelled) setAiStatus(s)
-      })
-      .catch(() => {
-        if (!cancelled) setAiStatus(null)
-      })
+    const refresh = () =>
+      getAiStatus()
+        .then((s) => {
+          if (!cancelled) setAiStatus(s)
+        })
+        .catch(() => {
+          if (!cancelled) setAiStatus(null)
+        })
+
+    void refresh()
+    // Saving an endpoint in Settings has to make the bar appear here and then - with no bar
+    // there is nothing to expand, so the `expanded` dependency alone would never fire again.
+    const unsubscribe = onAiSettingsChanged(() => void refresh())
     return () => {
       cancelled = true
+      unsubscribe()
     }
   }, [expanded])
 
@@ -374,11 +386,19 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     />
   )
 
+  // Unknown (the probe hasn't answered yet) and unconfigured both render nothing: the first
+  // avoids a strip that appears only to disappear, the second is the whole point of this.
+  // `configured` is absent on a response from an older backend, which read as "an endpoint is
+  // always set" - treat that as configured so a version skew can't hide the bar.
+  if (aiStatus == null || aiStatus.configured === false) {
+    return null
+  }
+
   return (
     <div className="shrink-0 border-t border-slate-800 bg-slate-900 text-slate-200">
-      {/* Collapsed strip - fixed height, no transition, and rendered at first paint (the
-          bar starts collapsed). While expanded it disappears entirely: the toggle + dot
-          move into the panel's header row instead. */}
+      {/* Collapsed strip - fixed height, no transition, and rendered as soon as the endpoint
+          is known to exist (the bar starts collapsed). While expanded it disappears
+          entirely: the toggle + dot move into the panel's header row instead. */}
       {!expanded && (
         <div className="flex h-9 shrink-0 items-center gap-2 px-2">
           {toggleButton}
@@ -475,13 +495,19 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
               {aiStatus.reachable ? (
                 <>
                   Model "{aiStatus.model}" isn't available on the AI server - pull it with{' '}
-                  <code className="text-amber-200">ollama pull {aiStatus.model}</code> or pick another model in
-                  Settings under "AI agent".
+                  <code className="text-amber-200">ollama pull {aiStatus.model}</code>, or pick another one from
+                  the model list above.
+                </>
+              ) : aiStatus.unauthorized ? (
+                <>
+                  <code className="text-amber-200">{aiStatus.baseUrl}</code> rejected the request -{' '}
+                  {aiStatus.hasApiKey ? 'the stored API key was refused' : 'this endpoint needs an API key'}. Set
+                  it in Settings under "AI agent".
                 </>
               ) : (
                 <>
-                  Can't reach the local AI server at <code className="text-amber-200">{aiStatus.baseUrl}</code>.
-                  Start Ollama (or fix the address in Settings under "AI agent").
+                  Can't reach the AI server at <code className="text-amber-200">{aiStatus.baseUrl}</code>. Start
+                  Ollama, or fix the address in Settings under "AI agent".
                 </>
               )}
             </div>

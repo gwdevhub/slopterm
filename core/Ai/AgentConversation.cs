@@ -348,6 +348,10 @@ public sealed class AgentConversation : IDisposable
     {
         EnsureLoaded(vault);
         var settings = vault.GetSettings();
+        // Read once per turn (not per request): the endpoint's optional bearer token lives in
+        // the vault, so it's null for a keyless local Ollama - and also whenever the vault is
+        // locked, which surfaces as the endpoint's own 401 rather than a special case.
+        var apiKey = vault.GetAiApiKey();
         var assistantId = Guid.NewGuid().ToString("N");
         var assistant = new ChatMessage { Id = assistantId, Role = "assistant", Mode = mode };
         var userMessage = new AiChatMessage { Role = "user", Content = userText };
@@ -464,7 +468,8 @@ public sealed class AgentConversation : IDisposable
                         await emit(new { type = "text_delta", id = assistantId, text });
                     },
                     ct,
-                    onReasoning);
+                    onReasoning,
+                    apiKey);
                 lastFinishReason = result.FinishReason;
 
                 if (bufferThisRound)
@@ -532,7 +537,7 @@ public sealed class AgentConversation : IDisposable
                 foreach (var call in result.ToolCalls)
                 {
                     var input = ParseArguments(call.Function.Arguments);
-                    var (summary, output) = await ExecuteToolAsync(settings, mode, call.Function.Name, input, ct);
+                    var (summary, output) = await ExecuteToolAsync(settings, apiKey, mode, call.Function.Name, input, ct);
                     assistant.Activities.Add(new ChatActivity { Tool = call.Function.Name, Summary = summary });
                     await emit(new { type = "tool_activity", id = assistantId, tool = call.Function.Name, summary });
                     localHistory.Add(new AiChatMessage { Role = "tool", ToolCallId = call.Id, Content = output });
@@ -597,7 +602,8 @@ public sealed class AgentConversation : IDisposable
                         await emit(new { type = "text_delta", id = assistantId, text });
                     },
                     ct,
-                    onReasoning);
+                    onReasoning,
+                    apiKey);
                 lastFinishReason = conclusion.FinishReason;
             }
 
@@ -623,10 +629,23 @@ public sealed class AgentConversation : IDisposable
         {
             stopReason = "stopped";
         }
+        catch (InvalidOperationException) when (string.IsNullOrWhiteSpace(settings.AiBaseUrl))
+        {
+            // Defensive: with no endpoint configured the UI shows no agent bar to type into,
+            // so this is only reachable by a direct WebSocket call. An empty base URL makes
+            // the request URI relative, which HttpClient rejects - say what's actually missing
+            // instead of passing that on.
+            stopReason = "error";
+            error = "No AI endpoint is configured. Add one in Settings under \"AI agent\" to use the agent.";
+        }
         catch (HttpRequestException)
         {
             stopReason = "error";
-            error = $"Can't reach the local AI server at {settings.AiBaseUrl}. Is Ollama running? Start it (or install it from ollama.com), or fix the address in Settings.";
+            // A remote endpoint that refuses the connection is a different conversation from a
+            // local one: telling someone using a hosted endpoint to "start Ollama" is noise.
+            error = IsLoopback(settings.AiBaseUrl)
+                ? $"Can't reach the local AI server at {settings.AiBaseUrl}. Is Ollama running? Start it (or install it from ollama.com), or fix the address in Settings."
+                : $"Can't reach the AI server at {settings.AiBaseUrl}. Check the address (and API key, if it needs one) in Settings under \"AI agent\".";
         }
         catch (Exception ex)
         {
@@ -731,7 +750,7 @@ public sealed class AgentConversation : IDisposable
     // --- Tools ---------------------------------------------------------------------------------
 
     private async Task<(string Summary, string Result)> ExecuteToolAsync(
-        AppSettings settings, string mode, string name, IReadOnlyDictionary<string, JsonElement> input, CancellationToken ct)
+        AppSettings settings, string? apiKey, string mode, string name, IReadOnlyDictionary<string, JsonElement> input, CancellationToken ct)
     {
         switch (name)
         {
@@ -804,7 +823,7 @@ public sealed class AgentConversation : IDisposable
                     return ("rejected command (not a single command)", $"Error: {runSanitizeError}");
                 }
 
-                var (safe, reason) = await VerifyActionSafeAsync(settings, command, ct);
+                var (safe, reason) = await VerifyActionSafeAsync(settings, apiKey, command, ct);
                 if (!safe)
                 {
                     // Type it VERBATIM - multi-line and all - so the user confirms exactly what
@@ -858,7 +877,7 @@ public sealed class AgentConversation : IDisposable
                         + "run_command presses Enter and returns the output.");
                 }
 
-                var (safe, reason) = await VerifyActionSafeAsync(settings, keys, ct);
+                var (safe, reason) = await VerifyActionSafeAsync(settings, apiKey, keys, ct);
                 if (!safe)
                 {
                     if (!TypeSuggestion(keys))
@@ -920,7 +939,7 @@ public sealed class AgentConversation : IDisposable
     /// context-dependent keystrokes (like answering a visible prompt) can be judged sensibly.
     /// Fails CLOSED: any error, or an answer that doesn't clearly start with SAFE, means unsafe.
     /// </summary>
-    private async Task<(bool Safe, string Reason)> VerifyActionSafeAsync(AppSettings settings, string action, CancellationToken ct)
+    private async Task<(bool Safe, string Reason)> VerifyActionSafeAsync(AppSettings settings, string? apiKey, string action, CancellationToken ct)
     {
         try
         {
@@ -959,7 +978,9 @@ public sealed class AgentConversation : IDisposable
                     verdict.Append(text);
                     return Task.CompletedTask;
                 },
-                ct);
+                ct,
+                onReasoningDelta: null,
+                apiKey: apiKey);
 
             var answer = verdict.ToString().Trim();
             if (IsSafeVerdict(answer))
@@ -1196,6 +1217,11 @@ public sealed class AgentConversation : IDisposable
         "Error: a suggested command is already typed in the terminal awaiting the user's Enter. Do NOT type anything "
         + "else - it would corrupt the pending command line. Answer the user in chat and stop; you will be asked to "
         + "continue automatically once the user acts.";
+
+    // Is the configured endpoint on this machine? Only used to word connection errors (Ollama
+    // advice vs. "check the address and key"), so an unparseable URL just isn't loopback.
+    private static bool IsLoopback(string baseUrl)
+        => Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) && uri.IsLoopback;
 
     private static string OneLine(string text, int max)
     {

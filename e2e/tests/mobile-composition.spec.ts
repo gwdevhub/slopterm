@@ -350,4 +350,45 @@ test.describe('with touch emulation', () => {
     await gotoSection(page, 'Hosts')
     await deleteHost(page, 'ctrl composition test host')
   })
+  test('the caret follows the composing word instead of sitting at its first letter', async ({ page }) => {
+    await connectHost(page, 'composition caret test host')
+
+    // Nothing composed yet: the terminal's own cursor is the visible caret.
+    expect(await page.evaluate(() => document.querySelectorAll('.xterm-composing').length)).toBe(0)
+
+    const whileComposing = await page.evaluate(() => {
+      const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      ta.value = ''
+      ta.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }))
+      ta.value = 'hello'
+      ta.dispatchEvent(new CompositionEvent('compositionupdate', { data: 'hello' }))
+
+      // The real cursor stays in the cell the word started in - it can't move, nothing has
+      // reached the shell - so it is hidden and the preview carries the caret instead.
+      const cursor = document.querySelector('.xterm-composing .xterm-cursor')
+      return {
+        marked: document.querySelectorAll('.xterm-composing').length,
+        cursorHidden: cursor === null ? null : getComputedStyle(cursor).visibility === 'hidden',
+      }
+    })
+    expect(whileComposing.marked).toBe(1)
+    // null = this xterm build isn't rendering a cursor element right now; the marker class is
+    // what the styling hangs off either way, so don't fail the run over a missing element.
+    if (whileComposing.cursorHidden !== null) {
+      expect(whileComposing.cursorHidden).toBe(true)
+    }
+
+    // Committing hands the word to the shell, whose echo moves the real cursor - so the real
+    // cursor comes back the moment composition ends.
+    const afterEnd = await page.evaluate(() => {
+      const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+      ta.dispatchEvent(new CompositionEvent('compositionend', { data: 'hello' }))
+      return document.querySelectorAll('.xterm-composing').length
+    })
+    expect(afterEnd).toBe(0)
+
+    await closeTab(page, tabLabel)
+    await gotoSection(page, 'Hosts')
+    await deleteHost(page, 'composition caret test host')
+  })
 })

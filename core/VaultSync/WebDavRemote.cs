@@ -46,7 +46,14 @@ public sealed class WebDavRemote : IVaultSyncRemote, IDisposable
         }
 
         _root = parsed.AbsoluteUri.EndsWith('/') ? parsed : new Uri(parsed.AbsoluteUri + "/");
-        _http = handler is null ? new HttpClient() : new HttpClient(handler);
+        // SocketsHttpHandler explicitly, not `new HttpClient()`'s default. On Android that
+        // default is AndroidMessageHandler, which routes through java.net.HttpURLConnection -
+        // and its setRequestMethod only accepts the eight standard verbs, so every WebDAV
+        // request dies before it leaves the phone with "Expected one of [OPTIONS, GET, HEAD,
+        // POST, PUT, DELETE, TRACE, PATCH] but was MKCOL" (and the same for PROPFIND). The
+        // managed handler has no such allow-list. On desktop this IS the default handler
+        // already, so naming it changes nothing there.
+        _http = handler is null ? new HttpClient(new SocketsHttpHandler()) : new HttpClient(handler);
         _http.Timeout = TimeSpan.FromMinutes(5);
 
         if (!string.IsNullOrEmpty(username))

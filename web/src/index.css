@@ -194,3 +194,40 @@ textarea:not(.xterm-helper-textarea),
     touch-action: none !important;
   }
 }
+
+/* While an IME is composing (Android's soft keyboard holds the word being typed in a
+   composing region - see TerminalView's composition handling), xterm draws that word in its
+   own .composition-view overlay, positioned at the cell the word started in. Nothing has
+   reached the shell yet, so the terminal's real cursor sits at that same starting cell and
+   stays there however long the word grows - reading as a caret stuck at the start of what
+   you are typing.
+   Move it: hide the real cursor for as long as the composition lasts, and put a caret at the
+   trailing edge of the preview instead, which is where every other text field on the phone
+   would put it. `.composition-echo` is excluded because that overlay is our own frozen
+   snapshot of an ALREADY-committed word (TerminalView again) - the real cursor is back by
+   then, and a second caret would be one too many. */
+.xterm-composing .xterm-cursor {
+  visibility: hidden !important;
+}
+
+.composition-view.active:not(.composition-echo)::after {
+  content: '';
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background-color: currentColor;
+  animation: slopterm-composing-caret-blink 1.2s step-end infinite;
+}
+
+@keyframes slopterm-composing-caret-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}

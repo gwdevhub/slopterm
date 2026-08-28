@@ -928,12 +928,31 @@ export async function setGithubToken(token: string | null): Promise<GithubTokenS
 }
 
 // --- AI agent ---------------------------------------------------------------------------
-// The agent talks to a local OpenAI-compatible server (Ollama by default) - a base URL and
-// model name in plaintext settings, no key or account anywhere.
+// The agent talks to an OpenAI-compatible server - a base URL and model name in plaintext
+// settings, plus an optional API key for hosted endpoints that require one. The key is a
+// vault secret: it goes out on save and never comes back, so the read side only reports
+// whether one is stored.
+//
+// An empty base URL means no endpoint is configured, which is the default and switches the
+// agent off entirely (no bar on a terminal tab).
 
 export interface AiSettings {
   baseUrl: string
   model: string
+  hasApiKey: boolean
+}
+
+// `apiKey` is write-only and tri-state: omit it (or send null) to keep the stored key as it
+// is, '' to clear it, anything else to replace it. Omitting is what lets the agent bar's
+// model switcher save baseUrl+model without touching the key.
+//
+// `model` is omitted by the Settings form for the same reason in reverse: models come from
+// the endpoint's /models list and are chosen in the agent bar, so saving a URL must not
+// reset the model that was picked there.
+export interface AiSettingsUpdate {
+  baseUrl: string
+  model?: string
+  apiKey?: string | null
 }
 
 export async function getAiSettings(): Promise<AiSettings> {
@@ -942,8 +961,8 @@ export async function getAiSettings(): Promise<AiSettings> {
   return res.json()
 }
 
-// Empty strings reset either field to its default (local Ollama / its default model).
-export async function setAiSettings(settings: AiSettings): Promise<AiSettings> {
+// An empty baseUrl turns the agent off; an omitted model keeps the one already stored.
+export async function setAiSettings(settings: AiSettingsUpdate): Promise<AiSettings> {
   const res = await fetch('/api/settings/ai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -957,11 +976,18 @@ export async function setAiSettings(settings: AiSettings): Promise<AiSettings> {
 // which models are available to switch to? Drives the agent bar's status dot + model picker
 // and the Settings readout. `models` is empty when the server is unreachable.
 export interface AiStatus {
+  // False when no endpoint is set at all - the default. The agent bar isn't rendered on a
+  // terminal tab in that state, and nothing was probed.
+  configured: boolean
   reachable: boolean
   modelAvailable: boolean
   baseUrl: string
   model: string
   models: string[]
+  // Whether an API key is stored, and whether the probe was rejected (401/403) rather than
+  // simply finding nothing listening - together they say "the key is missing or wrong".
+  hasApiKey: boolean
+  unauthorized: boolean
 }
 
 export async function getAiStatus(): Promise<AiStatus> {
@@ -1332,6 +1358,36 @@ export async function leaveCollection(id: string, keepRecordsLocally: boolean): 
     method: 'DELETE',
   })
   await throwOnError(res)
+}
+
+// What a collection actually carries, grouped by scope. `syncing` is false for a group
+// whose scope has been turned off: those records still sit in the collection on this device,
+// they just don't converge any more - which is exactly what this view exists to reveal.
+// Labels and short details only; the backend never puts a secret in here.
+export interface CollectionContentItem {
+  id: string
+  label: string
+  detail: string | null
+  updatedAt: string
+}
+
+export interface CollectionContentGroup {
+  scope: string
+  label: string
+  syncing: boolean
+  items: CollectionContentItem[]
+}
+
+export interface CollectionContents {
+  collectionId: string
+  name: string
+  groups: CollectionContentGroup[]
+}
+
+export async function getCollectionContents(id: string): Promise<CollectionContents> {
+  const res = await fetch(`/api/collections/${id}/contents`)
+  await throwOnError(res)
+  return res.json()
 }
 
 export async function getCollectionStatus(): Promise<CollectionStatus[]> {

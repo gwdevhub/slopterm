@@ -347,6 +347,17 @@ public sealed class GithubTokenRecord
 }
 
 /// <summary>
+/// The bearer token for the AI agent's endpoint (secrets/ai-api-key.json). Optional and
+/// empty by default - a local Ollama server needs no key - but a hosted OpenAI-compatible
+/// endpoint does, and that key is a real credential, so it lives encrypted here rather than
+/// beside AiBaseUrl/AiModel in plaintext settings.json.
+/// </summary>
+public sealed class AiApiKeyRecord
+{
+    public required string Key { get; set; }
+}
+
+/// <summary>
 /// One AI agent conversation transcript (ai-chats/{id}.json). A host can have MANY of
 /// these - the bar lists them per host and any can be reopened; connecting resumes the
 /// most recent. Vault-encrypted like every other record - transcripts quote terminal
@@ -381,7 +392,9 @@ public sealed class PreferencesRecord
     public bool CloseToTray { get; set; }
     public bool ShowSshConfigHosts { get; set; }
     public bool SessionNotificationBadge { get; set; }
-    public string AiBaseUrl { get; set; } = "http://127.0.0.1:11434/v1";
+    // Empty means "no AI endpoint configured", which is how the agent stays off until asked
+    // for: with no URL there is no bar on a terminal tab at all (see AgentBar).
+    public string AiBaseUrl { get; set; } = string.Empty;
     public string AiModel { get; set; } = "gemma4:12b";
 
     // Stored opaquely, exactly as GetAppearance/SaveAppearance already did, so the theme
@@ -419,12 +432,14 @@ public sealed class AppSettings
     // normal (still silent) importance. Android only; see SessionKeepAliveService.
     public bool SessionNotificationBadge { get; set; }
 
-    // The in-terminal AI agent talks to a local OpenAI-compatible server (Ollama's default
-    // port out of the box). Plaintext settings, not vault secrets: a loopback URL and a model
-    // name are no more sensitive than the rest of settings.json, and there's no key at all in
-    // the local-first setup. Initializers are the effective defaults for a settings.json
-    // written before these fields existed.
-    public string AiBaseUrl { get; set; } = "http://127.0.0.1:11434/v1";
+    // The in-terminal AI agent talks to an OpenAI-compatible server. Empty by default: the
+    // agent is opt-in, and a terminal tab shows no AI bar at all until a URL is set here -
+    // an SSH client shouldn't grow an AI panel nobody asked for. Plaintext settings, not
+    // vault secrets: a URL and a model name are no more sensitive than the rest of
+    // settings.json. The optional API key a hosted endpoint needs is the one part that IS a
+    // secret, so it lives in the vault instead (see AiApiKeyRecord). Initializers are the
+    // effective defaults for a settings.json written before these fields existed.
+    public string AiBaseUrl { get; set; } = string.Empty;
 
     public string AiModel { get; set; } = "gemma4:12b";
 }

@@ -628,6 +628,57 @@ public sealed class VaultService
         SaveRecord("secrets", GithubTokenRecordId, new GithubTokenRecord { Token = token });
     }
 
+    private const string AiApiKeyRecordId = "ai-api-key";
+
+    /// <summary>
+    /// The AI endpoint's bearer token, or null if locked, unset, or unreadable. Never throws:
+    /// this is read on every agent turn and on the status probe, and a vault that can't hand
+    /// the key over must degrade to "no Authorization header" (which a local Ollama doesn't
+    /// need anyway), not take the turn down.
+    /// </summary>
+    public string? GetAiApiKey()
+    {
+        if (!IsUnlocked)
+        {
+            return null;
+        }
+
+        var path = Path.Combine(_vaultDir, "secrets", $"{AiApiKeyRecordId}.json");
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
+            if (envelope is null)
+            {
+                return null;
+            }
+
+            var json = VaultCrypto.Decrypt(_key!, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
+            return JsonSerializer.Deserialize<AiApiKeyRecord>(json)?.Key;
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException or CryptographicException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Null/empty deletes the stored key (back to an unauthenticated endpoint).</summary>
+    public void SetAiApiKey(string? key)
+    {
+        RequireUnlocked();
+        if (string.IsNullOrEmpty(key))
+        {
+            DeleteRecord("secrets", AiApiKeyRecordId);
+            return;
+        }
+
+        SaveRecord("secrets", AiApiKeyRecordId, new AiApiKeyRecord { Key = key });
+    }
+
     private const string AiChatsFolder = "ai-chats";
 
     /// <summary>
