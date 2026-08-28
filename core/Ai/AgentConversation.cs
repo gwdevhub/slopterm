@@ -7,7 +7,7 @@ namespace Slopterm.Server.Ai;
 
 /// <summary>
 /// Per-SSH-session AI conversation state and the agentic loop, backed by a local
-/// OpenAI-compatible server (Ollama by default - see AppSettings.AiBaseUrl/AiModel).
+/// OpenAI-compatible server (Ollama by default - see AppSettings.AiBaseUrl).
 /// Constructed with (and owned by) the <see cref="TerminalSession"/>. The transcript is
 /// persisted vault-encrypted per host (user@host:port), so reconnecting to the same host -
 /// even after an app restart - resumes the conversation. One <c>_stateLock</c> guards ALL of
@@ -344,7 +344,7 @@ public sealed class AgentConversation : IDisposable
     /// suggested command): the synthetic prompt goes to the model but not into the visible
     /// transcript - the user never typed it.
     /// </summary>
-    public async Task RunTurnAsync(VaultService vault, string mode, string userText, Func<object, Task> emit, CancellationToken ct, bool isContinuation = false)
+    public async Task RunTurnAsync(VaultService vault, string mode, string model, string userText, Func<object, Task> emit, CancellationToken ct, bool isContinuation = false)
     {
         EnsureLoaded(vault);
         var settings = vault.GetSettings();
@@ -439,7 +439,7 @@ public sealed class AgentConversation : IDisposable
 
                 var request = new List<AiChatMessage>
                 {
-                    new() { Role = "system", Content = SystemPrompt(mode, settings.AiModel) },
+                    new() { Role = "system", Content = SystemPrompt(mode, model) },
                 };
                 request.AddRange(localHistory);
 
@@ -455,7 +455,7 @@ public sealed class AgentConversation : IDisposable
                 var roundText = new StringBuilder();
 
                 var result = await OpenAiChatClient.StreamAsync(
-                    settings.AiBaseUrl, settings.AiModel, request, tools,
+                    settings.AiBaseUrl, model, request, tools,
                     async text =>
                     {
                         roundText.Append(text);
@@ -537,7 +537,7 @@ public sealed class AgentConversation : IDisposable
                 foreach (var call in result.ToolCalls)
                 {
                     var input = ParseArguments(call.Function.Arguments);
-                    var (summary, output) = await ExecuteToolAsync(settings, apiKey, mode, call.Function.Name, input, ct);
+                    var (summary, output) = await ExecuteToolAsync(settings, apiKey, mode, model, call.Function.Name, input, ct);
                     assistant.Activities.Add(new ChatActivity { Tool = call.Function.Name, Summary = summary });
                     await emit(new { type = "tool_activity", id = assistantId, tool = call.Function.Name, summary });
                     localHistory.Add(new AiChatMessage { Role = "tool", ToolCallId = call.Id, Content = output });
@@ -574,7 +574,7 @@ public sealed class AgentConversation : IDisposable
             {
                 var followUp = new List<AiChatMessage>
                 {
-                    new() { Role = "system", Content = SystemPrompt(mode, settings.AiModel) },
+                    new() { Role = "system", Content = SystemPrompt(mode, model) },
                 };
                 followUp.AddRange(localHistory);
                 var hasPartial = partial.Length > 0;
@@ -595,7 +595,7 @@ public sealed class AgentConversation : IDisposable
                 });
 
                 var conclusion = await OpenAiChatClient.StreamAsync(
-                    settings.AiBaseUrl, settings.AiModel, followUp, tools: null,
+                    settings.AiBaseUrl, model, followUp, tools: null,
                     async text =>
                     {
                         assistant.Text += text;
@@ -750,7 +750,7 @@ public sealed class AgentConversation : IDisposable
     // --- Tools ---------------------------------------------------------------------------------
 
     private async Task<(string Summary, string Result)> ExecuteToolAsync(
-        AppSettings settings, string? apiKey, string mode, string name, IReadOnlyDictionary<string, JsonElement> input, CancellationToken ct)
+        AppSettings settings, string? apiKey, string mode, string model, string name, IReadOnlyDictionary<string, JsonElement> input, CancellationToken ct)
     {
         switch (name)
         {
@@ -823,7 +823,7 @@ public sealed class AgentConversation : IDisposable
                     return ("rejected command (not a single command)", $"Error: {runSanitizeError}");
                 }
 
-                var (safe, reason) = await VerifyActionSafeAsync(settings, apiKey, command, ct);
+                var (safe, reason) = await VerifyActionSafeAsync(settings, apiKey, model, command, ct);
                 if (!safe)
                 {
                     // Type it VERBATIM - multi-line and all - so the user confirms exactly what
@@ -877,7 +877,7 @@ public sealed class AgentConversation : IDisposable
                         + "run_command presses Enter and returns the output.");
                 }
 
-                var (safe, reason) = await VerifyActionSafeAsync(settings, apiKey, keys, ct);
+                var (safe, reason) = await VerifyActionSafeAsync(settings, apiKey, model, keys, ct);
                 if (!safe)
                 {
                     if (!TypeSuggestion(keys))
@@ -939,7 +939,7 @@ public sealed class AgentConversation : IDisposable
     /// context-dependent keystrokes (like answering a visible prompt) can be judged sensibly.
     /// Fails CLOSED: any error, or an answer that doesn't clearly start with SAFE, means unsafe.
     /// </summary>
-    private async Task<(bool Safe, string Reason)> VerifyActionSafeAsync(AppSettings settings, string? apiKey, string action, CancellationToken ct)
+    private async Task<(bool Safe, string Reason)> VerifyActionSafeAsync(AppSettings settings, string? apiKey, string model, string action, CancellationToken ct)
     {
         try
         {
@@ -972,7 +972,7 @@ public sealed class AgentConversation : IDisposable
 
             var verdict = new StringBuilder();
             await OpenAiChatClient.StreamAsync(
-                settings.AiBaseUrl, settings.AiModel, messages, tools: null,
+                settings.AiBaseUrl, model, messages, tools: null,
                 text =>
                 {
                     verdict.Append(text);

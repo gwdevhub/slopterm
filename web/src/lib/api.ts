@@ -928,30 +928,22 @@ export async function setGithubToken(token: string | null): Promise<GithubTokenS
 }
 
 // --- AI agent ---------------------------------------------------------------------------
-// The agent talks to an OpenAI-compatible server - a base URL and model name in plaintext
-// settings, plus an optional API key for hosted endpoints that require one. The key is a
-// vault secret: it goes out on save and never comes back, so the read side only reports
-// whether one is stored.
+// The agent talks to an OpenAI-compatible server configured by a plaintext base URL, plus an
+// optional API key for hosted endpoints that require one. Models are discovered live and
+// selected only in the agent panel; they are not settings.
 //
 // An empty base URL means no endpoint is configured, which is the default and switches the
 // agent off entirely (no bar on a terminal tab).
 
 export interface AiSettings {
   baseUrl: string
-  model: string
   hasApiKey: boolean
 }
 
 // `apiKey` is write-only and tri-state: omit it (or send null) to keep the stored key as it
-// is, '' to clear it, anything else to replace it. Omitting is what lets the agent bar's
-// model switcher save baseUrl+model without touching the key.
-//
-// `model` is omitted by the Settings form for the same reason in reverse: models come from
-// the endpoint's /models list and are chosen in the agent bar, so saving a URL must not
-// reset the model that was picked there.
+// is, '' to clear it, anything else to replace it.
 export interface AiSettingsUpdate {
   baseUrl: string
-  model?: string
   apiKey?: string | null
 }
 
@@ -961,7 +953,7 @@ export async function getAiSettings(): Promise<AiSettings> {
   return res.json()
 }
 
-// An empty baseUrl turns the agent off; an omitted model keeps the one already stored.
+// An empty baseUrl turns the agent off.
 export async function setAiSettings(settings: AiSettingsUpdate): Promise<AiSettings> {
   const res = await fetch('/api/settings/ai', {
     method: 'POST',
@@ -972,17 +964,14 @@ export async function setAiSettings(settings: AiSettingsUpdate): Promise<AiSetti
   return res.json()
 }
 
-// Live probe: is the configured AI server up, is the configured model actually pulled, and
-// which models are available to switch to? Drives the agent bar's status dot + model picker
-// and the Settings readout. `models` is empty when the server is unreachable.
+// Live probe and model discovery. `models` is exactly the endpoint's /models result and is
+// empty when the server is unreachable.
 export interface AiStatus {
   // False when no endpoint is set at all - the default. The agent bar isn't rendered on a
   // terminal tab in that state, and nothing was probed.
   configured: boolean
   reachable: boolean
-  modelAvailable: boolean
   baseUrl: string
-  model: string
   models: string[]
   // Whether an API key is stored, and whether the probe was rejected (401/403) rather than
   // simply finding nothing listening - together they say "the key is missing or wrong".
@@ -1050,7 +1039,7 @@ export type AgentClientMessage =
   // newChat starts a fresh conversation for this message first (used when sending while the
   // saved-chats list is open) - folded into the send so no empty history frame wipes the
   // optimistically-rendered user bubble, unlike firing a separate new_chat frame.
-  | { type: 'send'; mode: AgentMode; text: string; newChat?: boolean }
+  | { type: 'send'; mode: AgentMode; model: string; text: string; newChat?: boolean }
   | { type: 'stop' }
   | { type: 'clear' }
   | { type: 'list_chats' }

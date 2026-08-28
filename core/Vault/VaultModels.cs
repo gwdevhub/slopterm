@@ -350,7 +350,7 @@ public sealed class GithubTokenRecord
 /// The bearer token for the AI agent's endpoint (secrets/ai-api-key.json). Optional and
 /// empty by default - a local Ollama server needs no key - but a hosted OpenAI-compatible
 /// endpoint does, and that key is a real credential, so it lives encrypted here rather than
-/// beside AiBaseUrl/AiModel in plaintext settings.json.
+/// beside AiBaseUrl in plaintext settings.json.
 /// </summary>
 public sealed class AiApiKeyRecord
 {
@@ -395,7 +395,6 @@ public sealed class PreferencesRecord
     // Empty means "no AI endpoint configured", which is how the agent stays off until asked
     // for: with no URL there is no bar on a terminal tab at all (see AgentBar).
     public string AiBaseUrl { get; set; } = string.Empty;
-    public string AiModel { get; set; } = "gemma4:12b";
 
     // Stored opaquely, exactly as GetAppearance/SaveAppearance already did, so the theme
     // schema can keep evolving entirely client-side.
@@ -435,11 +434,9 @@ public sealed class AppSettings
     // The in-terminal AI agent talks to an OpenAI-compatible server. Empty by default: the
     // agent is opt-in, and a terminal tab shows no AI bar at all until a URL is set here -
     // an SSH client shouldn't grow an AI panel nobody asked for. Plaintext settings, not
-    // vault secrets: a URL and a model name are no more sensitive than the rest of
-    // settings.json. The optional API key a hosted endpoint needs is the one part that IS a
+    // vault secrets: a URL is no more sensitive than the rest of settings.json. The optional
+    // API key a hosted endpoint needs is the one part that IS a
     // secret, so it lives in the vault instead (see AiApiKeyRecord). Initializers are the
     // effective defaults for a settings.json written before these fields existed.
     public string AiBaseUrl { get; set; } = string.Empty;
-
-    public string AiModel { get; set; } = "gemma4:12b";
 }

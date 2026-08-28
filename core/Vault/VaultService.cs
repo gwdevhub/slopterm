@@ -159,7 +159,6 @@ public sealed class VaultService
             settings.ShowSshConfigHosts = preferences.ShowSshConfigHosts;
             settings.SessionNotificationBadge = preferences.SessionNotificationBadge;
             settings.AiBaseUrl = preferences.AiBaseUrl;
-            settings.AiModel = preferences.AiModel;
         }
 
         return settings;
@@ -209,7 +208,6 @@ public sealed class VaultService
             ShowSshConfigHosts = fromFile.ShowSshConfigHosts,
             SessionNotificationBadge = fromFile.SessionNotificationBadge,
             AiBaseUrl = fromFile.AiBaseUrl,
-            AiModel = fromFile.AiModel,
             Appearance = ReadLegacyAppearance(),
         };
         SavePreferences(migrated);
@@ -248,7 +246,6 @@ public sealed class VaultService
         settings.ShowSshConfigHosts = preferences.ShowSshConfigHosts;
         settings.SessionNotificationBadge = preferences.SessionNotificationBadge;
         settings.AiBaseUrl = preferences.AiBaseUrl;
-        settings.AiModel = preferences.AiModel;
         Directory.CreateDirectory(_vaultDir);
         File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
     }
@@ -764,15 +761,15 @@ public sealed class VaultService
     }
 
     /// <summary>
-    /// Persists the AI agent's endpoint/model. A plain settings.json write like SetCloseToTray -
-    /// a loopback URL and a model name aren't secrets, and needing no unlock means the agent is
-    /// configurable even with a locked vault.
+    /// Persists the AI agent's endpoint. A plain settings.json write like SetCloseToTray - a
+    /// loopback URL isn't secret, and needing no unlock means the agent is configurable even
+    /// with a locked vault.
     /// </summary>
-    public void SetAiSettings(string baseUrl, string model)
+    public void SetAiSettings(string baseUrl)
     {
         UpdatePreferences(
-            p => { p.AiBaseUrl = baseUrl; p.AiModel = model; },
-            s => { s.AiBaseUrl = baseUrl; s.AiModel = model; });
+            p => p.AiBaseUrl = baseUrl,
+            s => s.AiBaseUrl = baseUrl);
     }
 
     private const string OpenTabsRecordId = "open-tabs";
