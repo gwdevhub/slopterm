@@ -835,7 +835,34 @@ app.MapPost("/api/update/apply", (UpdateApplyRequest request) =>
                 }
             });
 
-            await updateService.ApplyAsync(request.AssetId, request.ExpectedSha256, githubToken, reporter, CancellationToken.None);
+            try
+            {
+                await updateService.ApplyAsync(request.AssetId, request.ExpectedSha256, githubToken, reporter, CancellationToken.None);
+            }
+            catch (UpdateElevationRequiredException ex)
+            {
+                // Install dir isn't writable without admin (e.g. Program Files): re-launch this exe
+                // elevated with --apply-update so the swap runs with the needed permissions.
+                lock (updateProgressLock)
+                {
+                    updateProgress = new UpdateProgress("restarting", 100);
+                }
+
+                await Task.Delay(500);
+                await app.StopAsync();
+
+                // runas launches an elevated copy that does the swap and relaunches the new
+                // exe non-elevated; UseShellExecute is required for the runas verb.
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = exePathForRestart,
+                    Arguments = $"--apply-update \"{ex.TempPath}\" \"{ex.ExePath}\"",
+                    Verb = "runas",
+                    UseShellExecute = true,
+                });
+
+                Environment.Exit(0);
+            }
 
             lock (updateProgressLock)
             {

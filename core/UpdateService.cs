@@ -21,6 +21,15 @@ public sealed record UpdateCheckResult(
 
 public sealed record UpdateProgress(string Phase, double Percent, string? Error = null);
 
+/// <summary>Thrown by <see cref="UpdateService.ApplyAsync"/> when the process can't write to
+/// its install dir - the caller must re-launch elevated to perform the already-verified swap.</summary>
+public sealed class UpdateElevationRequiredException(string tempPath, string exePath)
+    : Exception("Elevation required to apply the update.")
+{
+    public string TempPath { get; } = tempPath;
+    public string ExePath { get; } = exePath;
+}
+
 /// <summary>
 /// Self-update: compares the SHA256 of the currently-running single-file executable
 /// against the matching asset in this repo's rolling "latest" GitHub Release (see
@@ -142,7 +151,13 @@ public sealed class UpdateService
     public async Task ApplyAsync(long assetId, string expectedSha256Hex, string? githubToken, IProgress<UpdateProgress> progress, CancellationToken ct)
     {
         var exePath = CurrentExePath() ?? throw new InvalidOperationException("Not running as a published single-file build.");
-        var tempPath = exePath + ".update";
+
+        // On Windows with a Program Files install and no elevation, writing next to the exe
+        // fails; download + verify to the user temp dir instead (always writable).
+        var needsElevation = OperatingSystem.IsWindows() && !CanWriteToDirectory(Path.GetDirectoryName(exePath)!);
+        var tempPath = needsElevation
+            ? Path.Combine(Path.GetTempPath(), $"slopterm-update-{Guid.NewGuid():N}.exe")
+            : exePath + ".update";
 
         progress.Report(new UpdateProgress("downloading", 0));
 
@@ -184,7 +199,7 @@ public sealed class UpdateService
 
         if (!string.Equals(actualSha, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
         {
-            File.Delete(tempPath);
+            TryDelete(tempPath);
             throw new InvalidOperationException("Downloaded update failed integrity verification - not applied.");
         }
 
@@ -196,6 +211,13 @@ public sealed class UpdateService
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
                 UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
                 UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        }
+
+        if (needsElevation)
+        {
+            // Download + verification are done; the swap needs admin rights we don't have.
+            // Hand the paths back so the caller can re-launch elevated (Program.cs).
+            throw new UpdateElevationRequiredException(tempPath, exePath);
         }
 
         progress.Report(new UpdateProgress("installing", 100));
@@ -215,6 +237,68 @@ public sealed class UpdateService
         File.Move(exePath, backupPath);
         File.Move(tempPath, exePath);
     }
+
+    /// <summary>Performs just the file swap (no download/verify), from an elevated relaunch
+    /// (<c>--apply-update</c>). Renames the current exe to <c>.old</c> and moves the new one in.</summary>
+    public static void ApplyElevatedSwap(string tempPath, string exePath)
+    {
+        var backupPath = exePath + ".old";
+        if (File.Exists(backupPath))
+        {
+            File.Delete(backupPath);
+        }
+
+        File.Move(exePath, backupPath);
+        File.Move(tempPath, exePath);
+    }
+
+    /// <summary>True when running with administrator/root privileges (Windows principal, or
+    /// effective UID 0 on Unix).</summary>
+    public static bool IsRunningAsAdmin()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+            var principal = new System.Security.Principal.WindowsPrincipal(identity);
+            return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        }
+
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        {
+            return geteuid() == 0;
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether a file can be created in the directory, without leaving one behind -
+    /// decides if the in-place flow can proceed or must download to temp + elevate.</summary>
+    private static bool CanWriteToDirectory(string dir)
+    {
+        var probe = Path.Combine(dir, $".slopterm-write-probe-{Guid.NewGuid():N}");
+        try
+        {
+            File.Create(probe).Dispose();
+            TryDelete(probe);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch { }
+    }
+
+    [DllImport("libc")]
+    private static extern uint geteuid();
 
     private static string AssetNameForCurrentPlatform()
     {

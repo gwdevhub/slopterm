@@ -16,6 +16,38 @@ using Slopterm.Server.Ai;
 using Slopterm.Server.Native;
 using Slopterm.Server.Vault;
 
+// --apply-update is a privileged helper mode: swap the downloaded binary before starting
+// Kestrel/window/tray, then relaunch non-elevated and exit immediately.
+if (args.Length >= 3 && args[0] == "--apply-update")
+{
+    var tempPath = args[1];
+    var exePath = args[2];
+
+    try
+    {
+        UpdateService.ApplyElevatedSwap(tempPath, exePath);
+    }
+    catch (Exception ex)
+    {
+        CrashLogger.Install();
+        CrashLogger.LogPhase($"--apply-update swap failed: {ex.Message}");
+        // The temp file is left behind on failure so the user can retry manually.
+        Environment.Exit(1);
+    }
+
+    // UseShellExecute=true goes through the shell, so the new process launches at the
+    // normal integrity level even though this helper is elevated.
+    Process.Start(new ProcessStartInfo
+    {
+        FileName = exePath,
+        UseShellExecute = true,
+    });
+
+    try { File.Delete(tempPath); } catch { }
+
+    Environment.Exit(0);
+}
+
 // Installed before anything else below gets a chance to throw - see CrashLogger's doc
 // comment for why this matters specifically for the published (no-console) Windows build.
 CrashLogger.Install();
