@@ -76,9 +76,11 @@ jobs:
           npm ci
           npm run build
 
+      # A numbered release reports exactly its VERSION (no +sha suffix - the tag already
+      # identifies it unambiguously, unlike the rolling "latest" build).
       - name: Publish self-contained single-file backend
         working-directory: server
-        run: dotnet publish -c Release -r ${{ matrix.rid }}
+        run: dotnet publish -c Release -r ${{ matrix.rid }} -p:InformationalVersion="${{ needs.version.outputs.version }}"
 
       - name: Rename to a friendly asset name
         shell: bash

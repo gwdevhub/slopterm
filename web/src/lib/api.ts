@@ -1053,6 +1053,8 @@ export interface UpdateCheckResult {
   currentSha256: string | null
   latestSha256: string | null
   latestTagName: string | null
+  currentVersion: string | null
+  latestVersion: string | null
   assetId: number | null
   error: string | null
 }

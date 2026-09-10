@@ -59,9 +59,13 @@ jobs:
           npm ci
           npm run build
 
+      # Rolling builds carry VERSION+shortSHA as their informational version so two builds of
+      # the same in-progress VERSION stay distinguishable (and the update UI can show what a
+      # build actually is). bash on every OS for the command substitution/substring syntax.
       - name: Publish self-contained single-file backend
         working-directory: server
-        run: dotnet publish -c Release -r ${{ matrix.rid }}
+        shell: bash
+        run: dotnet publish -c Release -r ${{ matrix.rid }} -p:InformationalVersion="$(tr -d '[:space:]' < ../VERSION)+${GITHUB_SHA:0:7}"
 
       - name: Rename to a friendly asset name
         shell: bash
@@ -154,6 +158,15 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - uses: actions/checkout@v4
+
+      # The version stamp the self-updater reads to name the target version (see
+      # UpdateService's VersionStampAssetName) - the rolling tag itself is always
+      # "latest", so without this the update check could never say what you'd move to.
+      # Must match the InformationalVersion the build job stamped into the binaries.
+      - name: Stamp the build version
+        run: printf '%s' "$(tr -d '[:space:]' < VERSION)+${GITHUB_SHA:0:7}" > dist/slopterm-version.txt
 
       - name: Create/update the "latest" release
         env:

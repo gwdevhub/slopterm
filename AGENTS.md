@@ -15,6 +15,7 @@
 - Self-contained single-file per RID: `win-x64`, `linux-x64`, `osx-x64`, `osx-arm64`, Android APK (AAB).
 - Embedded React bundle in assembly (`EmbeddedResource`).
 - `.github/workflows/release.yml` builds all on push to `main`; `versioned-release.yml` for numbered releases.
+- Desktop builds are version-stamped from the repo-root `VERSION` file (server csproj): rolling `latest` builds report `VERSION+shortSHA`, numbered releases exactly `VERSION`. The rolling release carries a `slopterm-version.txt` stamp asset so the self-updater can name the target version (update *detection* stays SHA256-based).
 - **Never enable `PublishTrimmed` or NativeAOT** — breaks SSH.NET reflection.
 
 ## Testing

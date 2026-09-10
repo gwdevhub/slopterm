@@ -170,6 +170,12 @@ export function UpdateSection() {
   }
 
   const updateAvailable = check?.supported && !check.error && check.updateAvailable
+  // Prefer the stamped informational version (0.0.2-beta.2, or 0.0.2-beta.2+abcdefg for a
+  // rolling build); fall back to the exe's sha256 prefix for builds/releases that predate
+  // version stamping. latestTagName is only a fallback too - the rolling tag is literally
+  // "latest", which tells the user nothing.
+  const currentLabel = check?.currentVersion ?? shortSha(check?.currentSha256 ?? null)
+  const targetLabel = check ? (check.latestVersion ?? check.latestTagName) : null
 
   // One button whose meaning tracks whatever state the check is in - "Update now" only
   // when there's actually somewhere to go, "Check now" otherwise (including right after
@@ -229,16 +235,16 @@ export function UpdateSection() {
         {!checking && check?.supported && check.error && <p className="text-sm text-amber-300">{check.error}</p>}
         {!checking && check?.supported && !check.error && !check.updateAvailable && (
           <p className="text-sm text-emerald-400">
-            You're up to date <span className="text-slate-500">({shortSha(check.currentSha256)})</span>
+            You're up to date <span className="text-slate-500">({currentLabel})</span>
           </p>
         )}
         {!checking && check?.supported && !check.error && check.updateAvailable && (
           <>
             <p className="text-sm text-slate-100">
-              A new version is available{check.latestTagName ? ` (${check.latestTagName})` : ''}.
+              A new version is available{targetLabel ? ` (${targetLabel})` : ''}.
             </p>
             <p className="text-xs text-slate-500">
-              {shortSha(check.currentSha256)} → {shortSha(check.latestSha256)}
+              {currentLabel} → {check.latestVersion ?? shortSha(check.latestSha256)}
             </p>
           </>
         )}

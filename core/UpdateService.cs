@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
@@ -13,6 +14,8 @@ public sealed record UpdateCheckResult(
     string? CurrentSha256,
     string? LatestSha256,
     string? LatestTagName,
+    string? CurrentVersion,
+    string? LatestVersion,
     long? AssetId,
     string? Error);
 
@@ -42,6 +45,13 @@ public sealed record UpdateProgress(string Phase, double Percent, string? Error 
 public sealed class UpdateService
 {
     private const string Repo = "gwdevhub/slopterm";
+
+    /// <summary>
+    /// Tiny text asset on the rolling "latest" release (written by release.yml) holding the
+    /// build's informational version - how CheckAsync learns the TARGET version, since the
+    /// rolling release's tag is always literally "latest" and carries no version information.
+    /// </summary>
+    private const string VersionStampAssetName = "slopterm-version.txt";
     private static readonly byte[] BundleHeaderSignature =
     [
         0x8b, 0x12, 0x02, 0xb9, 0x6a, 0x61, 0x20, 0x38,
@@ -67,16 +77,18 @@ public sealed class UpdateService
         // the UI already renders it as "no update dot", not as an error.
         if (OperatingSystem.IsAndroid())
         {
-            return new UpdateCheckResult(false, false, null, null, null, null,
+            return new UpdateCheckResult(false, false, null, null, null, null, null, null,
                 "Updates on Android are delivered through Google Play, not from here.");
         }
 
         var currentSha = ComputeCurrentExeSha256();
         if (currentSha is null)
         {
-            return new UpdateCheckResult(false, false, null, null, null, null,
+            return new UpdateCheckResult(false, false, null, null, null, null, null, null,
                 "Not running as a published single-file build (e.g. `dotnet run` in development) - update checks aren't available.");
         }
+
+        var currentVersion = ComputeCurrentVersion();
 
         using var request = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{Repo}/releases/tags/latest");
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
@@ -92,7 +104,7 @@ public sealed class UpdateService
         }
         catch (HttpRequestException ex)
         {
-            return new UpdateCheckResult(true, false, currentSha, null, null, null, $"Couldn't reach GitHub: {ex.Message}");
+            return new UpdateCheckResult(true, false, currentSha, null, null, currentVersion, null, null, $"Couldn't reach GitHub: {ex.Message}");
         }
 
         if (!response.IsSuccessStatusCode)
@@ -100,7 +112,7 @@ public sealed class UpdateService
             var reason = response.StatusCode == System.Net.HttpStatusCode.NotFound
                 ? $"No 'latest' release found in {Repo}."
                 : $"GitHub API returned {(int)response.StatusCode}.";
-            return new UpdateCheckResult(true, false, currentSha, null, null, null, reason);
+            return new UpdateCheckResult(true, false, currentSha, null, null, currentVersion, null, null, reason);
         }
 
         var release = await response.Content.ReadFromJsonAsync<GithubRelease>(ct);
@@ -108,7 +120,7 @@ public sealed class UpdateService
         var asset = release?.Assets?.FirstOrDefault(a => string.Equals(a.Name, assetName, StringComparison.OrdinalIgnoreCase));
         if (asset?.Digest is null)
         {
-            return new UpdateCheckResult(true, false, currentSha, null, release?.TagName, null,
+            return new UpdateCheckResult(true, false, currentSha, null, release?.TagName, currentVersion, null, null,
                 $"No matching release asset ({assetName}) found.");
         }
 
@@ -117,7 +129,8 @@ public sealed class UpdateService
             : asset.Digest;
 
         var updateAvailable = !string.Equals(currentSha, latestSha, StringComparison.OrdinalIgnoreCase);
-        return new UpdateCheckResult(true, updateAvailable, currentSha, latestSha, release?.TagName, asset.Id, null);
+        var latestVersion = await TryDownloadVersionStampAsync(release, githubToken, ct);
+        return new UpdateCheckResult(true, updateAvailable, currentSha, latestSha, release?.TagName, currentVersion, latestVersion, asset.Id, null);
     }
 
     /// <summary>
@@ -281,6 +294,55 @@ public sealed class UpdateService
 
             preserved = Math.Min(overlap, bytes.Length);
             bytes[^preserved..].CopyTo(buffer);
+        }
+    }
+
+    /// <summary>
+    /// The informational version stamped into the entry assembly at publish time from the
+    /// repo-root VERSION file (see server/Slopterm.Server.csproj) - "0.0.2-beta.2" for a
+    /// numbered build, "0.0.2-beta.2+abcdefg" for a rolling "latest" build. Null only when
+    /// the attribute is somehow absent; an unstamped build reports the SDK default "1.0.0".
+    /// </summary>
+    private static string? ComputeCurrentVersion() =>
+        Assembly.GetEntryAssembly()?
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+
+    /// <summary>
+    /// Best-effort fetch of the rolling release's <see cref="VersionStampAssetName"/> stamp,
+    /// downloaded through the assets API (same endpoint shape ApplyAsync uses). Purely
+    /// cosmetic, so any failure - including an older rolling release that predates the stamp
+    /// asset - just yields null and the UI falls back to showing hashes.
+    /// </summary>
+    private static async Task<string?> TryDownloadVersionStampAsync(GithubRelease? release, string? githubToken, CancellationToken ct)
+    {
+        var stamp = release?.Assets?.FirstOrDefault(a => string.Equals(a.Name, VersionStampAssetName, StringComparison.OrdinalIgnoreCase));
+        if (stamp is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{Repo}/releases/assets/{stamp.Id}");
+            request.Headers.Accept.ParseAdd("application/octet-stream");
+            if (!string.IsNullOrEmpty(githubToken))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", githubToken);
+            }
+
+            using var response = await Http.SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            var text = (await response.Content.ReadAsStringAsync(ct)).Trim();
+            return text.Length is > 0 and <= 100 ? text : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
         }
     }
 

@@ -6,6 +6,17 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Stamp the informational version from the repo-root VERSION file (the same file
+         versioned-release.yml tags from and Android derives versionCode/versionName from),
+         so a running build can report what it is - UpdateService surfaces it as
+         CurrentVersion. The rolling-build workflow (release.yml) overrides
+         InformationalVersion to append the commit SHA; versioned-release.yml pins it to
+         exactly the VERSION string. -->
+    <Version Condition="Exists('$(MSBuildProjectDirectory)/../VERSION')">$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)/../VERSION').Trim())</Version>
+    <!-- Don't let the SDK append "+<full git SHA>" to the informational version - the
+         rolling-build workflow appends a SHORT sha itself so the binary reports exactly
+         what the release's slopterm-version.txt stamp says. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <!-- No console window on the published Windows build - the system tray icon is the
          only UI (see Native/WindowsTrayIcon.cs and Program.cs). Only applies when actually
          publishing for win-x64; plain `dotnet run`/`dotnet build` (no -r) stays a normal
