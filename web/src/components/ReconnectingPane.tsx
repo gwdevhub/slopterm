@@ -5,11 +5,8 @@ interface ReconnectingPaneProps {
   onRetryNow: () => void
 }
 
-// Shown in place of TerminalView/SftpView for a tab that isn't connected yet - either a
-// tab restored from a previous run still working through its automatic retry loop
-// (App.tsx's attemptConnectTab), or one that failed and is waiting for its next scheduled
-// attempt. The tab itself stays in the bar the whole time (see TabBar's spinner/warning
-// icon) so "reconnecting" reads as a temporary state of an existing tab, not a missing one.
+// Shown in place of TerminalView/SftpView for a tab that isn't connected yet - either still
+// working through its automatic retry loop, or waiting for its next scheduled attempt.
 export function ReconnectingPane({ tab, onRetryNow }: ReconnectingPaneProps) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 bg-black p-4 text-center">

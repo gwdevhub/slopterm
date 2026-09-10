@@ -1,7 +1,5 @@
-// Exists only so the browser considers this installable as a PWA (issue: "add as a PWA
-// to separate it from the browser"). This app is a live SSH/vault client talking to a
-// per-launch local backend - there is nothing here that should ever be served from a
-// cache instead of the network, so this deliberately does no caching at all.
+// Exists only so the browser treats this as an installable PWA. It's a live SSH/vault client
+// with nothing that should come from a cache, so this deliberately does no caching.
 self.addEventListener('install', () => {
   self.skipWaiting()
 })

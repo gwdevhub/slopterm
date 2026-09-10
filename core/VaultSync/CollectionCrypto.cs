@@ -4,19 +4,8 @@ using Slopterm.Server.Vault;
 namespace Slopterm.Server.VaultSync;
 
 /// <summary>
-/// The one piece of crypto a collection needs beyond what the vault already does: a key of
-/// its own for the records that leave the device.
-///
-/// Why it can't just reuse the vault key: a default install has no master password, so its
-/// vault key derives from the public <see cref="VaultCrypto.NoPasswordSeed"/>. That's fine
-/// for encrypting files at rest on your own disk and useless for anything crossing a
-/// network. The collection key is independent, which is what lets that default install sync
-/// safely.
-///
-/// There is deliberately nothing else here - no device identities, no signatures, no key
-/// wrapping, no rotation. Who may read and write a collection is decided by the WebDAV
-/// server's own accounts and permissions, not by a membership list this app maintains. See
-/// <see cref="CollectionRecord"/>.
+/// The collection's own key for records leaving the device. It can't reuse the vault key: a
+/// no-password install derives that from a public seed, useless off-disk.
 /// </summary>
 public static class CollectionCrypto
 {
@@ -27,10 +16,7 @@ public static class CollectionCrypto
     /// <summary>128 random bits, hex - the collection id, and also what names its vault folder.</summary>
     public static string GenerateCollectionId() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
 
-    /// <summary>
-    /// A short, readable digest of a collection key, so two people can confirm out of band
-    /// that they pasted the same token - without either of them showing the key itself.
-    /// </summary>
+    /// <summary>A short digest of a collection key, so two people can confirm they share a token.</summary>
     public static string KeyFingerprint(string collectionKeyBase64)
     {
         var hex = Convert.ToHexStringLower(SHA256.HashData(Convert.FromBase64String(collectionKeyBase64)));

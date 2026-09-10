@@ -20,10 +20,8 @@ interface SectionContentProps {
   isConnecting: boolean
 }
 
-// Renders whichever sidebar section is currently active. App.tsx owns both the section
-// state and the always-visible Sidebar itself now - this file used to be "AppShell" when
-// it also owned the nav rail (issue #8), but that's been hoisted out so more than one
-// connection tab can stay open alongside a visible section at once.
+// Renders whichever sidebar section is currently active. App.tsx owns the section state and
+// the Sidebar itself.
 export function SectionContent({
   section,
   onConnect,

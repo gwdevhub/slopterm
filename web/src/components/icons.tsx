@@ -1,10 +1,7 @@
 import type { SVGProps } from 'react'
 
-// One consistent outline-style icon family (24x24 viewBox, currentColor stroke) for every
-// icon in the app - replaces the ad hoc emoji glyphs that used to render inconsistently
-// across OSes/browsers and never matched the surrounding text color. Every icon takes the
-// same props as a plain <svg> so callers size/color them purely with className (typically
-// `h-5 w-5 text-current`), giving one visual language across nav/buttons/tabs.
+// One consistent outline-style icon family (24x24 viewBox, currentColor stroke). Every icon
+// takes plain <svg> props so callers size/color them purely with className.
 type IconProps = SVGProps<SVGSVGElement>
 
 const base = {
@@ -157,9 +154,8 @@ export function MenuIcon(props: IconProps) {
   )
 }
 
-// A sidebar-with-arrow glyph used for the collapse/expand toggle - the caller rotates it
-// 180deg (via className) to flip meaning between "collapse" and "expand" rather than this
-// needing two separate icons.
+// Sidebar-with-arrow glyph for the collapse/expand toggle - the caller rotates it 180deg
+// rather than this needing two separate icons.
 export function SidebarToggleIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>
@@ -206,9 +202,8 @@ export function TerminalTabIcon(props: IconProps) {
   )
 }
 
-// The terminal glyph sitting on a small stand - "this machine" rather than a remote one.
-// Distinct enough from TerminalTabIcon at 16px to tell a local tab from an SSH tab at a
-// glance, which is the whole job it has in the tab bar.
+// Terminal glyph on a stand - "this machine" rather than a remote one, distinct from
+// TerminalTabIcon at 16px.
 export function LocalTerminalTabIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>
@@ -231,9 +226,7 @@ export function SftpTabIcon(props: IconProps) {
   )
 }
 
-// A chat bubble with a small four-point spark - the toggle glyph for the in-terminal AI
-// agent bar. Outline only, like every other icon here; the caller sizes/colors it via
-// className.
+// A chat bubble with a small four-point spark - the toggle glyph for the in-terminal AI agent bar.
 export function AiAgentIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

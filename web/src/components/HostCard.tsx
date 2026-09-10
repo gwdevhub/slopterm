@@ -5,10 +5,8 @@ interface HostCardProps {
   name: string
   summary: string
   authLabel: string | null
-  // Purely a local/visual highlight for whichever list is rendering this card (e.g.
-  // RecentConnections tracks its own selected id) - optional since the main Hosts grid
-  // has nothing to select *into* anymore now that host details are a modal, not a
-  // persistent side panel.
+  // A local/visual highlight for whichever list renders this card; the main Hosts grid has
+  // nothing to select into now that host details are a modal.
   selected?: boolean
   selectable?: boolean
   canConnect: boolean
@@ -22,18 +20,14 @@ interface HostCardProps {
   onSelect?: () => void
   onSsh: () => void
   onSftp: () => void
-  // Small pencil button in the card's bottom-right corner opening the edit modal -
-  // omitted for lists with nothing to edit (e.g. Recent connections, which aren't saved
-  // Host records).
+  // Pencil button opening the edit modal - omitted where there's nothing to edit.
   onEdit?: () => void
-  // Right-click anywhere on the card opens our own context menu (Connect/Edit/…) instead
-  // of the browser's - omitted for lists that don't offer one (e.g. Recent connections).
+  // Right-click opens our own context menu instead of the browser's - omitted where none is offered.
   onContextMenu?: (event: MouseEvent) => void
 }
 
-// The card look from the Termius reference (issue #10) - shared by HostGrid (saved
-// hosts) and RecentConnections so both lists render identically instead of Recent having
-// its own, different-looking row style.
+// The card look from the Termius reference (issue #10), shared by HostGrid and
+// RecentConnections so both render identically.
 export function HostCard({
   name,
   summary,

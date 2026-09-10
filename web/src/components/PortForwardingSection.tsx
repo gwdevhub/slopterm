@@ -21,10 +21,8 @@ const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
 const labelClasses = 'mb-1 block text-xs font-medium text-slate-400'
 
-// SSH port forwarding, tunnelled through a saved host. Rules persist in the vault and come up
-// automatically when a terminal/SFTP session to their host connects; AutoStart rules also come
-// up in the background at app launch (see the backend ForwardingService). Same card-grid
-// layout as the Hosts tab (see CardGrid), with create/edit in a modal.
+// SSH port forwarding, tunnelled through a saved host. Rules persist in the vault and come
+// up automatically when a session to their host connects, or at launch for AutoStart rules.
 export function PortForwardingSection() {
   return (
     <VaultGate>

@@ -31,9 +31,8 @@ public sealed class HybridLogicalClockTests
     }
 
     /// <summary>
-    /// A record written by a build that predates sync carries no HLC at all. It has to read
-    /// as something that loses every conflict rather than throwing - the record still syncs,
-    /// it just never wins against a properly stamped peer.
+    /// A record from a build that predates sync carries no HLC. It has to read as something
+    /// that loses every conflict rather than throwing, so the record still syncs.
     /// </summary>
     [Theory]
     [InlineData(null)]
@@ -64,8 +63,8 @@ public sealed class HybridLogicalClockTests
 
     /// <summary>
     /// The failure this whole type exists to prevent: a phone whose clock is minutes behind
-    /// the laptop must still stamp its edit AFTER the laptop's record it just read, or the
-    /// deleted host comes back.
+    /// the laptop must still stamp its edit AFTER the record it just read, or a deleted host
+    /// comes back.
     /// </summary>
     [Fact]
     public void StampsAfterAPeerEvenWhenThisClockIsBehind()
@@ -81,9 +80,8 @@ public sealed class HybridLogicalClockTests
     }
 
     /// <summary>
-    /// A peer whose clock is an hour BEHIND must not drag this device's counter up to its
-    /// value - the wall clock wins, and the counter only carries the within-millisecond
-    /// tie-break (1 here, not 100, because Observe and Now land in the same frozen ms).
+    /// A peer whose clock is an hour BEHIND must not drag this device's counter up - the wall
+    /// clock wins, and the counter only carries the within-millisecond tie-break (1, not 100).
     /// </summary>
     [Fact]
     public void DoesntInheritABehindPeersCounter()

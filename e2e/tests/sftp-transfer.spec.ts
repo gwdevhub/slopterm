@@ -15,9 +15,8 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
 }
 
 test('dragging a file from one SFTP pane onto the other uploads/downloads it', async ({ page }) => {
-  // A real local file for the Local pane to actually show and let us drag - the server's
-  // local-listing default starting directory is the OS home dir, same as this Node
-  // process's, since the e2e server runs on the same machine as this test runner.
+  // A real local file for the Local pane to drag; the server's local listing starts in the
+  // OS home dir, same as this test runner's.
   const localFileName = `e2e-drag-${Date.now()}.txt`
   const localFilePath = join(homedir(), localFileName)
   writeFileSync(localFilePath, 'local e2e drag-and-drop content')
@@ -42,13 +41,11 @@ test('dragging a file from one SFTP pane onto the other uploads/downloads it', a
     const remoteRegion = page.getByRole('region', { name: 'Remote' })
     await expect(localRegion.getByText(localFileName, { exact: true })).toBeVisible({ timeout: 10_000 })
 
-    // Local -> Remote: upload.
     await localRegion.getByText(localFileName, { exact: true }).dragTo(remoteRegion)
     await expect(page.getByText(`Uploaded ${localFileName}`)).toBeVisible({ timeout: 10_000 })
     await expect(remoteRegion.getByText(localFileName, { exact: true })).toBeVisible({ timeout: 10_000 })
 
-    // Remote -> Local: download (back over the same path is fine - the backend always
-    // overwrites, same as any real SFTP client would).
+    // Re-downloading over the same path is fine - the backend always overwrites.
     await remoteRegion.getByText(localFileName, { exact: true }).dragTo(localRegion)
     await expect(page.getByText(`Downloaded ${localFileName}`)).toBeVisible({ timeout: 10_000 })
 
@@ -81,12 +78,10 @@ test('dropping an OS file from the file manager onto the remote pane uploads it'
   await page.getByRole('button', { name: 'SFTP to os drop test host' }).click()
 
   const remoteRegion = page.getByRole('region', { name: 'Remote' })
-  // Wait for the remote listing to have loaded (its ".." entry appears once connected).
   await expect(remoteRegion).toBeVisible({ timeout: 10_000 })
 
-  // Synthesize the OS-file drop: build a DataTransfer holding a real File (so
-  // dataTransfer.files/.types mirror a genuine Explorer/Finder/Nautilus drag) and dispatch
-  // dragover+drop at the remote pane's list, the way FilePane's handlers expect.
+  // Synthesize the OS-file drop: a DataTransfer holding a real File, so dataTransfer.files
+  // mirrors a genuine Explorer/Finder/Nautilus drag.
   await remoteRegion.locator('ul').evaluate((list, name) => {
     const dt = new DataTransfer()
     dt.items.add(new File(['os dragged bytes'], name, { type: 'text/plain' }))

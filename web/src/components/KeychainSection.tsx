@@ -15,18 +15,8 @@ import { KeychainIcon } from './icons'
 const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
 
-// Saved SSH private keys, reusable from the shared ConnectionForm (Quick Connect and the
-// "new host" form) instead of re-pasting a key each time - see ConnectionForm.tsx. Same
-// card-grid layout as the Hosts tab (see CardGrid), with create/edit in a modal.
-//
-// Key material is never shown, in any collection, to anyone: the backend's listing carries
-// only names and "has a key" flags, and editing REPLACES rather than reveals. That's a
-// product decision, not a permission - a saved secret is something the app uses, not
-// something it shows back to you - and it stops casual copying and shoulder-surfing, not a
-// patched build or someone reading the vault file.
-//
-// An entry's NAME is also the join key for a host that resolves its credential by name (see
-// CredentialResolver), which is why names have to be unique within a collection.
+// Saved SSH private keys, reusable from the shared ConnectionForm. Key material is never
+// shown, and an entry's name is the join key for a host that resolves its credential by name.
 export function KeychainSection() {
   return (
     <VaultGate>

@@ -1,10 +1,8 @@
 namespace Slopterm.Server;
 
 /// <summary>
-/// A shell running on this machine, presented to <see cref="TerminalSession"/> as the same
-/// kind of thing an SSH channel is. The two OS implementations behind it (ConPTY on Windows,
-/// <c>/dev/ptmx</c> everywhere else) are different enough not to share code and identical
-/// enough to share this interface.
+/// A shell running on this machine, presented to <see cref="TerminalSession"/> as the same kind
+/// of thing an SSH channel is, dispatching to ConPTY or /dev/ptmx.
 /// </summary>
 public sealed class LocalShellChannel : IShellChannel
 {
@@ -38,9 +36,8 @@ public sealed class LocalShellChannel : IShellChannel
             : new LocalShellChannel(name, UnixPty.Open(startInfo, columns, rows), null);
     }
 
-    // Dispatched on the platform rather than on which field is null - they say the same
-    // thing, but only the platform check tells the analyzer that the Windows-only calls below
-    // are reachable on Windows alone.
+    // Dispatched on the platform rather than on which field is null, so the analyzer sees the
+    // Windows-only calls as reachable on Windows alone.
     public int Read(byte[] buffer, int offset, int count) =>
         OperatingSystem.IsWindows() ? _windows!.Read(buffer, offset, count) : _unix!.Read(buffer, offset, count);
 
@@ -68,19 +65,15 @@ public sealed class LocalShellChannel : IShellChannel
         }
     }
 
-    // There is no connection under a local shell to lose, which makes every EOF here
-    // unambiguous - the shell exited. That's what stops a local tab from ever entering the
-    // reconnect loop an SSH tab uses, where it would sit retrying forever against a shell
-    // that is simply over.
+    // No connection to lose, so every EOF is unambiguously the shell exiting and a local tab
+    // never enters the SSH reconnect loop.
     public bool CanLoseTransport => false;
 
     public bool IsTransportUp => true;
 
     public bool ShellClosedCleanly(TimeSpan timeout, CancellationToken cancellationToken) => true;
 
-    // Only ever called by the transport watchdog, which never runs for a channel that says
-    // CanLoseTransport is false. Implemented rather than thrown so a future caller gets the
-    // useful behaviour instead of a surprise.
+    // Only ever called by the watchdog, which never runs here; implemented rather than thrown.
     public void AbortRead() => Dispose();
 
     public void Dispose()

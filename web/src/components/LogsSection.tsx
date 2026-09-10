@@ -39,10 +39,8 @@ function LogsList() {
   }
 
   return (
-    // Connection-history lines are read-only content you'd legitimately want to select/copy (a
-    // host, a failure detail), not clickable chrome - opt them back into text selection and the
-    // native right-click menu with the same select-text + data-selectable-text marker used for
-    // the AI agent transcript (see index.css / issue #61).
+    // Read-only content worth selecting/copying: opt back into text selection and the native
+    // right-click menu (see index.css / issue #61).
     <div
       data-selectable-text
       className="mx-auto flex w-full max-w-2xl select-text flex-col gap-4 p-4 sm:p-6"

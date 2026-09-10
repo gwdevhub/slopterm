@@ -3,19 +3,9 @@ using System.Globalization;
 namespace Slopterm.Server.VaultSync;
 
 /// <summary>
-/// One hybrid logical clock reading: wall-clock milliseconds, a counter that breaks ties
-/// within the same millisecond, and this device's short fingerprint to break the tie when
-/// two devices stamp the same millisecond and counter.
-///
-/// Wall time alone is not enough to order edits across a phone and a laptop: their clocks
-/// disagree by seconds routinely and by minutes when one has been asleep, and the failure
-/// mode that produces is the one users never forgive - a host deleted on one device coming
-/// back from the other. An HLC keeps ordering monotonic per device AND causally consistent
-/// across devices, because every value seen from a peer drags this device's clock forward
-/// (see <see cref="Observe"/>).
-///
-/// Serialized as "2026-07-30T12:00:00.123Z-0007-a1b2c3d4", which sorts identically as text
-/// and as a parsed value for the common case, so a debugging eyeball and the comparer agree.
+/// One hybrid logical clock reading: wall-clock milliseconds, a same-millisecond counter, and a
+/// node fingerprint for the final tiebreak. Keeps edits ordered across devices whose clocks
+/// disagree. Serialized as "2026-07-30T12:00:00.123Z-0007-a1b2c3d4".
 /// </summary>
 public readonly record struct Hlc(DateTimeOffset Physical, int Counter, string Node) : IComparable<Hlc>
 {
@@ -25,10 +15,8 @@ public readonly record struct Hlc(DateTimeOffset Physical, int Counter, string N
         $"{Physical.UtcDateTime.ToString(PhysicalFormat, CultureInfo.InvariantCulture)}-{Counter:D4}-{Node}";
 
     /// <summary>
-    /// Lenient on purpose: a record written by a build that didn't stamp an HLC, or one
-    /// mangled by a server that rewrote the file, must not take a whole sync down. An
-    /// unparseable value reads as the epoch, which loses to everything real - the record
-    /// still syncs, it just never wins a conflict against a properly stamped peer.
+    /// Lenient on purpose: an unparseable value reads as the epoch rather than taking a whole
+    /// sync down, so the record still syncs but never wins a conflict.
     /// </summary>
     public static Hlc Parse(string? value)
     {
@@ -79,9 +67,8 @@ public readonly record struct Hlc(DateTimeOffset Physical, int Counter, string N
 }
 
 /// <summary>
-/// The process-wide clock that issues <see cref="Hlc"/> values, one instance per app (see
-/// <see cref="Shared"/>). Thread-safe: records are stamped from the sync loop, from HTTP
-/// request handlers and from the scheduler at the same time.
+/// The process-wide clock that issues <see cref="Hlc"/> values (see <see cref="Shared"/>).
+/// Thread-safe: records are stamped from several places concurrently.
 /// </summary>
 public sealed class HybridLogicalClock(string node, Func<DateTimeOffset>? wallClock = null)
 {
@@ -91,9 +78,8 @@ public sealed class HybridLogicalClock(string node, Func<DateTimeOffset>? wallCl
     private int _counter;
 
     /// <summary>
-    /// The app-wide clock, keyed to the first 8 hex characters of this install's device id
-    /// (see <see cref="DeviceIdentity"/>) - short enough to keep an HLC readable, and
-    /// stable across restarts so two of this device's own records never tie.
+    /// The app-wide clock, keyed to the first 8 hex of this install's device id - stable across
+    /// restarts so this device's own records never tie.
     /// </summary>
     public static HybridLogicalClock Shared { get; } = new(ShortNode(DeviceIdentity.Current));
 
@@ -122,9 +108,8 @@ public sealed class HybridLogicalClock(string node, Func<DateTimeOffset>? wallCl
     }
 
     /// <summary>
-    /// Folds a value seen from another device into this clock, so anything stamped after
-    /// reading a peer's record is ordered after it even when this machine's wall clock is
-    /// behind. Called for every envelope pulled during a sync.
+    /// Folds a value seen from another device into this clock, so later stamps order after it even
+    /// when this machine's wall clock is behind.
     /// </summary>
     public void Observe(Hlc remote)
     {
@@ -154,9 +139,8 @@ public sealed class HybridLogicalClock(string node, Func<DateTimeOffset>? wallCl
         }
     }
 
-    // The serialized form carries milliseconds, so the in-memory clock has to be truncated
-    // to the same resolution - otherwise a value would compare differently before and after
-    // a round-trip through disk.
+    // Truncate to milliseconds to match the serialized form, or a value compares differently
+    // before and after a disk round-trip.
     private static DateTimeOffset Truncate(DateTimeOffset value) =>
         new(value.UtcDateTime.Ticks - (value.UtcDateTime.Ticks % TimeSpan.TicksPerMillisecond), TimeSpan.Zero);
 }

@@ -5,8 +5,7 @@ namespace Slopterm.Server.Native;
 
 /// <summary>
 /// A Windows system tray icon backed directly by Win32 (Shell_NotifyIcon + a hidden
-/// message-only window), so this doesn't need WinForms/WPF/Avalonia or a third-party tray
-/// package just to show one icon - see AGENTS.md's system tray section for why.
+/// message-only window), avoiding WinForms/WPF/Avalonia or a third-party tray package.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class WindowsTrayIcon : IDisposable
@@ -171,9 +170,8 @@ public sealed class WindowsTrayIcon : IDisposable
     }
 
     /// <summary>
-    /// Loads the embedded app.ico (see EmbeddedIcon.cs; same design as favicon.svg/the PWA
-    /// icons) via LoadImage(LR_LOADFROMFILE). Falls back to the stock IDI_APPLICATION icon
-    /// if the resource is somehow missing, rather than failing to show a tray icon at all.
+    /// Loads the embedded app.ico via LoadImage(LR_LOADFROMFILE), falling back to the stock
+    /// IDI_APPLICATION icon if the resource is missing.
     /// </summary>
     private static nint LoadAppIcon()
     {
@@ -229,11 +227,8 @@ public sealed class WindowsTrayIcon : IDisposable
         public uint uFlags;
         public int uCallbackMessage;
         public nint hIcon;
-        // 64 WCHARs matches the original (Windows 95/NT4) NOTIFYICONDATA revision exactly,
-        // so cbSize comes out to a size Shell_NotifyIcon actually recognizes. The newer
-        // revisions extend szTip to 128 and add several more fields (szInfo, guidItem,
-        // etc.) - using their bigger szTip without also adding those fields produces a
-        // struct size that matches no known revision at all.
+        // 64 WCHARs matches the original NOTIFYICONDATA revision, so cbSize is one
+        // Shell_NotifyIcon recognizes; the 128-char newer revision adds fields we don't declare.
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string szTip;
     }
 

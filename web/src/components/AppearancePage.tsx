@@ -62,10 +62,8 @@ function ColorRow({ token, value, onChange }: { token: ColorToken; value: string
   )
 }
 
-// The Appearance screen (issue: theming). Every edit applies live via setAppearance (which
-// writes CSS custom properties onto <html> and persists to localStorage), so the whole app -
-// including this page - re-themes as you drag a slider or pick a colour. There's no Save
-// button by design; "Reset to defaults" is the escape hatch.
+// The Appearance screen: every edit applies live via setAppearance and persists, so there's
+// no Save button by design; "Reset to defaults" is the escape hatch.
 export function AppearancePage() {
   const [settings, setSettings] = useState<AppearanceSettings>(() => getAppearance())
 

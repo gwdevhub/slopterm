@@ -14,8 +14,7 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
 }
 
 // Opens the dual-pane SFTP browser for a freshly-saved host and returns its Remote region -
-// every case here drives the *remote* pane specifically, since that's a real SFTP round-trip
-// to the openssh-server container (the file ops actually happen on the server's filesystem).
+// the remote pane is a real SFTP round-trip to the openssh-server container.
 async function openRemotePane(page: Page, hostName: string): Promise<Locator> {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')
@@ -39,8 +38,6 @@ async function openRemotePane(page: Page, hostName: string): Promise<Locator> {
   return remote
 }
 
-// Creates a remote folder via the pane's "New folder" header button (which opens the in-DOM
-// NamePrompt, not a browser dialog) and waits for it to show up in the listing.
 async function makeRemoteFolder(page: Page, remote: Locator, name: string) {
   await remote.getByRole('button', { name: /New folder/ }).click()
   await page.getByLabel('Name', { exact: true }).fill(name)
@@ -63,7 +60,6 @@ test('right-click a remote entry to rename it', async ({ page }) => {
   await expect(remote.getByText(renamed, { exact: true })).toBeVisible({ timeout: 10_000 })
   await expect(remote.getByText(original, { exact: true })).not.toBeVisible()
 
-  // Clean up the folder we created, then the host.
   await remote.getByText(renamed, { exact: true }).click({ button: 'right' })
   await page.getByRole('menuitem', { name: 'Delete' }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
@@ -82,7 +78,6 @@ test('right-click a remote entry to delete it, confirming through the dialog', a
 
   await remote.getByText(folder, { exact: true }).click({ button: 'right' })
   await page.getByRole('menuitem', { name: 'Delete' }).click()
-  // The shared ConfirmDialog gates the destructive delete - cancelling leaves it in place.
   await expect(page.getByText(`Delete “${folder}”?`)).toBeVisible()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
 
@@ -99,7 +94,6 @@ test('create a new remote folder from the pane header', async ({ page }) => {
 
   await makeRemoteFolder(page, remote, folder)
 
-  // Clean up the folder, then the host.
   await remote.getByText(folder, { exact: true }).click({ button: 'right' })
   await page.getByRole('menuitem', { name: 'Delete' }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()

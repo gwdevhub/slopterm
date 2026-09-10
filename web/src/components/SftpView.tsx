@@ -23,14 +23,8 @@ function fileName(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path
 }
 
-// The dual-pane SFTP browser opened by a host card's "SFTP" button: local filesystem on
-// the left, the connected host's remote filesystem on the right. Dragging a file from one
-// pane onto the other uploads/downloads it into whichever directory that pane currently
-// shows - this is the one place that needs to know about both panes at once, so it owns
-// the transfer itself rather than FilePane (which stays a single reusable component for
-// either side). It also owns the file-management actions (rename/delete/mkdir plus the
-// bulk transfer of a pane's selection onto the other pane), handing each pane a
-// FilePaneActions bundle that hits the local or remote endpoints as appropriate.
+// The dual-pane SFTP browser: local filesystem on the left, the host's remote filesystem on
+// the right. It owns transfers and file-management actions, handing each pane a FilePaneActions.
 export function SftpView({ sessionId, homeDirectory }: SftpViewProps) {
   const [localPath, setLocalPath] = useState<string>()
   const [remotePath, setRemotePath] = useState(homeDirectory)
@@ -75,10 +69,8 @@ export function SftpView({ sessionId, homeDirectory }: SftpViewProps) {
     }
   }
 
-  // Transferring a pane's selection is the multi-select counterpart of drag-and-drop:
-  // local files upload into the remote pane's current dir, remote files download into the
-  // local pane's current dir. Runs sequentially so one failure surfaces without leaving the
-  // banner mid-count.
+  // The multi-select counterpart of drag-and-drop: a pane's selection transfers into the
+  // other pane's current dir. Runs sequentially so one failure surfaces without a mid-count banner.
   async function transferSelection(fromSide: FilePaneSide, paths: string[]) {
     const destDir = fromSide === 'local' ? remotePath : localPath
     if (!destDir || paths.length === 0) return
@@ -131,11 +123,8 @@ export function SftpView({ sessionId, homeDirectory }: SftpViewProps) {
     transfer: (paths) => transferSelection('remote', paths),
   }
 
-  // Files dragged in from the OS's own file manager (Explorer/Finder/Nautilus). On the
-  // remote pane this uploads them into its current directory (their bytes come straight
-  // from the browser, so there's no local path for the path-based upload above). The local
-  // pane can't be a target this way - a browser File has no source path on this machine to
-  // copy from - so it just reports that rather than silently doing nothing.
+  // Files dragged in from the OS's file manager upload into the remote pane. The local pane
+  // can't be a target this way - a browser File has no source path on this machine.
   async function handleOsDrop(destSide: FilePaneSide, files: FileList) {
     if (destSide === 'local') {
       setTransferStatus({ message: 'Drag files onto the remote pane to upload them.', error: true })

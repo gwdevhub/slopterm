@@ -6,16 +6,7 @@ namespace Slopterm.Tests;
 
 /// <summary>
 /// The same convergence scenarios as <see cref="VaultSyncServiceTests"/>, but through a REAL
-/// WebDAV server rather than the in-memory fake - two independent vaults, one share, actual
-/// PROPFIND/PUT/GET/DELETE and whatever that server does about ETags and preconditions.
-///
-/// This is where server disagreements show up, so it's meant to be run against more than one
-/// implementation. tests/webdav-servers.sh starts Apache mod_dav and KaraDAV (Nextcloud-
-/// compatible) in Docker and runs this file against each; it also runs against any share you
-/// point it at, which is how it was checked against the production Caddy one.
-///
-/// Skipped unless SLOPTERM_WEBDAV_URL is set, so a normal `dotnet test` never touches the
-/// network.
+/// WebDAV server rather than the in-memory fake. Skipped unless SLOPTERM_WEBDAV_URL is set.
 /// </summary>
 [Collection("vault-dir")]
 public sealed class WebDavIntegrationTests : IDisposable
@@ -36,9 +27,8 @@ public sealed class WebDavIntegrationTests : IDisposable
             return;
         }
 
-        // Both devices get the same URL from their collection record, so they land on one
-        // share - the whole point. The per-run subfolder keeps concurrent runs (and the
-        // production share this was verified against) from colliding.
+        // Both devices get the same URL, so they land on one share - the whole point. The
+        // per-run subfolder keeps concurrent runs from colliding.
         _fixture = new TwoDeviceFixture((_, user, password) =>
             new WebDavRemote(Combine(_baseUrl, _root), user, password));
     }
@@ -69,8 +59,7 @@ public sealed class WebDavIntegrationTests : IDisposable
     private async Task<string> PairAsync()
     {
         // WebDAV never creates missing parent collections, so the per-run folder has to exist
-        // before a collection is pointed at it - the same thing a user has to do for the
-        // folder they choose on their own server (see WebDavRemote's 409 message).
+        // before a collection is pointed at it.
         using (var root = new WebDavRemote(_baseUrl!, _user, _password))
         {
             await root.EnsureDirectoryAsync(_root, CancellationToken.None);
@@ -85,9 +74,8 @@ public sealed class WebDavIntegrationTests : IDisposable
     }
 
     /// <summary>
-    /// The whole feature in one test: add on one device, see it on the other, edit it there,
-    /// see the edit back on the first, delete it, and have the delete stick through two more
-    /// passes. Everything else is a refinement of this.
+    /// The whole feature in one test: add on one device, see it on the other, edit, delete,
+    /// and have the delete stick. Everything else is a refinement of this.
     /// </summary>
     [SkippableFact]
     public async Task TwoDevicesConvergeThroughARealServer()
@@ -119,10 +107,8 @@ public sealed class WebDavIntegrationTests : IDisposable
     }
 
     /// <summary>
-    /// Both devices editing between syncs, against a server whose precondition handling is
-    /// whatever it is. The winner is decided by HLC either way, and the loser survives as a
-    /// conflict copy - which is what makes last-writer-wins tolerable when preconditions
-    /// can't be relied on.
+    /// Both devices edit between syncs: HLC picks the winner, and the loser survives as a
+    /// conflict copy even when the server's precondition handling can't be relied on.
     /// </summary>
     [SkippableFact]
     public async Task ConcurrentEditsKeepBothSidesThroughARealServer()
@@ -148,8 +134,8 @@ public sealed class WebDavIntegrationTests : IDisposable
     }
 
     /// <summary>
-    /// Nothing readable may reach the server. Checked by reading the records back off the
-    /// share as bytes and looking for the host's name, address and password.
+    /// Nothing readable may reach the server: read the records back as bytes and look for
+    /// the host's name, address and password.
     /// </summary>
     [SkippableFact]
     public async Task TheServerOnlyEverHoldsCiphertext()

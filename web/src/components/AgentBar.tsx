@@ -15,26 +15,16 @@ import { onAiSettingsChanged } from '../lib/aiSettingsEvents'
 const inputClasses =
   'w-full resize-none rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-slate-400 focus:outline-none'
 
-// A transcript message plus the ephemeral, display-only reasoning stream. These extra fields
-// are populated purely from live reasoning_delta frames - the server never persists or replays
-// them (a reasoning model's chain-of-thought is transient), so they're absent after a history
-// reload, which is exactly what we want. `reasoningStart`/`End` (ms epochs) drive the elapsed
-// "Thinking… Ns" / "Thought for Ns" label.
+// A transcript message plus the ephemeral reasoning stream - populated from live
+// reasoning_delta frames only; the server never persists or replays them.
 type UiMessage = ChatMessage & {
   reasoning?: string
   reasoningStart?: number
   reasoningEnd?: number
 }
 
-// The optional AI-agent bottom region of an SSH terminal tab, present only when an AI
-// endpoint has actually been configured (Settings -> AI agent). With no URL set - the
-// out-of-the-box state - this renders nothing at all: an SSH client shouldn't carry an AI
-// strip for a feature that can't run.
-//
-// Nothing is rendered until that answer is known either, so an unconfigured tab never shows
-// a strip that then vanishes. A configured one gains the strip a moment after first paint,
-// which costs one xterm re-fit through the ResizeObserver the expand/collapse already
-// relies on. See the pinned agent WS contract for the wire protocol.
+// The optional AI-agent bottom region of an SSH terminal tab, rendered only when an AI
+// endpoint is actually configured; nothing shows for a feature that can't run.
 export function AgentBar({ sessionId }: { sessionId: string }) {
   const [expanded, setExpanded] = useState(false)
   const [mode, setMode] = useState<AgentMode>('chat')
@@ -54,18 +44,14 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
   // effect on every render.
   const socketRef = useRef<WebSocket | null>(null)
   const transcriptRef = useRef<HTMLDivElement>(null)
-  // Whether the transcript is currently scrolled to (near) the bottom. Drives sticky-follow:
-  // streaming deltas only auto-scroll when the user hasn't scrolled up to read back. Starts
-  // true so a fresh, empty transcript follows the first turn.
+  // Whether the transcript is scrolled near the bottom. Deltas only auto-scroll when true.
   const atBottomRef = useRef(true)
   const panelRef = useRef<HTMLDivElement>(null)
   // null = the default size (45vh capped at 420px); a number once the user drag-resizes.
   const [panelHeight, setPanelHeight] = useState<number | null>(null)
 
-  // Refresh the server/model readout on mount and whenever the bar is (re-)expanded, so a
-  // change saved in Settings (or a freshly pulled model) is reflected without a reload.
-  // Best-effort - a missing/erroring endpoint just leaves the status dot neutral, never
-  // throws. Only the dot's color changes, never the collapsed strip's height.
+  // Refresh the server/model readout on mount and whenever the bar is (re-)expanded,
+  // so a change saved in Settings shows without a reload. Best-effort.
   useEffect(() => {
     let cancelled = false
     const refresh = () =>
@@ -90,11 +76,8 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     }
   }, [expanded])
 
-  // Reducer for server -> client frames. Uses only functional state updates so it never
-  // captures stale `messages`, which lets it stay stable (empty dep array) and be referenced
-  // from the WS effect without re-running it. MUST ignore frames whose id is not a currently
-  // known assistant bubble (contract requirement - makes a late frame from a turn cancelled
-  // by `clear` a harmless no-op).
+  // Reducer for server -> client frames. Functional updates only so it stays stable (empty
+  // dep array); ignores frames whose id isn't a known assistant bubble.
   const reduce = useCallback((evt: AgentServerEvent) => {
     switch (evt.type) {
       case 'history':
@@ -177,9 +160,8 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     }
   }, [])
 
-  // Only opens a socket the first time the bar is expanded (guard below); once open it stays
-  // open across tab switches (an inactive tab stays mounted, so `expanded` doesn't change) so
-  // agent turns keep streaming in the background. Mirrors TerminalView's socket-effect shape.
+  // Opens a socket the first time the bar is expanded; stays open across tab switches so
+  // agent turns keep streaming in the background.
   useEffect(() => {
     if (!expanded) return
     const socket = new WebSocket(agentSocketUrl(sessionId))
@@ -192,7 +174,7 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     socket.onerror = () => setSocketReady(false) // the browser fires close right after
     socket.onclose = () => {
       setSocketReady(false)
-      setRunning(false) // no more turn frames are coming
+      setRunning(false)
       if (socketRef.current === socket) {
         socketRef.current = null
         setDisconnected(true)
@@ -206,17 +188,15 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     }
   }, [sessionId, expanded, reconnectNonce, reduce])
 
-  // Follow new content only when the user is already at the bottom - if they've scrolled up
-  // (e.g. to read an expanded "thinking" block while it streams), leave their position alone
-  // instead of yanking them back down on every delta.
+  // Follow new content only when the user is already at the bottom, so scrolling up to
+  // read isn't yanked back down on every delta.
   useEffect(() => {
     const el = transcriptRef.current
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight
   }, [messages])
 
-  // Recompute the sticky flag from the user's own scrolling. A small threshold absorbs
-  // sub-pixel rounding and lets "basically at the bottom" still count as pinned. Programmatic
-  // content growth doesn't fire scroll, so this only ever reflects deliberate user scrolling.
+  // Recompute the sticky flag from the user's own scrolling; the 24px threshold absorbs
+  // sub-pixel rounding. Programmatic growth doesn't fire scroll.
   function handleTranscriptScroll() {
     const el = transcriptRef.current
     if (el) atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
@@ -228,21 +208,15 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     // Sending while a turn runs is allowed - the backend queues messages and processes
     // them in order (a queued message also interrupts waiting-for-Enter on a suggestion).
     if (!text || !selectedModel || !socket || socket.readyState !== WebSocket.OPEN) return
-    // Sending while the saved-chats list is open starts a fresh conversation for this message -
-    // the same as pressing "New chat" first. Otherwise it would append to the current chat behind
-    // the hidden transcript and look like it just vanished. The backend folds the new-chat into
-    // this send (see the send frame's newChat flag) precisely so no empty history frame arrives
-    // to wipe the optimistic bubble below; we just close the list and reset the transcript here.
+    // Sending while the saved-chats list is open starts a fresh conversation (the backend
+    // folds the new-chat into this send so no empty history frame wipes the optimistic bubble).
     const startNewChat = chatsOpen
     if (startNewChat) setChatsOpen(false)
-    // Render the user bubble optimistically - the server records it and returns it in later
-    // history snapshots, which only arrive on connect/clear, so this never double-renders.
+    // Render the user bubble optimistically; history only arrives on connect/clear, so no double-render.
     const userMessage: ChatMessage = { id: crypto.randomUUID(), role: 'user', text, mode, activities: [] }
-    // Sending is a deliberate "bring me to the latest" action - re-pin to the bottom so the
-    // reply follows, even if the user had scrolled up while reading earlier output.
+    // Sending is a deliberate "bring me to the latest" action - re-pin to the bottom.
     atBottomRef.current = true
-    // A new-chat send replaces the superseded transcript with just this message; a normal send
-    // appends to what's already shown.
+    // A new-chat send replaces the transcript; a normal send appends.
     setMessages((prev) => (startNewChat ? [userMessage] : [...prev, userMessage]))
     setNotice(null)
     const frame: AgentClientMessage = { type: 'send', mode, model: selectedModel, text, newChat: startNewChat }
@@ -258,9 +232,7 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
   }
 
   function clear() {
-    // Local clear keeps the UI instant; the server confirms with an empty history frame.
-    // setRunning(false) matches the fact that the server emits NO turn_done for the turn it
-    // cancels on clear.
+    // Local clear keeps the UI instant; the server emits no turn_done for the turn it cancels.
     setMessages([])
     setRunning(false)
     setNotice(null)
@@ -302,10 +274,8 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     }
   }
 
-  // Drag the handle at the panel's top edge to resize it: pointer capture keeps the drag
-  // alive outside the handle, and the height is clamped so neither the panel nor the
-  // terminal above it can be squeezed away. The terminal refits itself via its existing
-  // debounced ResizeObserver as the flex column reflows - no extra wiring needed.
+  // Drag the panel's top edge to resize; pointer capture keeps the drag alive outside the
+  // handle and the height is clamped so neither panel nor terminal is squeezed away.
   function startResize(e: React.PointerEvent<HTMLDivElement>) {
     e.preventDefault()
     const handle = e.currentTarget
@@ -333,9 +303,8 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
   const modelOptions = aiStatus?.models ?? []
   const sendDisabled = !input.trim() || !socketReady || !selectedModel
 
-  // Shared between the collapsed strip and the expanded header row - the toggle and the
-  // status dot live in whichever of the two is currently rendered, so the expanded panel
-  // needs no separate strip row (one line of chrome instead of two).
+  // Shared between the collapsed strip and the expanded header row, so the expanded panel
+  // needs no separate strip row.
   const toggleButton = (
     <button
       type="button"
@@ -365,19 +334,15 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
     />
   )
 
-  // Unknown (the probe hasn't answered yet) and unconfigured both render nothing: the first
-  // avoids a strip that appears only to disappear, the second is the whole point of this.
-  // `configured` is absent on a response from an older backend, which read as "an endpoint is
-  // always set" - treat that as configured so a version skew can't hide the bar.
+  // Unknown (probe not answered) and unconfigured both render nothing. `configured` absent
+  // on an older backend is treated as configured so version skew can't hide the bar.
   if (aiStatus == null || aiStatus.configured === false) {
     return null
   }
 
   return (
     <div className="shrink-0 border-t border-slate-800 bg-slate-900 text-slate-200">
-      {/* Collapsed strip - fixed height, no transition, and rendered as soon as the endpoint
-          is known to exist (the bar starts collapsed). While expanded it disappears
-          entirely: the toggle + dot move into the panel's header row instead. */}
+      {/* Collapsed strip; hidden while expanded, when the toggle + dot move into the header row. */}
       {!expanded && (
         <div className="flex h-9 shrink-0 items-center gap-2 px-2">
           {toggleButton}
@@ -392,7 +357,6 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
           className={`flex min-h-0 w-full flex-col border-t border-slate-800 ${panelHeight == null ? 'h-[45vh] max-h-[420px]' : ''}`}
           style={panelHeight == null ? undefined : { height: panelHeight }}
         >
-          {/* Drag-to-resize handle on the panel's top edge. */}
           <div
             role="separator"
             aria-label="Resize AI agent panel"
@@ -401,8 +365,7 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
           >
             <div className="h-0.5 w-10 rounded bg-slate-700 group-hover:bg-slate-500" />
           </div>
-          {/* Header row - carries the toggle + status dot too (flex-wrap keeps it usable
-              at phone width, where everything won't fit on one line). */}
+          {/* Header row carries the toggle + status dot; flex-wrap keeps it usable at phone width. */}
           <div className="flex shrink-0 flex-wrap items-center gap-2 px-2 py-1.5">
             {toggleButton}
             {statusDot}
@@ -549,9 +512,8 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
             </div>
           )}
 
-          {/* Transcript. select-text + data-selectable-text opt this read-only surface back
-              into browser text selection (the app-wide default is user-select: none, issue
-              #61) and into the native context menu, so answers can be selected and copied. */}
+          {/* select-text + data-selectable-text opt this surface back into text selection
+              (app-wide default is user-select: none, issue #61) so answers can be copied. */}
           <div
             ref={transcriptRef}
             data-selectable-text
@@ -573,7 +535,6 @@ export function AgentBar({ sessionId }: { sessionId: string }) {
 
           {notice && <p className="mx-2 mb-1 shrink-0 text-xs text-red-400">{notice}</p>}
 
-          {/* Input row */}
           <div className="flex shrink-0 items-end gap-2 border-t border-slate-800 p-2">
             <textarea
               className={inputClasses}
@@ -643,10 +604,8 @@ function MessageBubble({ message }: { message: UiMessage }) {
   )
 }
 
-// The collapsible "thinking" disclosure shown above a reasoning model's answer. Collapsed by
-// default (the chain-of-thought is noise for most reads, signal when debugging a small model).
-// While the model is still thinking (no reasoningEnd yet) a 1s tick keeps the elapsed counter
-// live; once it answers the counter freezes at the final duration.
+// The collapsible "thinking" disclosure above a reasoning model's answer. A 1s tick keeps
+// the elapsed counter live until it answers, then the counter freezes.
 function ThinkingBlock({ message }: { message: UiMessage }) {
   const thinking = message.reasoningEnd == null
   const [, tick] = useState(0)

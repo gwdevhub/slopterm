@@ -33,9 +33,8 @@ test('connects over SSH and closes its tab when the remote shell exits', async (
 
   await page.getByRole('button', { name: 'SSH to connect test host' }).click()
 
-  // The test image's own SSH banner is a distinctive marker that only appears if the
-  // full path actually worked: browser -> WebSocket -> SSH.NET -> real sshd -> shell,
-  // round-tripped back through xterm.js rendering.
+  // The test image's SSH banner only appears if the full path worked: browser -> WebSocket ->
+  // SSH.NET -> real sshd -> shell, round-tripped back through xterm.js rendering.
   await expect(async () => {
     expect(await terminalText(page)).toContain('Welcome to OpenSSH Server')
   }).toPass({ timeout: 15_000 })

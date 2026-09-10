@@ -1,34 +1,25 @@
 import { expect, type Page } from '@playwright/test'
 
-// All e2e test files share ONE server/vault for the whole suite run (global-setup.ts
-// starts a single dotnet process, not one per file) - so every vault-touching test must
-// use the SAME master password (whichever test creates the vault first "wins" it) and
-// must be defensive about current state (setup vs. already-unlocked-by-another-test-file)
-// rather than assuming it's always the fresh setup flow.
+// All e2e files share ONE server/vault, so every vault-touching test must use the SAME
+// master password and be defensive about current state rather than assume fresh setup.
 export const E2E_VAULT_PASSWORD = 'e2e-shared-test-master-password'
 
 export function gotoSection(page: Page, name: string) {
-  // Exact match matters in case a label is ever a substring of another (a has-text()/
-  // text= selector would ambiguously match both). Resolves to the desktop sidebar's
-  // button - the mobile menu overlay's equivalent button shares the same accessible
-  // name, but it's excluded from the accessibility tree (and so from this lookup) via
-  // `display:none` at the default (desktop-sized) test viewport.
+  // Exact match avoids substring collisions; the mobile overlay's same-named button is
+  // excluded from the accessibility tree via display:none at the desktop test viewport.
   return page.getByRole('button', { name, exact: true }).click()
 }
 
-// Closing a tab now opens a ConfirmDialog (Close/Cancel) instead of closing immediately -
-// every test that closes a tab needs both clicks, so this is the one place that knows it.
-// `first` matches tabs.spec.ts's need to close a specific one of two identically-labeled
-// tabs (both sessions to the same host).
+// Closing a tab opens a ConfirmDialog (Close/Cancel), so every caller needs both clicks.
+// `first` closes a specific one of two identically-labeled tabs.
 export async function closeTab(page: Page, label: string, options?: { first?: boolean }) {
   const closeButton = page.getByRole('button', { name: `Close ${label}` })
   await (options?.first ? closeButton.first() : closeButton).click()
   await page.getByRole('button', { name: 'Close', exact: true }).click()
 }
 
-// Deletes a saved host via its card's edit (pencil) button - there's no more side panel
-// to select a host into, so this is the only path to Delete now. Confirms through the
-// shared ConfirmDialog the same way closeTab does above.
+// Deletes a saved host via its card's edit button, confirming through the shared
+// ConfirmDialog the same way closeTab does.
 export async function deleteHost(page: Page, name: string) {
   await page.getByRole('button', { name: `Edit ${name}` }).click()
   await page.getByRole('button', { name: 'Delete host' }).click()
@@ -36,14 +27,12 @@ export async function deleteHost(page: Page, name: string) {
 }
 
 export async function ensureVaultUnlocked(page: Page) {
-  // VaultGate shows "Loading vault..." while its initial status fetch is in flight -
-  // checking isVisible() before that resolves gives a false negative (nothing has
-  // rendered yet, not "already unlocked"), which would skip setup/unlock entirely.
+  // VaultGate shows "Loading vault..." during its initial fetch; checking isVisible() before
+  // that resolves is a false negative that would skip setup/unlock entirely.
   await expect(page.getByText('Loading vault')).not.toBeVisible({ timeout: 10_000 })
 
-  // Scoped to the placeholder, not just input[type=password] - some vault-backed
-  // sections (e.g. Keychain) have their own password-type fields once unlocked, and a
-  // generic selector would re-resolve to one of those instead of "gone" below.
+  // Scoped to the placeholder: unlocked sections (e.g. Keychain) have their own password
+  // fields, so input[type=password] would re-resolve to one of those instead of "gone".
   const passwordInput = page.getByPlaceholder('Master password')
   if (await passwordInput.isVisible().catch(() => false)) {
     await passwordInput.fill(E2E_VAULT_PASSWORD)

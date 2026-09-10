@@ -19,9 +19,8 @@ function terminalText(page: import('@playwright/test').Page) {
   return page.locator('.xterm-rows:visible').innerText()
 }
 
-// Opens another tab against the same saved host - there's no "+"/"New tab" button
-// anymore (see TabBar.tsx), every session starts from a host card's "SSH" button on the
-// Hosts screen, so this always navigates back there first.
+// There's no "+"/"New tab" button anymore (see TabBar.tsx) - every session starts from a
+// host card's "SSH" button, so this always navigates back to Hosts first.
 async function openTab(page: import('@playwright/test').Page) {
   await gotoSection(page, 'Hosts')
   await page.getByRole('button', { name: 'SSH to tabs test host' }).click()
@@ -62,14 +61,8 @@ test('two concurrent tabs keep separate live sessions when switching between the
     expect(await terminalText(page)).toContain(markerB)
   }).toPass({ timeout: 10_000 })
 
-  // Switch back to the first tab - its output must still be there (not a fresh
-  // session), and the second tab's marker must NOT leak into this one. Matched via
-  // accessible name (aggregates the icon+label span's descendant text) rather than
-  // `:text()`, which only matches when the tag itself is the innermost text-containing
-  // element - the label now lives in a nested <span> (for the tab-kind icon), so a plain
-  // `button:text(...)` selector no longer resolves to the outer button at all. `.first()`
-  // still picks the tab-select button over its neighboring "Close ..." button (whose
-  // aria-label also contains this substring), since it comes first in DOM order.
+  // Switched back, the first tab's output must still be there and the second's must not
+  // leak. Matched by accessible name (label lives in a nested <span>); .first() skips "Close ...".
   const tabs = page.getByRole('button', { name: `${ctx.sshUsername}@${ctx.sshHost}` })
   await tabs.first().click()
   await expect(async () => {
@@ -87,7 +80,6 @@ test('two concurrent tabs keep separate live sessions when switching between the
     expect(await terminalText(page)).toContain(markerA2)
   }).toPass({ timeout: 10_000 })
 
-  // Close the first tab - the second tab's session must be unaffected.
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`, { first: true })
   await expect(async () => {
     const text = await terminalText(page)
@@ -126,13 +118,8 @@ test('switching away from a tab leaves its PTY size alone instead of shrinking i
   await openTab(page)
   await openTab(page)
 
-  // An inactive tab is display:none, which its ResizeObserver reports as 0x0 - and FitAddon
-  // floors its proposal at a couple of cells rather than declining to fit, so a tab that was
-  // merely switched away from used to resize its remote PTY down to a sliver (and back up on
-  // return). The remote answers a SIGWINCH with a redraw, which is output arriving in a
-  // background tab: the unseen-activity flag that drives the favicon badge (see
-  // favicon-badge.spec.ts) got set for a tab the user had done nothing in, and nothing ever
-  // cleared it. Watching the resize requests themselves rather than the badge pins the cause.
+  // Switching away used to resize the remote PTY to a sliver (inactive tab reports 0x0, and
+  // FitAddon floors its proposal), whose SIGWINCH redraw set the background-tab activity flag.
   const resizes: { cols: number; rows: number }[] = []
   page.on('request', (request) => {
     if (!/\/api\/ssh\/[^/]+\/resize$/.test(new URL(request.url()).pathname)) return
@@ -181,8 +168,6 @@ test('a tab can be renamed inline and the new name survives a restart', async ({
     expect(await terminalText(page)).toContain('Welcome to OpenSSH Server')
   }).toPass({ timeout: 15_000 })
 
-  // Double-click the tab's label button to open the inline rename field, replace the
-  // auto-generated user@host name with a custom one, and commit with Enter.
   const defaultLabel = `${ctx.sshUsername}@${ctx.sshHost}`
   await page.getByRole('button', { name: defaultLabel, exact: true }).dblclick()
   const renameField = page.getByRole('textbox', { name: `Rename ${defaultLabel}` })
@@ -190,7 +175,6 @@ test('a tab can be renamed inline and the new name survives a restart', async ({
   await renameField.fill('my prod box')
   await renameField.press('Enter')
 
-  // The tab now carries the custom name, and the auto-generated one is gone.
   await expect(page.getByRole('button', { name: 'my prod box', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: defaultLabel, exact: true })).toHaveCount(0)
 
@@ -199,15 +183,13 @@ test('a tab can be renamed inline and the new name survives a restart', async ({
   await page.goto(ctx.baseUrl)
   await expect(page.getByRole('button', { name: 'my prod box', exact: true })).toBeVisible({ timeout: 15_000 })
 
-  // Wait for the restored tab to finish reconnecting before closing it: closing a tab that's
-  // still 'connecting' skips the confirmation dialog that closeTab() clicks through, so it
-  // would otherwise hang waiting for a dialog that never appears.
+  // Wait for reconnect before closing: closing a still-'connecting' tab skips the confirm
+  // dialog closeTab() clicks, so it would hang.
   await expect(async () => {
     expect(await terminalText(page)).toContain('Welcome to OpenSSH Server')
   }).toPass({ timeout: 15_000 })
 
-  // Clean up (shared vault - see the note in the first test). The tab's Close button is
-  // keyed off the custom label now.
+  // Clean up (shared vault - see the first test); the Close button is keyed off the custom label.
   await closeTab(page, 'my prod box')
   await gotoSection(page, 'Hosts')
   await deleteHost(page, 'rename test host')
@@ -227,20 +209,16 @@ test('Ctrl+T duplicates the active tab into a new tab on the same host', async (
   await page.click('button:has-text("Save host")')
   await expect(page.getByText('ctrl-t test host')).toBeVisible({ timeout: 10_000 })
 
-  // Open one SSH tab from the host card, then wait for its live shell.
   await gotoSection(page, 'Hosts')
   await page.getByRole('button', { name: 'SSH to ctrl-t test host' }).click()
   await expect(async () => {
     expect(await terminalText(page)).toContain('Welcome to OpenSSH Server')
   }).toPass({ timeout: 15_000 })
 
-  // exact: true so this matches only the tab-select buttons, not each tab's neighboring
-  // "Close {label}" button (whose accessible name contains the same label) - otherwise
-  // every tab would count twice.
+  // exact: true excludes each tab's neighboring "Close {label}" button, which shares the label.
   const tabButton = page.getByRole('button', { name: `${ctx.sshUsername}@${ctx.sshHost}`, exact: true })
   await expect(tabButton).toHaveCount(1)
 
-  // Ctrl+T should open a SECOND tab connected to the same host and make it active.
   await page.keyboard.press('Control+t')
   await expect(tabButton).toHaveCount(2, { timeout: 15_000 })
   await expect(async () => {
@@ -256,7 +234,6 @@ test('Ctrl+T duplicates the active tab into a new tab on the same host', async (
     expect(await terminalText(page)).toContain(marker)
   }).toPass({ timeout: 10_000 })
 
-  // Clean up both tabs and the saved host (shared vault - see the note above).
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`, { first: true })
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
   await gotoSection(page, 'Hosts')

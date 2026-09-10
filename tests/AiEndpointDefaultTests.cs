@@ -5,10 +5,8 @@ using Xunit;
 namespace Slopterm.Tests;
 
 /// <summary>
-/// The AI agent is opt-in: a vault that has never been told about an endpoint has none, which
-/// is what makes a terminal tab render no AI bar at all (see AgentBar). Nothing rewrites an
-/// endpoint that is already stored - an install carrying the old local-Ollama default keeps
-/// it, and keeps its bar, until someone clears the field themselves.
+/// The AI agent is opt-in: a vault never told about an endpoint has none, so a terminal tab
+/// renders no AI bar. Nothing rewrites an endpoint that is already stored.
 /// </summary>
 [Collection("vault-dir")]
 public sealed class AiEndpointDefaultTests : IDisposable

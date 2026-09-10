@@ -3,12 +3,8 @@ using System.Reflection;
 namespace Slopterm.Server;
 
 /// <summary>
-/// Extracts the embedded app icon (same design as favicon.svg/the PWA icons) to a temp
-/// file once - shared by WindowsTrayIcon (needs a file path for Win32's LoadImage, which
-/// wants the .ico) and AppWindowManager (Photino's SetIconFile - on Linux this goes
-/// through GTK's icon loader, which rejects app.ico's PNG-compressed entries with
-/// "Compressed icons are not supported", so a plain .png is used there instead; Windows
-/// keeps using the .ico, matching WindowsTrayIcon's LoadImage).
+/// Extracts the embedded app icon to a temp file once: app.ico on Windows (LoadImage wants
+/// it), app.png elsewhere (GTK's icon loader rejects PNG-compressed .ico entries).
 /// </summary>
 public static class EmbeddedIcon
 {

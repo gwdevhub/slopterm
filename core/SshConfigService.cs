@@ -4,38 +4,21 @@ using System.Text.RegularExpressions;
 
 namespace Slopterm.Server;
 
-/// <summary>
-/// One literal alias from ~/.ssh/config, resolved enough to offer as a read-only,
-/// non-vault card on the Hosts screen (see AGENTS.md's SSH config hosts note). There is
-/// nothing here to edit/delete through the app - the file on disk is the only source of
-/// truth, and this is re-parsed from it on every request rather than cached or copied
-/// into the vault.
-/// </summary>
+/// <summary>One literal alias from ~/.ssh/config, offered as a read-only, non-vault card.
+/// The file on disk is the only source of truth - re-parsed on every request.</summary>
 public sealed record SshConfigHostEntry(string Alias, string HostName, int Port, string Username, string? PrivateKey);
 
-/// <summary>
-/// Parses `Host`/`HostName`/`User`/`Port`/`IdentityFile` directives out of ~/.ssh/config,
-/// the way real ssh resolves them for a target alias: every `Host` block whose pattern
-/// matches applies, in file order, and the first block to set a given parameter wins -
-/// so a trailing `Host *` block's shared `User`/`IdentityFile` still reaches earlier,
-/// more specific aliases. Deliberately narrower than the full OpenSSH grammar: no
-/// `Include`, no `Match`, no quoted/`%`-token values, and `!negated` patterns are just
-/// never matched rather than excluding a positive match elsewhere on the same line - that
-/// covers the common "a handful of named aliases, maybe a shared catch-all" config this
-/// feature is for, not every directive ssh_config supports.
-/// </summary>
+/// <summary>Parses the common Host/HostName/User/Port/IdentityFile directives from
+/// ~/.ssh/config with OpenSSH's first-match-wins semantics. Deliberately narrow: no Include,
+/// no Match, no quoted values.</summary>
 public static class SshConfigService
 {
     // Tried in this order for an alias with no explicit IdentityFile, mirroring OpenSSH's
     // own default identity list (minus the legacy DSA key, which SSH.NET doesn't support).
     private static readonly string[] DefaultIdentityFileNames = ["id_ed25519", "id_ecdsa", "id_rsa"];
 
-    /// <summary>
-    /// The user's normal SSH key, if they have one: the first of OpenSSH's default identity
-    /// filenames that exists in ~/.ssh. Used by CredentialResolver as the last step before
-    /// giving up, so a host that names a credential resolves against "my usual key" without
-    /// anyone having to make a keychain entry for it first.
-    /// </summary>
+    /// <summary>The user's normal SSH key - the first OpenSSH default identity that exists in
+    /// ~/.ssh. CredentialResolver's last resort before giving up.</summary>
     public static (string PrivateKey, string Path)? TryReadDefaultIdentity()
     {
         if (OperatingSystem.IsAndroid())
@@ -76,12 +59,8 @@ public static class SshConfigService
         return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh", "config");
     }
 
-    /// <summary>
-    /// Best-effort like every other optional lookup in this app (Keychain, Recent, ...):
-    /// a missing file, unreadable file, or parse hiccup just yields an empty list rather
-    /// than surfacing an error - there is no UI path where this should ever block the
-    /// Hosts screen from rendering.
-    /// </summary>
+    /// <summary>Best-effort: a missing/unreadable/unparseable config yields an empty list
+    /// rather than an error - this must never block the Hosts screen.</summary>
     public static List<SshConfigHostEntry> ListHosts()
     {
         if (OperatingSystem.IsAndroid())

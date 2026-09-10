@@ -10,12 +10,8 @@ interface ConfirmDialogProps {
   onCancel: () => void
 }
 
-// One shared confirm dialog for every "are you sure?" moment in the app (Settings'
-// vault reset/import, closing a tab, ...) instead of each caller rolling its own modal
-// or falling back to the browser's own window.confirm() (which can't be styled, doesn't
-// match the rest of the UI, and blocks the whole page rather than just this component).
-// Enter confirms, Escape cancels - both work regardless of which element has focus,
-// since a modal like this is expected to own all keyboard input while it's open.
+// One shared confirm dialog for every "are you sure?" moment in the app. Enter confirms,
+// Escape cancels, regardless of which element has focus.
 export function ConfirmDialog({ title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger, onConfirm, onCancel }: ConfirmDialogProps) {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {

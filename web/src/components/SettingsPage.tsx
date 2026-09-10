@@ -97,9 +97,8 @@ export function SettingsPage() {
     setImportError(null)
     try {
       await importVaultBackup(file)
-      // Vault existence/lock-state/settings all changed under the app's feet - reload
-      // so every component (VaultGate, this page's own state, etc.) re-fetches fresh
-      // instead of trying to patch a dozen pieces of now-stale client state by hand.
+      // Vault existence/lock-state/settings all changed under the app's feet, so reload
+      // rather than patch a dozen pieces of stale client state.
       window.location.reload()
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Failed to import backup')
@@ -197,11 +196,8 @@ export function SettingsPage() {
   }
 
   return (
-    // Settings is read-heavy content, not chrome: opt the whole page - its labels, section
-    // descriptions, and the encryption/danger-zone warning copy - back into text selection and
-    // the native right-click menu, using the same select-text + data-selectable-text pattern as
-    // the AI agent transcript (see index.css / issue #61). Marking the root covers the nested
-    // AiSettingsSection and UpdateSection too, since they render inside here.
+    // Settings is read-heavy content, so opt the whole page back into text selection and the
+    // native right-click menu (see index.css / issue #61).
     <div
       data-selectable-text
       className="mx-auto flex w-full max-w-lg select-text flex-col gap-4 p-4 sm:p-6"
@@ -366,12 +362,8 @@ export function SettingsPage() {
 
       <AiSettingsSection />
 
-      {/* Nothing in the Updates section applies to the Android app: updates come from Google
-          Play (UpdateService bails out before any network call there), and the GitHub token
-          below it only exists to raise the rate limit of the check that never runs. All the
-          card could do on a phone was offer a "Check now" button that reports it doesn't
-          check - so it isn't rendered at all. Keyed off the native bridge, not the user
-          agent: a phone browser pointed at a DESKTOP slopterm can still self-update it. */}
+      {/* Nothing in the Updates section applies to the Android app (updates come from Google
+          Play), so it isn't rendered there. Keyed off the native bridge, not the user agent. */}
       {!isAndroidApp() && <UpdateSection />}
 
       <div className="flex flex-col gap-3 border-t border-slate-800 pt-4">

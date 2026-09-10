@@ -7,11 +7,8 @@ import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as { baseUrl: string }
 
-// Exercises the Port Forwarding section's rendering + rule CRUD through the real UI. Actually
-// *starting* a forward needs a server with AllowTcpForwarding on (the shared e2e sshd has it
-// off), so the live tunnel is covered by the backend functional test instead; here we prove
-// the section renders, the form creates a rule tunnelling through a saved host, and it's
-// listed with the right mapping and controls.
+// *Starting* a forward needs AllowTcpForwarding (the shared sshd has it off) and is covered by
+// the backend functional test; here we prove the section renders and rule CRUD works.
 test('port forwarding: create a rule through the section and see it listed', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')
@@ -33,13 +30,10 @@ test('port forwarding: create a rule through the section and see it listed', asy
   })
 
   await gotoSection(page, 'Port Forwarding')
-  // The section has no heading - it's the Hosts-style toolbar + card grid (see CardGrid),
-  // so the "New port forward" button is what confirms it rendered. Explicit 10s (not the
-  // default 5s) like the suite's other post-navigation waits - the first section render on
-  // a cold start can otherwise just miss the default timeout.
+  // No heading - it's the Hosts-style toolbar + card grid (see CardGrid), so the "New port
+  // forward" button confirms it rendered; 10s like the suite's other post-navigation waits.
   await expect(page.getByRole('button', { name: 'New port forward' })).toBeVisible({ timeout: 10_000 })
 
-  // Add a local forward through the form (opened from the "New port forward" button).
   await page.getByRole('button', { name: 'New port forward' }).click()
   await page.selectOption('#pf-host', { label: 'pf-e2e-host' })
   await page.fill('#pf-bind-port', '15080')
@@ -48,7 +42,6 @@ test('port forwarding: create a rule through the section and see it listed', asy
   await page.fill('#pf-desc', 'pf-e2e-rule')
   await page.getByRole('button', { name: 'Add forward' }).click()
 
-  // It shows up with its mapping and a Start control (inactive until started).
   const row = page.locator('li', { hasText: 'pf-e2e-rule' })
   await expect(row).toBeVisible()
   await expect(row.getByText(/local 127\.0\.0\.1:15080/)).toBeVisible()

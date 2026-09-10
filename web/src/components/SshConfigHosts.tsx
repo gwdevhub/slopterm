@@ -12,13 +12,7 @@ interface SshConfigHostsProps {
 }
 
 // Sits below Recent on the Hosts screen, behind Settings' "Show hosts from ~/.ssh/config"
-// toggle (off by default). Read-only cards sourced live from the file on every mount -
-// never a second host store, and there's nothing here to edit/delete through the app
-// (no onEdit/onContextMenu, same as RecentConnections). An alias with no resolvable
-// private key (relies on ssh-agent/interactive auth) still gets a card, just with
-// disabled SSH/SFTP buttons - it's still a useful at-a-glance list of what's in the file.
-// Same best-effort fetch posture as Recent/Keychain: a failed/missing config just renders
-// nothing.
+// toggle. Read-only cards sourced live from the file; there's nothing to edit here.
 export function SshConfigHosts({ enabled, onSsh, onSftp, isConnecting }: SshConfigHostsProps) {
   const [entries, setEntries] = useState<SshConfigHostEntry[]>([])
 

@@ -47,9 +47,8 @@ async function cleanup(page: Page, name: string) {
   await deleteHost(page, name)
 }
 
-// Playwright's own touchscreen API can only tap, so a real press-move-release comes from CDP -
-// which is also the only way to hold a finger still for a long press, or to move it in steps the
-// page sees as separate touchmove events rather than one jump.
+// Playwright's touchscreen API can only tap, so press-move-release comes from CDP - also
+// the only way to hold for a long press or emit separate touchmove events.
 type Finger = {
   down: (x: number, y: number) => Promise<void>
   moveTo: (x: number, y: number, steps?: number) => Promise<void>
@@ -94,7 +93,6 @@ async function swipe(page: Page, dy: number) {
   await page.waitForTimeout(200)
 }
 
-// The first line number visible in the terminal, for output that is nothing but line numbers.
 function firstVisibleNumber(text: string): number {
   const match = text.split('\n').find((line) => /^\d+$/.test(line.trim()))
   return match ? Number(match.trim()) : NaN
@@ -116,16 +114,13 @@ async function centreOf(page: Page, word: string) {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2, box }
 }
 
-// hasTouch is what makes the app treat this as a touch device at all (isMobileApp() in
-// androidBridge.ts falls back to touch support when there's no native Android bridge), and it's
-// what makes Chromium deliver the CDP touch events above to the page as real touches.
+// hasTouch makes the app treat this as a touch device (isMobileApp() falls back to touch
+// support) and makes Chromium deliver the CDP touch events above as real touches.
 test.describe('with touch emulation', () => {
   test.use({ hasTouch: true })
 
-  // Every test here ends by closing its tab, but a test that fails earlier never gets there -
-  // and the tab it leaves behind is enough to fail every later terminal spec on this shared
-  // server with "resolved to N elements". One real failure should cost one red test, not nine,
-  // so sweep up whatever is still open. Failures themselves are untouched by this.
+  // A failing test never reaches its own cleanup, and the leftover tab would fail every later
+  // terminal spec on this shared server - so sweep up whatever is still open.
   test.afterEach(async ({ page }) => {
     const stillOpen = page.getByRole('button', { name: `Close ${tabLabel}` })
     for (let remaining = await stillOpen.count(); remaining > 0; remaining--) {
@@ -141,21 +136,18 @@ test.describe('with touch emulation', () => {
     // exactly where in the buffer it is.
     await page.keyboard.type('seq 1 400')
     await page.keyboard.press('Enter')
-    // Wait for a line that IS a number, not merely for the text "400" - the echoed command
-    // ("seq 1 400") satisfies that the instant it's typed, so on a slow runner the sample
-    // below could land after the echo but before any output, and read NaN.
+    // Wait for a line that IS a number, not the echoed "seq 1 400" - on a slow runner the
+    // sample below could otherwise land before any output and read NaN.
     await expect(async () => {
       expect(firstVisibleNumber(await terminalText(page))).toBeGreaterThan(1)
     }).toPass({ timeout: 10_000 })
 
     const atBottom = firstVisibleNumber(await terminalText(page))
 
-    // Finger down the screen = the content follows it = earlier lines come into view.
     await swipe(page, 300)
     const afterScrollBack = firstVisibleNumber(await terminalText(page))
     expect(afterScrollBack).toBeLessThan(atBottom)
 
-    // ...and back the other way returns to where it started.
     await swipe(page, -300)
     expect(firstVisibleNumber(await terminalText(page))).toBe(atBottom)
 
@@ -204,7 +196,6 @@ test.describe('with touch emulation', () => {
     const [first, second, third] = [`alpha${stamp}`, `beta${stamp}`, `gamma${stamp}`]
     await connect(page, hostName)
 
-    // Three markers, one per line, so each is a row of its own to aim at.
     await page.keyboard.type(`printf '%s\\n' ${first} ${second} ${third}`)
     await page.keyboard.press('Enter')
     await expect(async () => {
@@ -252,9 +243,6 @@ test.describe('with touch emulation', () => {
     await expect(startHandle).toBeVisible()
     await expect(endHandle).toBeVisible()
 
-    // Drag the end handle past the last character of the line below, then the start handle back
-    // up to the beginning of the line above: three lines, from two gestures neither of which
-    // touched the terminal itself.
     const last = await centreOf(page, third)
     const endBox = (await endHandle.boundingBox())!
     const touch = await finger(page)
@@ -292,7 +280,6 @@ test.describe('with touch emulation', () => {
     const copy = page.getByRole('button', { name: 'Copy', exact: true })
     await expect(copy).toBeVisible()
 
-    // A plain tap somewhere else in the terminal - not a second long press.
     const touch = await finger(page)
     await touch.down(target.x, target.y + 60)
     await touch.up()
@@ -307,9 +294,8 @@ test.describe('with touch emulation', () => {
     const hostName = 'touch altbuffer scroll test host'
     await connect(page, hostName)
 
-    // nano takes over the alternate screen, where there is no scrollback by definition - so the
-    // drag can only move anything if it reaches the application itself as cursor keys, which is
-    // what a wheel does on a desktop. Read-only (-v) so a stray keystroke can't edit the file.
+    // nano's alternate screen has no scrollback, so the drag only moves anything if it reaches
+    // the app as cursor keys. Read-only (-v) so a stray keystroke can't edit the file.
     await page.keyboard.type('seq 1 400 > /tmp/touchscroll.txt && nano -v /tmp/touchscroll.txt')
     await page.keyboard.press('Enter')
     await expect(async () => {

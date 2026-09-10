@@ -4,9 +4,7 @@ using Slopterm.Server.Vault;
 namespace Slopterm.Server.VaultSync;
 
 /// <summary>
-/// One collection as the UI sees it. Deliberately carries no <c>remotePassword</c> and no
-/// <c>collectionKey</c>: a saved secret is something the app uses, not something it shows
-/// back to you, and the invite token is the one sanctioned way either leaves the device.
+/// One collection as the UI sees it - deliberately no <c>remotePassword</c> or <c>collectionKey</c>.
 /// </summary>
 public sealed record CollectionSummary(
     string Id,
@@ -29,8 +27,8 @@ public sealed record CollectionContents(
     IReadOnlyList<CollectionContentGroup> Groups);
 
 /// <summary>
-/// One scope's worth of that. <paramref name="Syncing"/> is false for records that live in
-/// the collection while its scope is switched off - present on this device, going nowhere.
+/// One scope's worth. <paramref name="Syncing"/> is false for records in a collection whose scope
+/// is switched off - present here, going nowhere.
 /// </summary>
 public sealed record CollectionContentGroup(
     string Scope,
@@ -46,8 +44,8 @@ public sealed record CollectionContentItem(
     DateTimeOffset UpdatedAt);
 
 /// <summary>
-/// Creating, joining, leaving and describing collections. The actual converging lives in
-/// <see cref="VaultSyncService"/>; this decides what exists on this device.
+/// Creating, joining, leaving and describing collections; converging lives in
+/// <see cref="VaultSyncService"/>.
 /// </summary>
 public sealed class CollectionService(VaultService vault, VaultSyncService sync)
 {
@@ -66,15 +64,8 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
     }
 
     /// <summary>
-    /// What this collection actually carries, grouped by scope - the answer to "which of my
-    /// hosts does the team see?", which a record count alone can't give.
-    ///
-    /// Every scope is reported, not just the enabled ones: a record stays in the collection
-    /// after its scope is turned off, it just stops converging, and a view that hid those
-    /// would hide precisely the surprising case. <c>Syncing</c> is what says which is which.
-    ///
-    /// Labels only, never secrets - a keychain entry is its name, a recent connection is
-    /// user@host, and neither the key nor the password goes anywhere near this.
+    /// What this collection carries, grouped by scope. Every scope is reported, not just enabled
+    /// ones (a record stays after its scope is off). Labels only, never secrets.
     /// </summary>
     public CollectionContents? DescribeContents(string collectionId)
     {
@@ -107,11 +98,7 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
         return new CollectionContents(collectionId, collection.Name, groups);
     }
 
-    /// <summary>
-    /// One record as a line of text. Returns null for a record this build can't read (an
-    /// older/newer schema, or corruption): the count it contributes is still visible in the
-    /// group above it, and a half-parsed line would be worse than an honest omission.
-    /// </summary>
+    /// <summary>One record as a line of text; null for a record this build can't read.</summary>
     private static CollectionContentItem? Summarize(string scope, StoredRecord record)
     {
         static string Trim(string text, int max)
@@ -234,9 +221,8 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
     }
 
     /// <summary>
-    /// Applies whatever the caller supplied and leaves the rest alone - a null password
-    /// means "keep the one you have", which is what makes the Edit form able to show a
-    /// password field it never fills in.
+    /// Applies whatever the caller supplied and leaves the rest alone - a null password means
+    /// "keep the one you have".
     /// </summary>
     public CollectionSummary Update(
         string collectionId, string? name, string? remoteUrl, string? username, string? password,
@@ -281,10 +267,8 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
     }
 
     /// <summary>
-    /// Leaves a collection: its records and keys go from THIS device, and the shared content
-    /// is untouched. Records can be kept by moving them into the local collection first,
-    /// which is what <paramref name="keepRecordsLocally"/> does - otherwise leaving a team
-    /// collection would silently take every host it carried with it.
+    /// Leaves a collection: its records and keys go from THIS device, shared content untouched.
+    /// <paramref name="keepRecordsLocally"/> moves records into the local collection first.
     /// </summary>
     public void Leave(string collectionId, bool keepRecordsLocally)
     {
@@ -311,8 +295,8 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
     }
 
     /// <summary>
-    /// The one-line invite for a single collection. It carries the collection key, so the
-    /// caller shows it behind a reveal and warns against pasting it into a chat.
+    /// The one-line invite for a collection; it carries the collection key, so show it behind a
+    /// reveal.
     /// </summary>
     public string BuildInviteToken(string collectionId, string? passphrase) =>
         CollectionShareCodec.EncodeInvite(BuildInvite(collectionId), passphrase);
@@ -345,9 +329,8 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
     }
 
     /// <summary>
-    /// Paste-and-confirm: adopts every collection in a token (one for an invite, all of them
-    /// for a sync configuration) and queues a full pull. A collection this device already
-    /// holds is refreshed rather than duplicated, so re-pasting a token is harmless.
+    /// Adopts every collection in a token and queues a pull; an already-held collection is
+    /// refreshed rather than duplicated.
     /// </summary>
     public IReadOnlyList<CollectionSummary> Join(string token, string? passphrase)
     {
@@ -369,9 +352,8 @@ public sealed class CollectionService(VaultService vault, VaultSyncService sync)
             record.RemotePassword = invite.Password;
             record.Scopes = [.. NormalizeScopes(invite.Scopes)];
 
-            // A token with a different key than the one we hold means we're being pointed at
-            // a different collection under a familiar id - adopt it, and drop the per-record
-            // state, which described records encrypted under the old key.
+            // A different key under a familiar id means a different collection - adopt it and
+            // drop the per-record state, which described the old key's records.
             if (record.CollectionKey != invite.CollectionKey)
             {
                 record.CollectionKey = invite.CollectionKey;

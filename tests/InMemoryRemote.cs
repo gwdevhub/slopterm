@@ -6,14 +6,9 @@ namespace Slopterm.Tests;
 
 /// <summary>
 /// An <see cref="IVaultSyncRemote"/> that lives in a dictionary, shared by every
-/// <see cref="Slopterm.Server.VaultSync.VaultSyncService"/> pointed at the same URL - so two
-/// "devices" in one test process converge through one store, exactly as they would through
-/// one WebDAV share.
-///
-/// It exists alongside (not instead of) the real-server tests: this one makes the merge
-/// matrix deterministic and lets a test force a 412 on demand, which no real server will
-/// do reliably. Whether the WIRE format survives contact with a real server is what
-/// WebDavRemoteTests and the container suite answer.
+/// <see cref="Slopterm.Server.VaultSync.VaultSyncService"/> pointed at the same URL, so two
+/// "devices" converge through one store. Makes the merge matrix deterministic and lets a test
+/// force a 412 on demand; the real-server wire format is covered elsewhere.
 /// </summary>
 public sealed class InMemoryRemote(InMemoryRemote.Store store) : IVaultSyncRemote
 {

@@ -1,9 +1,5 @@
-// Detects and talks to the native Photino window host. The chromeless desktop window (see
-// server/Native/AppWindowManager.cs) has no OS title bar, so the app draws its own and
-// drives the window controls through Photino's window.external message bridge. In a plain
-// browser (dev, or someone opening the URL directly) window.external has no sendMessage, so
-// isDesktopApp is false and the custom title bar / window controls simply aren't rendered -
-// the browser draws its own chrome instead.
+// Detects and talks to the native Photino window host (see server/Native/AppWindowManager.cs),
+// which drives window controls through window.external. Absent in a plain browser.
 
 interface PhotinoExternal {
   sendMessage?: (message: string) => void
@@ -21,9 +17,7 @@ function photino(): PhotinoExternal | undefined {
 export const isDesktopApp = typeof photino()?.sendMessage === 'function'
 
 // Window-control verbs the title bar posts; the backend switches on the "wc:" prefix.
-// 'drag' hands a title-bar press off to the OS's native window-move loop (see
-// AppWindowManager) - the robust path that doesn't depend on WebView2's experimental
-// draggable-region flag, which some runtime versions silently ignore.
+// 'drag' hands off to the OS's native window-move loop (see AppWindowManager).
 export type WindowCommand = 'min' | 'max' | 'close' | 'ready' | 'drag'
 
 export function sendWindowCommand(command: WindowCommand): void {

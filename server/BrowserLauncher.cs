@@ -4,26 +4,16 @@ using System.Runtime.Versioning;
 namespace Slopterm.Server;
 
 /// <summary>
-/// Chrome/Edge/Brave all support a "--app=&lt;url&gt;" flag that opens a chromeless window
-/// (no tabs, no address bar) instead of a normal browser tab - the standalone-app look
-/// without bundling a browser (see AGENTS.md's "No bundled browser/webview" rule). Falls
-/// back to the OS's normal default-browser handling if no such browser is found/launchable.
-/// Windows-only for now since the tray icon's "Open" action - the only place the app
-/// currently launches a browser itself - is Windows-only (see AGENTS.md's system tray
-/// section); Linux/macOS still just print the URL for the user to open themselves.
+/// Chrome/Edge/Brave's "--app=&lt;url&gt;" flag opens a chromeless window without bundling a
+/// browser; falls back to the OS default browser if none is launchable.
 /// </summary>
 public static class BrowserLauncher
 {
     private static readonly string[] WindowsAppPathExeNames = ["chrome.exe", "msedge.exe", "brave.exe"];
 
     /// <returns>
-    /// The launched process if this opened a dedicated chromeless app-mode window - the
-    /// caller (AppWindowManager) tracks it so "Quit" from the tray can close it along with
-    /// everything else, since a window we opened for the user is ours to close, unlike a
-    /// tab in whatever general-purpose browser session they already had running. Null if
-    /// this fell back to the OS's default-browser handling instead, which must never be
-    /// force-closed - that's an ordinary browser window/tab that may have other unrelated
-    /// tabs open in it.
+    /// The launched process if a dedicated chromeless app-mode window was opened (tracked so
+    /// Quit can close it), or null for the default-browser fallback which must never be force-closed.
     /// </returns>
     public static Process? Launch(string url)
     {
@@ -57,9 +47,8 @@ public static class BrowserLauncher
                 var psi = new ProcessStartInfo(path) { UseShellExecute = false };
                 psi.ArgumentList.Add($"--app={url}");
 
-                // Restores the window to wherever it was last moved/resized to (see
-                // WindowPositionStore) - the frontend persists this itself, there's no
-                // API for us to read an already-open window's live bounds back out.
+                // Restore to wherever it was last moved/resized (persisted by the frontend -
+                // there's no API to read an open window's live bounds back out).
                 var saved = WindowPositionStore.Load();
                 if (saved is not null)
                 {
@@ -79,9 +68,8 @@ public static class BrowserLauncher
         return null;
     }
 
-    // Chrome/Edge/Brave all register their install path under this "App Paths" registry
-    // key - more reliable than guessing Program Files locations, which vary by
-    // architecture and per-user vs. per-machine installs.
+    // Chrome/Edge/Brave register their install path under this "App Paths" registry key -
+    // more reliable than guessing Program Files locations, which vary by install type.
     [SupportedOSPlatform("windows")]
     private static string? FindWindowsAppPath(string exeName) =>
         (string?)Microsoft.Win32.Registry.GetValue(

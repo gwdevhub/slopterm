@@ -5,9 +5,8 @@ interface ShareTokenModalProps {
   onClose: () => void
 }
 
-// Fallback for "Copy" when the clipboard API is unavailable (e.g. blocked by policy): shows
-// the share token in a selectable field so it can still be copied by hand. The normal path
-// writes straight to the clipboard and never opens this.
+// Fallback for "Copy" when the clipboard API is unavailable: shows the token in a selectable
+// field so it can still be copied by hand.
 export function ShareTokenModal({ token, onClose }: ShareTokenModalProps) {
   const [copied, setCopied] = useState(false)
 

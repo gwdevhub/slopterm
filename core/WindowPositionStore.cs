@@ -10,26 +10,13 @@ public sealed class WindowPosition
     public required int Height { get; set; }
 }
 
-/// <summary>
-/// Remembers the app window's last position/size across restarts, so the tray icon's
-/// "Open" action can restore it (see BrowserLauncher.TryLaunchChromiumAppMode's
-/// --window-position/--window-size flags) instead of the OS/browser picking a default
-/// spot every time. Plain JSON, not encrypted - screen coordinates aren't sensitive.
-/// Lives alongside vault.json/settings.json but isn't itself vault content: not a named
-/// entry in VaultService.ExportBackup, so it naturally doesn't travel with a backup
-/// (your desktop layout on one machine has no business being forced onto another).
-/// </summary>
+/// <summary>Remembers the window's last position/size across restarts so the tray "Open" action can restore it. Plain JSON, not vault content (not included in backups).</summary>
 public static class WindowPositionStore
 {
     private static string PathOnDisk => Path.Combine(Vault.AppPaths.GetVaultDirectory(), "window.json");
 
-    // A minimized or tearing-down native window reports "parked" coordinates - Win32
-    // moves a minimized window to roughly (-32000, -32000) - and/or a zero/garbage size.
-    // Persisting that once (from a shutdown path, an older build, etc.) would otherwise
-    // restore the window off-screen with no size on every subsequent launch, so it never
-    // appears to open at all even though it exists (taskbar button, no visible window).
-    // Both Load and Save gate on this so neither a bad value already on disk nor a fresh
-    // bad capture can strand the window.
+    // Parked/garbage coordinates (Win32 minimizes to ~(-32000,-32000)) must never be persisted
+    // or restored, or the window comes back off-screen with no size. Both Load and Save gate on this.
     private const int MinSize = 100;
     private const int MaxExtent = 30000;
 
@@ -49,8 +36,7 @@ public static class WindowPositionStore
         try
         {
             var position = JsonSerializer.Deserialize<WindowPosition>(File.ReadAllText(PathOnDisk));
-            // Fall back to OS default placement (return null) rather than restoring an
-            // off-screen/zero-size rectangle that would leave the window invisible.
+            // Fall back to OS default placement rather than restoring an off-screen/zero-size rectangle.
             return position is not null && IsSane(position) ? position : null;
         }
         catch (JsonException)
@@ -63,8 +49,7 @@ public static class WindowPositionStore
     {
         if (!IsSane(position))
         {
-            // Don't overwrite the last known-good position with parked/garbage geometry -
-            // silently keep whatever is already on disk.
+            // Don't overwrite the last known-good position with parked/garbage geometry.
             return;
         }
 

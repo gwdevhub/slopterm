@@ -13,10 +13,7 @@ interface CardGridProps {
 }
 
 // The shared "toolbar + responsive card grid" shell, so Keychain / Snippets / Port
-// Forwarding all use the exact same layout as the Hosts grid (HostGrid) instead of each
-// section inventing its own vertical-list-plus-inline-form. Same container, same search +
-// "New …" toolbar row, same auto-fill grid. Cards are the `children` (each an EntityCard /
-// <li>); the empty-state line renders below the grid.
+// Forwarding match the Hosts grid instead of each inventing its own layout.
 export function CardGrid({ query, onQueryChange, searchPlaceholder, newLabel, onNew, isEmpty, emptyText, children }: CardGridProps) {
   return (
     <div className="flex flex-1 flex-col gap-3 p-3 sm:p-4">

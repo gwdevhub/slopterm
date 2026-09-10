@@ -4,18 +4,15 @@ namespace Slopterm.Server;
 
 /// <summary>
 /// A remote shell: an SSH connection and the shell channel on it, as one disposable unit.
-/// This is the behaviour <see cref="TerminalSession"/> used to hold inline, moved out
-/// unchanged when the local PTY gained the right to be pumped by the same session code.
 /// </summary>
 public sealed class SshShellChannel : IShellChannel
 {
     private readonly SshClient _client;
     private readonly ShellStream _shell;
 
-    // Set from ShellStream.Closed, which SSH.NET raises only when the shell CHANNEL closes -
-    // never when the SSH session disconnects. That distinction is the whole basis for telling
-    // `exit` apart from a dead transport. Deliberately never disposed: the reader may still
-    // be waiting on it while teardown runs, and a disposed wait handle throws.
+    // Set from ShellStream.Closed, which fires only when the shell CHANNEL closes, never when
+    // the SSH session disconnects - the basis for telling `exit` from a dead transport. Never
+    // disposed: the reader may still be waiting on it during teardown.
     private readonly ManualResetEventSlim _channelClosed = new(false);
 
     private int _disposed;
@@ -32,11 +29,8 @@ public sealed class SshShellChannel : IShellChannel
         var connectionInfo = SshConnectionInfoFactory.Create(request);
         var client = new SshClient(connectionInfo)
         {
-            // An interactive shell can sit idle for hours emitting nothing at all, and a
-            // silent TCP flow is exactly what carrier NAT and sshd's ClientAlive timers reap.
-            // Matches ForwardingService/SyncService, which have always set this - the
-            // interactive paths were the ones missing it. Set on the client, not on
-            // ConnectionInfo: in SSH.NET the property lives on BaseClient.
+            // An idle interactive shell would otherwise be reaped by carrier NAT and sshd's
+            // ClientAlive timers. Set on the client, where the property lives.
             KeepAliveInterval = TimeSpan.FromSeconds(30),
         };
         client.Connect();
@@ -66,9 +60,7 @@ public sealed class SshShellChannel : IShellChannel
 
     public bool CanLoseTransport => true;
 
-    // Wrapped because IsConnected reaches into a session object that may be being torn down
-    // underneath us, and a throw here would be read as "still connected" by callers that
-    // can't afford to guess.
+    // Wrapped because IsConnected can throw while the session is being torn down underneath us.
     public bool IsTransportUp
     {
         get
@@ -85,21 +77,10 @@ public sealed class SshShellChannel : IShellChannel
     }
 
     /// <summary>
-    /// This deliberately does NOT go by whether the client still reports itself connected.
-    /// SSH.NET tears things down in an order that makes that answer a coin flip: on a
-    /// server-sent disconnect it disposes the ShellStream - waking the reader - BEFORE it
-    /// shuts the socket down, so the client can still look connected; and on a real
-    /// <c>exit</c> the listener thread often runs straight on into closing the transport
-    /// before the reader is scheduled at all, so the client can already look disconnected.
-    /// Either way round the guess is wrong half the time, and each way costs the user
-    /// something: one closes a tab whose connection merely blipped, the other silently opens
-    /// a fresh authenticated session for a shell they just exited.
-    ///
-    /// <c>ShellStream.Closed</c> has no such ambiguity. It arrives on another thread just
-    /// after the stream is disposed, though, so the reader can get here first; the short wait
-    /// is what turns that into a definite answer instead of another race. Timing out is read
-    /// as a transport loss, which is the safer way to be wrong: the tab reconnects rather
-    /// than disappearing.
+    /// Does NOT go by IsConnected: SSH.NET tears down in an order that makes that a coin flip
+    /// (ShellStream disposed before the socket, or vice versa). ShellStream.Closed is
+    /// unambiguous; the short wait covers the reader arriving first. A timeout reads as a
+    /// transport loss, the safer way to be wrong.
     /// </summary>
     public bool ShellClosedCleanly(TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -114,9 +95,7 @@ public sealed class SshShellChannel : IShellChannel
         }
     }
 
-    // Disposing the shell is what unparks a reader blocked on a stream that will never
-    // produce another byte. The SshClient is deliberately left alone: the session disposes
-    // the whole channel a moment later and that is where the connection is closed.
+    // Disposing the shell unparks a blocked reader; the SshClient is left for Dispose below.
     public void AbortRead()
     {
         try
@@ -136,11 +115,8 @@ public sealed class SshShellChannel : IShellChannel
             return;
         }
 
-        // Every step is isolated, because this runs on connections that are by definition
-        // suspect - the reaper's whole job is collecting sessions whose transport broke - and
-        // SSH.NET throws out of both the channel close and the disconnect when the link is
-        // already dead. Unguarded, the first throw would skip the rest and strand the
-        // SshClient (and its transport thread) for the life of the process.
+        // Isolated because SSH.NET throws from both the channel close and the disconnect when
+        // the link is already dead; a throw would otherwise strand the SshClient.
         try
         {
             // This is also what unparks the reader thread's blocking Read.

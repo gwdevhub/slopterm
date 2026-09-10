@@ -13,10 +13,8 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
   sshPassword: string
 }
 
-// Scoped to the currently-focused terminal specifically (xterm.js's own "xterm-focus"
-// class) - every open tab's view stays mounted-but-hidden even while inactive (see
-// AGENTS.md's multi-session tabs note), so a plain '.xterm-rows' locator goes ambiguous
-// the moment more than one tab has ever been open in this shared-server test run.
+// Scoped to the focused terminal (xterm's "xterm-focus" class): every open tab stays mounted,
+// so a plain '.xterm-rows' locator goes ambiguous once more than one tab has been open.
 function terminalText(page: import('@playwright/test').Page) {
   return page.locator('.xterm-rows.xterm-focus').innerText()
 }
@@ -52,10 +50,8 @@ test('the mobile keyboard toolbar is absent without touch support', async ({ pag
   await deleteHost(page, 'toolbar visibility test host')
 })
 
-// isMobileApp() (see androidBridge.ts) falls back to touch-support detection when there's
-// no native Android bridge - Playwright's hasTouch context option is what actually flips
-// that check, not viewport size (see sidebar.spec.ts's mobile-*width* test for the
-// unrelated, CSS-breakpoint-driven "mobile menu overlay").
+// isMobileApp() (see androidBridge.ts) falls back to touch detection without a native
+// Android bridge - Playwright's hasTouch flips that, not viewport size.
 test.describe('with touch emulation', () => {
   test.use({ hasTouch: true })
 
@@ -72,11 +68,8 @@ test.describe('with touch emulation', () => {
       expect(await terminalText(page)).toContain(marker)
     }).toPass({ timeout: 10_000 })
 
-    // Running it once already puts the marker in the transcript twice - the PTY's own
-    // local echo of the typed command line, then the command's actual output. Recalling
-    // and re-running it (proves the button sent the real ESC [ A cursor-up sequence, not
-    // a raw uparrow keycode xterm would otherwise ignore outside an actual keydown) adds
-    // two more occurrences.
+    // Running it once puts the marker in the transcript twice (PTY echo + output); recalling
+    // and re-running proves the button sent a real ESC [ A, adding two more occurrences.
     await page.getByRole('button', { name: 'Up' }).click()
     await page.keyboard.press('Enter')
     await expect(async () => {
@@ -98,8 +91,7 @@ test.describe('with touch emulation', () => {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
     await page.mouse.down()
     // Long enough to clear the initial hold delay and fire several repeats (see
-    // HOLD_REPEAT_DELAY_MS/HOLD_REPEAT_INTERVAL_MS in KeyboardToolbar) - a single press would
-    // only move the cursor left by one.
+    // HOLD_REPEAT_DELAY_MS/HOLD_REPEAT_INTERVAL_MS) - a single press moves one cell.
     await page.waitForTimeout(700)
     await page.mouse.up()
 
@@ -126,24 +118,21 @@ test.describe('with touch emulation', () => {
     await ctrlButton.click()
     await expect(ctrlButton).toHaveAttribute('aria-pressed', 'true')
 
-    // The armed modifier is consumed by the very next single-character keydown - this "c"
-    // must never reach the shell as a literal character (which would just make bash wait
-    // for more input on a blank second line, not print anything).
+    // The armed modifier is consumed by the next single-character keydown - this "c" must
+    // never reach the shell literally (bash would just wait for more input).
     await page.keyboard.type('c')
     await expect(ctrlButton).toHaveAttribute('aria-pressed', 'false')
 
-    // A fresh command right after only completes quickly if sleep 30 was actually
-    // interrupted (0x03) rather than still running in the foreground for the rest of its
-    // 30s - the 10s timeout here would otherwise be far too short to pass.
+    // A fresh command completes quickly only if sleep 30 was actually interrupted (0x03),
+    // rather than still running for its full 30s.
     const marker = `PLAYWRIGHT_AFTER_INTERRUPT_${Date.now()}`
     await page.keyboard.type(`echo ${marker}`)
     await page.keyboard.press('Enter')
     await expect(async () => {
       expect(await terminalText(page)).toContain(marker)
     }).toPass({ timeout: 10_000 })
-    // (Not asserting the transcript never contains "SLEEP_FINISHED_NORMALLY" - the typed
-    // command line itself echoes that substring regardless of whether it ran; the marker
-    // appearing this quickly is what actually proves the interrupt worked.)
+    // (Not asserting the transcript lacks "SLEEP_FINISHED_NORMALLY" - the typed command line
+    // echoes it regardless; the marker appearing quickly is what proves the interrupt.)
 
     await closeTab(page, tabLabel)
     await gotoSection(page, 'Hosts')
@@ -160,10 +149,8 @@ test.describe('with touch emulation', () => {
     await ctrlButton.click()
     await expect(ctrlButton).toHaveAttribute('aria-pressed', 'true')
 
-    // insertText is text with NO key events at all, which is what an Android soft keyboard
-    // actually produces (Chromium reports key="Unidentified"/keyCode=229 on the keydown and
-    // delivers the character as IME input). Handling the modifier on the keydown therefore
-    // missed it entirely and the shell just got a literal "c" - the bug this covers.
+    // insertText produces text with NO key events, like an Android soft keyboard
+    // (key="Unidentified"/keyCode=229) - handling the modifier on keydown missed it.
     await page.keyboard.insertText('c')
     await expect(ctrlButton).toHaveAttribute('aria-pressed', 'false')
 
@@ -179,15 +166,8 @@ test.describe('with touch emulation', () => {
     await deleteHost(page, 'toolbar ime ctrl test host')
   })
 
-  // Tab-completion's actual visible effect depends on what's installed in the target
-  // shell (bash-completion, PATH contents, ...) - not asserted on precisely, and Tab is
-  // deliberately excluded from this generic click-through: tapping it against a genuinely
-  // empty prompt (as this loop otherwise would) lists every $PATH executable and drops the
-  // session into a `less` pager waiting for input, which would then eat the marker command
-  // typed below instead of running it. Escape/Insert/Delete's readline bindings have no
-  // single universal observable side effect either - too environment-fragile to assert on
-  // precisely. This only smoke-tests that tapping every remaining button is wired up and
-  // doesn't throw/disconnect the session, not each one's exact remote effect.
+  // Tab is excluded (against an empty prompt it lists $PATH and drops into a `less` pager that
+  // would eat the marker); this only smoke-tests each remaining button is wired up without disconnecting.
   test('Escape/Insert/Delete/Alt/arrow buttons are clickable without disconnecting the session', async ({ page }) => {
     await connectHost(page, 'toolbar smoke test host')
 
@@ -196,9 +176,8 @@ test.describe('with touch emulation', () => {
     for (const label of ['Escape', 'Insert', 'Delete', 'Home', 'End', 'Page Up', 'Page Down', 'Alt', 'Left', 'Down', 'Right']) {
       await page.getByRole('button', { name: label, exact: true }).click()
     }
-    // Alt is a sticky modifier (see TerminalView) - the tap above armed it, and it would
-    // otherwise intercept the very next character typed below instead of letting it
-    // through as literal input. Tap it again to disarm before typing normally.
+    // Alt is a sticky modifier (see TerminalView): the tap above armed it and it would
+    // intercept the next typed character, so tap it again to disarm.
     await page.getByRole('button', { name: 'Alt', exact: true }).click()
     await expect(page.getByRole('button', { name: 'Alt', exact: true })).toHaveAttribute('aria-pressed', 'false')
 
@@ -237,9 +216,8 @@ test.describe('with touch emulation', () => {
   test('opening a panel puts the Android keyboard away, and closing it leaves the keyboard alone', async ({
     page,
   }) => {
-    // The native hide has no counterpart a browser can be asked for (see hideAndroidKeyboard),
-    // so the bridge stands in for MainActivity's SloptermAndroid the same way the composition
-    // spec's does, recording the calls instead of performing them.
+    // The native hide has no browser counterpart (see hideAndroidKeyboard), so the bridge
+    // stands in for MainActivity's SloptermAndroid, recording calls instead of performing them.
     await page.addInitScript(() => {
       const calls: string[] = []
       ;(window as unknown as { hideKeyboardCalls: string[] }).hideKeyboardCalls = calls
@@ -287,9 +265,8 @@ test.describe('with touch emulation', () => {
       expect(await terminalText(page)).toContain('|')
     }).toPass({ timeout: 10_000 })
 
-    // ...and it's also why ^C has to work: pressing Enter on a dangling pipe would drop bash
-    // into its PS2 continuation prompt and swallow the marker command below. Reaching the
-    // marker at all is what proves the key sent a real 0x03 rather than a literal "^C".
+    // A dangling pipe would drop bash into its PS2 prompt and swallow the marker; reaching it
+    // proves the key sent a real 0x03 rather than a literal "^C".
     await page.getByRole('button', { name: 'Ctrl+C', exact: true }).click()
     const marker = `PLAYWRIGHT_TOOLBAR_SYMBOL_${Date.now()}`
     await page.keyboard.type(`echo ${marker}`)
@@ -310,10 +287,8 @@ test.describe('with touch emulation', () => {
     const focusedClass = () => page.evaluate(() => document.activeElement?.className ?? '')
     expect(await focusedClass()).toContain('xterm-helper-textarea')
 
-    // Focus moving to the button is not cosmetic on Android: it makes the platform tear the
-    // keyboard's input connection down and rebuild it on every tap (the lag between tapping a
-    // key and the shell reacting), and it discards whatever the keyboard was still holding in
-    // its composing region - which is how tapping Left after typing "ls -al" wiped the "-al".
+    // On Android, focus moving to the button makes the platform tear down and rebuild the
+    // keyboard's input connection on every tap and discards the composing region (the "-al" wipe).
     await page.getByRole('button', { name: 'Left' }).click()
     expect(await focusedClass()).toContain('xterm-helper-textarea')
 
@@ -332,9 +307,8 @@ test.describe('with touch emulation', () => {
   test('the always-visible row holds exactly the nine keys it should, in order', async ({ page }) => {
     await connectHost(page, 'toolbar layout test host')
 
-    // Left-to-right order is deliberate (arrows read left/right before up/down), and this is
-    // also what pins the row to nine equal grid cells - the previous scrolling row let the
-    // last key slide half underneath the panel toggle on a narrow phone.
+    // Left-to-right order is deliberate (arrows read left/right before up/down); this also pins
+    // the row to nine equal grid cells - the old scrolling row let the last key slide under the toggle.
     const keys = page.locator('[aria-label="Terminal keys"] button')
     await expect(keys).toHaveCount(9)
     expect(await keys.evaluateAll((buttons) => buttons.map((b) => b.getAttribute('aria-label')))).toEqual([
@@ -436,9 +410,8 @@ test.describe('with touch emulation', () => {
     const windowHeight = await page.evaluate(() => window.innerHeight)
     expect(before!.y + before!.height).toBeGreaterThan(windowHeight - 100)
 
-    // Android Chrome doesn't shrink the layout viewport when the keyboard opens - it only
-    // shrinks the *visual* viewport - so that's what this emulates. Playwright has no keyboard
-    // emulation, and asserting on the real thing needs a device.
+    // Android Chrome shrinks only the *visual* viewport when the keyboard opens, so that's what
+    // this emulates; Playwright has no keyboard emulation.
     const keyboardHeight = 300
     await page.evaluate((height) => {
       const viewport = window.visualViewport!

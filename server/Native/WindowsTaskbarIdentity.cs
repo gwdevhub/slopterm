@@ -4,18 +4,10 @@ using System.Runtime.Versioning;
 namespace Slopterm.Server.Native;
 
 /// <summary>
-/// Makes the Photino/WebView-hosted window belong to slopterm in the Windows shell.
-/// ConfigureProcess sets an explicit process AppUserModelID so the tray icon and window
-/// share one identity; because that AppID isn't a shell-registered app, the taskbar can't
-/// find an icon for it and falls back to a generic tile unless the window itself carries a
-/// System.AppUserModel.RelaunchIconResource pointing at the real icon (set below).
-///
-/// The catch is timing: WebView2 clears the window's shell property store while it runs the
-/// async initialization Photino kicks off from Load(), so setting these properties once
-/// straight after Load() is silently wiped. ApplyWindowIdentityWithRetry re-applies on a
-/// background thread until the value survives several checks (i.e. WebView2 has finished
-/// initializing) - verified by reading the taskbar button repaint from generic to the real
-/// icon only once the property sticks.
+/// Makes the Photino/WebView window belong to slopterm in the Windows shell, setting an
+/// explicit AppUserModelID plus a RelaunchIconResource for the taskbar icon. WebView2 clears
+/// the window's shell property store during async init, so ApplyWindowIdentityWithRetry
+/// re-applies on a background thread until the value sticks.
 /// </summary>
 internal static class WindowsTaskbarIdentity
 {
@@ -40,17 +32,9 @@ internal static class WindowsTaskbarIdentity
     }
 
     /// <summary>
-    /// Applies the taskbar window's shell identity/icon and keeps re-applying until it
-    /// holds. MUST run off the window's message-loop thread - it sleeps between attempts.
-    ///
-    /// Two things make this fiddly. First, Photino's own PhotinoWindow.WindowHandle is NOT
-    /// the top-level frame that owns the taskbar button - setting shell properties on it
-    /// leaves the visible window (and its taskbar tile) untouched - so we locate the real
-    /// window by enumerating the process's visible top-level windows instead. Second,
-    /// WebView2 clears that window's shell property store mid-init, so a single write is
-    /// wiped; each pass re-checks the live value and the property only counts as stuck once
-    /// it has survived a few consecutive checks. Bounded so a window that never appears or
-    /// settles (or gets torn down) can't spin forever.
+    /// Applies the taskbar window's shell identity/icon, re-applying until it holds. MUST run
+    /// off the window's message-loop thread (it sleeps between attempts). Bounded so a window
+    /// that never appears or settles can't spin forever.
     /// </summary>
     public static void ApplyWindowIdentityWithRetry()
     {
@@ -66,10 +50,8 @@ internal static class WindowsTaskbarIdentity
             var windowHandle = FindMainTaskbarWindow();
             if (windowHandle != nint.Zero)
             {
-                // Photino's chromeless window (see AppWindowManager) drops WS_THICKFRAME, so
-                // it can't be edge-resized. Add it back (plus the min/max boxes, so Win+Up/
-                // Down and aero-snap behave) - idempotent, and the style survives WebView2's
-                // init unlike the shell property store below, so once set it stays.
+                // Photino's chromeless window drops WS_THICKFRAME, so it can't be edge-resized.
+                // Add it back; the style survives WebView2 init unlike the shell property store.
                 EnsureResizableStyle(windowHandle);
 
                 if (IsAppIdApplied(windowHandle))
@@ -92,14 +74,9 @@ internal static class WindowsTaskbarIdentity
     }
 
     /// <summary>
-    /// The process's visible, titled top-level window - the Photino frame that actually
-    /// owns the taskbar button. Deliberately skips the tray's message-only helper window
-    /// and the invisible IME windows the runtime creates, neither of which is on the
-    /// taskbar. Returns Zero if the window isn't up yet (the caller retries).
-    ///
-    /// Also used by AppWindowManager to find the window whose taskbar button "close to tray"
-    /// has to make go away - note the visibility filter: this only ever finds a window that
-    /// is currently shown, so a caller that hides one must remember the handle itself.
+    /// The process's visible, titled top-level window - the Photino frame that owns the
+    /// taskbar button. Returns Zero if the window isn't up yet (the caller retries). The
+    /// visibility filter means a caller that hides a window must remember the handle itself.
     /// </summary>
     internal static nint FindMainTaskbarWindow()
     {
@@ -139,10 +116,8 @@ internal static class WindowsTaskbarIdentity
     }
 
     /// <summary>
-    /// Re-adds the sizing frame a chromeless Photino window lacks, so the borderless window
-    /// (which draws its own title bar) can still be resized from its edges and maximized/
-    /// snapped like any native window. Idempotent - skips the SetWindowPos reflow once the
-    /// bits are already present.
+    /// Re-adds the sizing frame a chromeless Photino window lacks so it can still be resized
+    /// from its edges. Idempotent.
     /// </summary>
     private static void EnsureResizableStyle(nint windowHandle)
     {
@@ -190,9 +165,8 @@ internal static class WindowsTaskbarIdentity
 
             SetString(propertyStore, new PropertyKey(AppUserModelFormatId, 5), AppId);
 
-            // Tell the shell exactly where the taskbar/relaunch icon lives. The
-            // published single-file executable contains Native/app.ico as its Win32
-            // application icon, while a normal development build's apphost does too.
+            // The published single-file exe and the dev apphost both carry Native/app.ico
+            // as their Win32 icon; point the shell at that.
             var processPath = Environment.ProcessPath;
             if (!string.IsNullOrEmpty(processPath))
             {
@@ -237,9 +211,8 @@ internal static class WindowsTaskbarIdentity
     }
 
     /// <summary>
-    /// True only if the window currently carries slopterm's AppUserModelID - i.e. our last
-    /// write is still in place and WebView2 hasn't cleared the store since. Used to decide
-    /// when the retry loop can stop.
+    /// True only if the window currently carries slopterm's AppUserModelID - i.e. WebView2
+    /// hasn't cleared our last write. Used to decide when the retry loop can stop.
     /// </summary>
     private static bool IsAppIdApplied(nint windowHandle)
     {
@@ -303,11 +276,9 @@ internal static class WindowsTaskbarIdentity
         public uint PropertyId = propertyId;
     }
 
-    // Size MUST match the native PROPVARIANT exactly - 24 bytes on x64 (an 8-byte header
-    // plus a 16-byte union). Without the explicit Size the two fields below total only 16
-    // bytes, so GetValue writes the union tail past the end of the struct and corrupts
-    // memory (an AccessViolationException that takes down the whole process). PointerValue
-    // overlays the union's first pointer, which is where a VT_LPWSTR value lives.
+    // Size MUST match the native PROPVARIANT exactly - 24 bytes on x64. Without explicit Size
+    // GetValue writes past the struct and corrupts memory (AccessViolation); PointerValue
+    // overlays the union's first pointer, where a VT_LPWSTR value lives.
     [StructLayout(LayoutKind.Explicit, Size = 24)]
     private struct PropVariant
     {

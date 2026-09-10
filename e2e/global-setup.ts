@@ -60,13 +60,8 @@ export default async function globalSetup() {
   rmSync(CONTEXT_DIR, { recursive: true, force: true })
   mkdirSync(CONTEXT_DIR, { recursive: true })
 
-  // Disposable, throwaway SSH server for the test to connect to - bound to loopback
-  // only, random host port, auto-removed on stop. Never reuses a real user's sshd.
-  // E2E_DOCKER_NETWORK is only for running this harness itself inside a container
-  // that reaches the Docker daemon over a mounted socket (Docker-outside-of-Docker);
-  // it's unset (default bridge networking) on any normal machine or CI runner.
-  // container:<id> networking shares the target container's network namespace, so
-  // published ports (-p) don't apply there - the SSH port is just its normal fixed 2222.
+  // Disposable, loopback-only, auto-removed SSH server. E2E_DOCKER_NETWORK is only for
+  // Docker-outside-of-Docker, where container networking keeps the fixed SSH port 2222.
   const dockerNetwork = process.env.E2E_DOCKER_NETWORK
   const networkArgs = dockerNetwork ? ['--network', dockerNetwork] : []
   const portArgs = dockerNetwork ? [] : ['-p', '127.0.0.1::2222']
@@ -99,10 +94,8 @@ export default async function globalSetup() {
   // guarantees a clean "vault doesn't exist yet" state for the setup-flow test.
   const vaultDir = resolve(CONTEXT_DIR, 'vault')
 
-  // A throwaway ~/.ssh/config fixture for ssh-config-hosts.spec.ts - one literal alias
-  // pointing at the real disposable sshd above, deliberately with no IdentityFile so the
-  // resulting card exercises the "shown but not connectable" path without needing a
-  // second, key-based auth mode on the container. Never a real developer's own file.
+  // Throwaway ~/.ssh/config fixture for ssh-config-hosts.spec.ts: one alias with no
+  // IdentityFile, exercising the "shown but not connectable" path.
   const sshConfigPath = resolve(CONTEXT_DIR, 'ssh_config')
   writeFileSync(sshConfigPath, `Host e2e-ssh-config-host\n  HostName 127.0.0.1\n  Port ${sshPort}\n  User ${SSH_USERNAME}\n`)
 

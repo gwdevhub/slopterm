@@ -12,8 +12,7 @@ export interface DraggedFile {
 }
 
 // A file-management action the parent (SftpView) carries out on a full entry path - it's
-// the one place that knows about both panes, so rename/delete/mkdir/transfer all live
-// there and FilePane just drives the UI (selection, menu, confirm/prompt) that invokes them.
+// the one place that knows about both panes; FilePane just drives the UI.
 export interface FilePaneActions {
   rename: (path: string, newName: string) => Promise<void>
   remove: (paths: string[]) => Promise<void>
@@ -27,25 +26,21 @@ interface FilePaneProps {
   side: FilePaneSide
   initialPath?: string
   list: (path?: string) => Promise<FsListing>
-  // Bumped by the parent (SftpView) to force a re-fetch of the *current* path after a
-  // transfer lands a new file here - path itself doesn't change, so it can't be a
-  // useEffect dependency on its own.
+  // Bumped by the parent to re-fetch the *current* path after a transfer lands here - the
+  // path itself doesn't change, so it can't be a dependency on its own.
   reloadToken: number
   onPathChange: (path: string) => void
   onDropFile: (file: DraggedFile) => void
   actions: FilePaneActions
-  // Verb shown for the transfer menu item ("Upload" on the local pane, "Download" on the
-  // remote one) - the direction is inherent to which side this pane is.
+  // Verb for the transfer menu item ("Upload"/"Download" by side).
   transferLabel: string
-  // OS files dragged from the file manager (Explorer/Finder/Nautilus) onto this pane -
-  // distinct from onDropFile's in-app pane-to-pane drag, since these carry real bytes (a
-  // FileList) rather than the app's custom application/x-slopterm-file payload.
+  // OS files dragged in from the file manager - distinct from onDropFile's in-app drag,
+  // which carries the app's custom MIME payload instead of a FileList.
   onDropOsFiles: (files: FileList) => void
 }
 
-// An OS-file drag (from the file manager) surfaces the real File objects in
-// dataTransfer.files and lists "Files" in dataTransfer.types - neither is true for the
-// app's own pane-to-pane drag, which uses a custom MIME type instead.
+// An OS-file drag lists "Files" in dataTransfer.types; the app's own pane-to-pane drag
+// uses a custom MIME type instead.
 function isOsFileDrag(dataTransfer: DataTransfer): boolean {
   return dataTransfer.types.includes('Files')
 }
@@ -66,14 +61,10 @@ function joinPath(dir: string, name: string): string {
   return dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`
 }
 
-// One side of the dual-pane SFTP browser (issue: host card "SFTP" button) - identical UI
-// for both the local pane and the remote pane, since the backend normalizes both to the
-// same FsListing shape (server/SftpSession.cs's ListDirectory / LocalFileSystem.cs).
-// Files (not directories - dragging a folder isn't supported yet) are draggable onto the
-// *other* pane to upload/download them; SftpView owns the actual transfer since it's the
-// one thing here that needs to know about both panes at once. Right-clicking an entry (or
-// the pane background) opens a context menu of file-management actions, and Ctrl/Shift+
-// click builds a multi-selection those actions apply to in bulk.
+// One side of the dual-pane SFTP browser; identical UI for local and remote, since the
+// backend normalizes both to the same FsListing shape. Files (not directories) are
+// draggable onto the *other* pane; SftpView owns the transfer. Right-click opens a
+// context menu, and Ctrl/Shift+click builds a multi-selection.
 export function FilePane({ title, side, initialPath, list, reloadToken, onPathChange, onDropFile, onDropOsFiles, actions, transferLabel }: FilePaneProps) {
   const [path, setPath] = useState<string | undefined>(initialPath)
   const [listing, setListing] = useState<FsListing | null>(null)
@@ -157,14 +148,11 @@ export function FilePane({ title, side, initialPath, list, reloadToken, onPathCh
     if (entry.isDirectory && listing) setPath(fullPath(entry))
   }
 
-  // Right-clicking an unselected entry selects just it first, so the menu's bulk actions
-  // act on what was clicked rather than a stale multi-selection; right-clicking one that's
-  // already part of the selection keeps the whole set.
+  // Right-clicking an unselected entry selects just it first; right-clicking one already
+  // in the selection keeps the whole set.
   function handleEntryContextMenu(entry: FsEntry, event: MouseEvent) {
     event.preventDefault()
-    // Stop the event bubbling to the <ul>'s handlePaneContextMenu, which would otherwise
-    // fire right after and overwrite this entry menu with the pane-level ("New folder"
-    // only) one - leaving a right-clicked file with no Rename/Delete/etc.
+    // Stop bubbling to the <ul>'s pane-level menu, which would overwrite this entry menu.
     event.stopPropagation()
     if (!selected.has(entry.name)) {
       setSelected(new Set([entry.name]))
@@ -173,8 +161,7 @@ export function FilePane({ title, side, initialPath, list, reloadToken, onPathCh
     setMenu({ x: event.clientX, y: event.clientY, entry })
   }
 
-  // Right-clicking empty space in the pane offers the directory-level action (New folder)
-  // without a target entry.
+  // Right-clicking empty space offers the directory-level action (New folder).
   function handlePaneContextMenu(event: MouseEvent) {
     event.preventDefault()
     setMenu({ x: event.clientX, y: event.clientY, entry: null })
@@ -387,10 +374,8 @@ interface NamePromptProps {
   onCancel: () => void
 }
 
-// A tiny styled prompt for entering a leaf name (Rename / New folder) - window.prompt()
-// can't be driven by Playwright the way an in-DOM field can, and it matches the rest of
-// the app's own-modal-over-browser-dialog convention (see ConfirmDialog's doc comment).
-// Submitting an empty/whitespace name just cancels, so callers never get a blank name.
+// A styled prompt for a leaf name (Rename / New folder) - window.prompt() isn't
+// Playwright-drivable. An empty/whitespace submit cancels, so callers never get a blank name.
 function NamePrompt({ title, submitLabel, initialValue, onSubmit, onCancel }: NamePromptProps) {
   const [value, setValue] = useState(initialValue)
 

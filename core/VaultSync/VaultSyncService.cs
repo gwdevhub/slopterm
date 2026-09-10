@@ -15,36 +15,17 @@ public sealed record CollectionSyncStatus(
     int RecordCount);
 
 /// <summary>
-/// Converges one collection's records with its WebDAV remote, forever, without ever throwing
-/// into a caller.
-///
-/// The shape of a pass is: PROPFIND each enabled scope for names+ETags, GET only what
-/// changed, merge, then PUT what changed here. Preconditions (If-Match / If-None-Match) are
-/// attempted but never relied on - Apache's mod_dav returns no ETag at all and others ignore
-/// preconditions outright - so the real ordering guarantee is the hybrid logical clock on
-/// every record, and the conflict copy is what makes last-writer-wins survivable when two
-/// people edit the same host.
-///
-/// There is no membership layer here. Who may read and write a collection is whatever the
-/// WebDAV server says: one shared account, one account per person against the same folder, or
-/// none at all. A 403 means "read-only for you" and is reported as such.
-///
-/// Everything here is best-effort by construction. A failed sync lands in
-/// <see cref="GetStatus"/> and the collection is retried on the next tick; it never surfaces
-/// as an exception in a save, a connect, or app shutdown. The loop carries the same
-/// never-let-it-die try/catch ForwardingService had to learn the hard way.
+/// Converges one collection's records with its WebDAV remote, forever, best-effort: a failed
+/// pass lands in <see cref="GetStatus"/> and is retried, never thrown into a caller.
 /// </summary>
 public sealed class VaultSyncService : IAsyncDisposable
 {
-    // How long after a local edit to push. Long enough that typing a host name doesn't fire
-    // a request per keystroke, short enough that "I saved it on the laptop" reaches the
-    // phone before anyone reaches for it.
+    // Long enough not to fire per keystroke, short enough to reach another device promptly.
     private static readonly TimeSpan ChangeDebounce = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan PeriodicInterval = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(5);
 
-    // Must comfortably exceed "the laptop was in a drawer for a month": a device that syncs
-    // after the tombstone for a record it still holds has been collected re-uploads it.
+    // Must exceed how long a device can stay offline holding a record, or it re-uploads a collected one.
     private static readonly TimeSpan TombstoneLifetime = TimeSpan.FromDays(90);
 
     private const string RemoteRoot = "slopterm/v1";
@@ -62,10 +43,7 @@ public sealed class VaultSyncService : IAsyncDisposable
     private readonly Func<string, string?, string?, IVaultSyncRemote> _remoteFactory;
     private Task? _loop;
 
-    /// <param name="remoteFactory">
-    /// Overridden by the integration tests to point two service instances at one container.
-    /// Production always builds a <see cref="WebDavRemote"/>.
-    /// </param>
+    /// <param name="remoteFactory">Overridden by integration tests; production builds a <see cref="WebDavRemote"/>.</param>
     public VaultSyncService(VaultService vault, Func<string, string?, string?, IVaultSyncRemote>? remoteFactory = null)
     {
         _vault = vault;
@@ -135,11 +113,7 @@ public sealed class VaultSyncService : IAsyncDisposable
         return results;
     }
 
-    /// <summary>
-    /// Runs one pass now and reports what happened - what "Sync now" calls. Unlike the loop
-    /// this DOES surface the failure to its caller, because the user just asked for it and a
-    /// silent no-op would be worse than an error message.
-    /// </summary>
+    /// <summary>Runs one pass now and surfaces any failure - what "Sync now" calls, unlike the loop.</summary>
     public async Task SyncNowAsync(string collectionId, CancellationToken ct)
     {
         await StartSync(collectionId, ct);
@@ -218,18 +192,8 @@ public sealed class VaultSyncService : IAsyncDisposable
     }
 
     /// <summary>
-    /// Starts a pass, or returns the one already in flight for this collection.
-    ///
-    /// The bookkeeping is fiddly for one reason worth spelling out: the task used to be
-    /// started first and only then stored in the dictionary, while the task itself removed
-    /// its own entry when it finished. A pass that completed before that assignment ran
-    /// therefore removed nothing, and the assignment then parked a COMPLETED task in the
-    /// dictionary forever - so the next "sync now" found an entry, awaited a task that was
-    /// already done, and did no work at all. Silently. It looked like a rare, unexplainable
-    /// failure to converge, which is exactly how it presented.
-    ///
-    /// Registering under a lock before the pass can finish, and treating a completed entry as
-    /// "not running" rather than having the task delete itself, removes the window entirely.
+    /// Starts a pass, or returns the one already in flight. Registered under the gate before the
+    /// pass can finish, and a completed entry counts as "not running".
     /// </summary>
     private Task StartSync(string collectionId, CancellationToken ct)
     {
@@ -443,10 +407,8 @@ public sealed class VaultSyncService : IAsyncDisposable
             }
             catch (CryptographicException)
             {
-                // Encrypted under a different collection key - someone is pointed at this
-                // folder with a token that isn't ours. Skipping beats corrupting the local
-                // copy, but skipping SILENTLY is how "my hosts never showed up on the other
-                // device" becomes unexplainable, so it's counted and reported.
+                // Different collection key - counted and reported so a silent non-appearance
+                // doesn't go unexplained.
                 undecryptable++;
                 continue;
             }
@@ -457,9 +419,8 @@ public sealed class VaultSyncService : IAsyncDisposable
             collection.Records[stateKey] = new RecordSyncState { ETag = entry.ETag, Hlc = envelope.Hlc };
         }
 
-        // Leaving with "keep records" preserves the same stable ids in the local collection.
-        // If this device later rejoins, the pull above restores those records to their original
-        // collection; keeping both copies would show every host twice and make edits ambiguous.
+        // Rejoining with "keep records" keeps stable ids, so the pull above restores records
+        // rather than duplicating every host.
         var joinedIds = _vault.Collections.ListRecords(collectionId, folder)
             .Select(record => record.Id)
             .ToHashSet(StringComparer.Ordinal);
@@ -501,9 +462,8 @@ public sealed class VaultSyncService : IAsyncDisposable
                 $"{tombstonesPath}/{id}.json", SyncJson.SerializeToUtf8Bytes(tombstone), null, false, ct);
             if (result.Ok)
             {
-                // The record itself goes away only after its tombstone is durable, so a
-                // crash in between leaves a record everyone can still see rather than a
-                // deletion nobody can explain.
+                // The record goes only after its tombstone is durable, so a crash in between
+                // leaves a visible record rather than an unexplained deletion.
                 await remote.DeleteAsync($"{recordsPath}/{id}.json", ct);
                 collection.Tombstones[stateKey] = result.ETag ?? tombstone.Hlc;
                 collection.Records.Remove(RecordKey(scope, id));
@@ -522,20 +482,8 @@ public sealed class VaultSyncService : IAsyncDisposable
     }
 
     /// <summary>
-    /// PUT with a precondition where one is usable, retrying a 412 by re-reading and
-    /// re-merging, and falling back to an unconditional write.
-    ///
-    /// Both escapes matter, and both come from servers that don't behave like the RFC
-    /// suggests. Apache's mod_dav returns no ETag at all - not on PUT, not in PROPFIND's
-    /// getetag - so there is nothing to build an If-Match from, and blindly sending
-    /// `If-None-Match: *` for an existing record means a guaranteed 412 on every attempt: the
-    /// push is refused forever and the two devices never converge, silently. So a precondition
-    /// is only used when the server has actually given us something to condition on, and after
-    /// <see cref="PreconditionRetries"/> genuine races the write goes through unconditionally.
-    ///
-    /// Giving up on ordering isn't giving up on correctness: the hybrid logical clock on every
-    /// record decides the winner, and the conflict copy keeps the loser. That is what
-    /// todo/webdav-sync.md means by preconditions being best-effort.
+    /// PUT with a precondition only when the server has given us something to condition on, retrying
+    /// a 412 and falling back to an unconditional write - servers disagree about preconditions.
     /// </summary>
     private async Task<RecordSyncState?> PushRecordAsync(
         IVaultSyncRemote remote,
@@ -566,9 +514,8 @@ public sealed class VaultSyncService : IAsyncDisposable
             // Last attempt goes in unconditionally - see this method's summary.
             var lastAttempt = attempt == PreconditionRetries;
             var ifMatch = lastAttempt ? null : state?.ETag;
-            // "Create only" is a claim we can make just once, and only when we genuinely
-            // believe the record isn't there: asserting it against a record that exists is a
-            // permanent 412 on any server that honours it.
+            // "Create only" only when we believe the record isn't there - asserting it against
+            // an existing record is a permanent 412.
             var ifNoneMatchStar = !lastAttempt && ifMatch is null && !existsRemotely;
 
             var result = await remote.PutAsync(
@@ -584,18 +531,11 @@ public sealed class VaultSyncService : IAsyncDisposable
                 return null;
             }
 
-            // Something is there after all, whatever we believed.
             existsRemotely = true;
 
-            // Someone wrote first. Read theirs so this device's clock is at least aware of it,
-            // then retry against the ETag they left.
-            //
-            // What must NOT happen here is re-stamping this record with a fresh HLC. The clock
-            // reading describes WHEN THE EDIT HAPPENED, not when the push finally landed -
-            // bumping it on a retry would let an older edit outrank a newer one purely by
-            // being pushed later, which is the "deleted host comes back" failure this whole
-            // mechanism exists to prevent. If theirs really is newer, the next pull merges it
-            // properly and keeps this one as a conflict copy.
+            // Someone wrote first: observe their clock, then retry against their ETag. Never
+            // re-stamp with a fresh HLC - the reading describes when the edit happened, not when
+            // the push landed, and bumping it would let an older edit outrank a newer one.
             var existing = await remote.GetAsync(path, ct);
             var theirs = existing is null ? null : SyncJson.Deserialize<SyncEnvelope>(existing);
             if (theirs is not null)
@@ -615,9 +555,8 @@ public sealed class VaultSyncService : IAsyncDisposable
     // --- merge ----------------------------------------------------------------------------
 
     /// <summary>
-    /// Applies one pulled record. Higher HLC wins; when BOTH sides moved since the last
-    /// agreed state the loser is kept as a renamed copy rather than dropped, because a host
-    /// that silently disappears is the one bug users never forgive.
+    /// Applies one pulled record. Higher HLC wins; a genuine two-sided edit keeps the loser as a
+    /// renamed copy rather than dropping it.
     /// </summary>
     private void MergeRemoteRecord(
         string collectionId,
@@ -645,23 +584,12 @@ public sealed class VaultSyncService : IAsyncDisposable
         var localHlc = Hlc.Parse(mine.Hlc);
         var contentsDiffer = !string.Equals(mine.Json, plaintext, StringComparison.Ordinal);
 
-        // A genuine conflict is BOTH sides having moved on from the last state the two
-        // agreed about - neither edit having seen the other. That is decided by the sync
-        // state, not by which HLC is higher: whoever pushed second wins on the clock, but the
-        // earlier edit was still made blind and must not evaporate. Checking this before the
-        // "ours is newer" shortcut is the whole point; the shortcut used to return first and
-        // quietly drop the remote edit.
-        //
-        // No state at all is NOT evidence of a conflict - it means "we don't know". It's the
-        // normal situation right after a key rotation or a re-join, both of which clear the
-        // record state, and treating it as a conflict there manufactured duplicate copies of
-        // records nobody had touched. The cost is that a real conflict spanning a rotation
-        // resolves by HLC alone, with no copy kept; that is rare, and far better than a
-        // rotation quietly doubling every record in the collection.
+        // A genuine conflict is both sides having moved on from the last agreed state - decided
+        // by the sync state, not by HLC. No state at all means "unknown" (e.g. after a rotation),
+        // and treating that as a conflict duplicated untouched records.
         var agreedHlc = state?.Hlc;
         if (contentsDiffer && agreedHlc is not null && agreedHlc != mine.Hlc && agreedHlc != envelope.Hlc)
         {
-            // Keep whichever side loses on the clock, under a new id with a suffixed name.
             SaveConflictCopy(collectionId, folder, localHlc >= remoteHlc ? plaintext : mine.Json);
         }
 
@@ -710,10 +638,7 @@ public sealed class VaultSyncService : IAsyncDisposable
     }
 
     /// <summary>
-    /// Keeps the losing side of a genuine two-sided edit under a new id, with its name
-    /// suffixed so it's obvious in the list. Records with no name field (port forwards, for
-    /// instance) just get the copy - an unlabelled duplicate is still better than a silent
-    /// loss.
+    /// Keeps the losing side of a two-sided edit under a new id, name suffixed where one exists.
     /// </summary>
     private void SaveConflictCopy(string collectionId, string folder, string loserJson)
     {

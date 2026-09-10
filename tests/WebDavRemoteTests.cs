@@ -4,16 +4,10 @@ using Xunit;
 namespace Slopterm.Tests;
 
 /// <summary>
-/// Exercises <see cref="WebDavRemote"/> against a REAL WebDAV server, because the whole
-/// reason that class exists is that servers disagree with each other about trailing
-/// slashes, percent-encoding, whether PROPFIND returns the collection itself, and whether
-/// MKCOL on an existing path is 405 or 201. A mocked handler would only ever confirm what
-/// this code already assumes.
-///
-/// Skipped unless SLOPTERM_WEBDAV_URL is set, so a normal `dotnet test` never depends on
-/// the network. Point it at any share:
-///   SLOPTERM_WEBDAV_URL=https://…  SLOPTERM_WEBDAV_USER=…  SLOPTERM_WEBDAV_PASS=…
-/// The integration suite (see WebDavIntegrationTests) sets these from its containers.
+/// Exercises <see cref="WebDavRemote"/> against a REAL WebDAV server, because servers
+/// disagree about trailing slashes, percent-encoding, PROPFIND self-listing, and MKCOL
+/// status codes - a mocked handler would only confirm what this code already assumes.
+/// Skipped unless SLOPTERM_WEBDAV_URL is set.
 /// </summary>
 public sealed class WebDavRemoteTests
 {
@@ -62,7 +56,6 @@ public sealed class WebDavRemoteTests
             // PROPFINDs scopes that may never have been written.
             Assert.Empty(await remote.ListAsync($"{root}/records/never-written", ct));
 
-            // Nothing there yet.
             Assert.Null(await remote.GetAsync($"{root}/records/hosts/missing.json", ct));
 
             await remote.DeleteAsync($"{root}/records/hosts/one.json", ct);
@@ -86,9 +79,8 @@ public sealed class WebDavRemoteTests
 
     /// <summary>
     /// If-None-Match: * must fail the second create, and If-Match must fail against a stale
-    /// ETag - or report success in a way the caller can tell apart, since some servers
-    /// ignore preconditions entirely. Either answer is fine; silently succeeding while
-    /// claiming a precondition held is not.
+    /// ETag - or report success in a way the caller can tell apart. Either answer is fine;
+    /// silently succeeding while claiming a precondition held is not.
     /// </summary>
     [SkippableFact]
     public async Task ReportsPreconditionFailuresRatherThanThrowing()

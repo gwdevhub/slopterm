@@ -6,11 +6,8 @@ interface GroupCardProps {
   onOpen: () => void
 }
 
-// A folder-style card standing in for every host sharing the same HostRecord.ParentGroupId
-// - shown instead of those hosts' own individual cards on the top-level grid (issue #14).
-// Clicking it drills into just that group's members (HostGrid owns the "which group is
-// expanded" state); there's no direct connect affordance here since a group has no single
-// connection target of its own.
+// A folder-style card standing in for every host sharing a HostRecord.ParentGroupId, shown
+// on the top-level grid instead of those hosts' own cards (issue #14).
 export function GroupCard({ name, hostCount, onOpen }: GroupCardProps) {
   return (
     <button

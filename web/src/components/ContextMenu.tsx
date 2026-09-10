@@ -15,17 +15,13 @@ interface ContextMenuProps {
   onClose: () => void
 }
 
-// One shared right-click menu for the app's own context menus (host cards today, more
-// later) - our replacement for the browser's default context menu, which is suppressed
-// app-wide in App.tsx. Rendered through a portal so it's never clipped by an ancestor's
-// overflow, positioned at the cursor and clamped into the viewport, and dismissed by
-// Escape, a click/right-click anywhere outside it, scrolling, or a resize.
+// One shared right-click menu, rendered through a portal so it's never clipped and clamped
+// into the viewport; dismissed by Escape, an outside press, scroll, or resize.
 export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ x, y })
 
-  // Measure once mounted, then nudge back inside the viewport if opening at the cursor
-  // would push the menu off the right/bottom edge.
+  // Measure once mounted, then nudge back inside the viewport if it would overflow.
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
@@ -37,8 +33,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
 
   useEffect(() => {
     // A mousedown inside the menu is a real selection in progress - let the item's own
-    // onClick fire and close; only an outside press dismisses. (Closing on any mousedown
-    // would unmount the menu before the click ever lands on the item.)
+    // onClick fire and close; only an outside press dismisses.
     function onPointerDown(event: MouseEvent) {
       if (ref.current?.contains(event.target as Node)) return
       onClose()
@@ -49,8 +44,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
 
     window.addEventListener('mousedown', onPointerDown)
     window.addEventListener('keydown', onKeyDown)
-    // Any scroll (captured so it catches inner scrollers too) or resize invalidates the
-    // anchored position, so just close rather than trying to follow it.
+    // Any scroll (captured, so inner scrollers count) or resize invalidates the anchor - just close.
     window.addEventListener('scroll', onClose, true)
     window.addEventListener('resize', onClose)
     return () => {

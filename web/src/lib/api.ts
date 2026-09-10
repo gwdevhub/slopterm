@@ -11,9 +11,8 @@ export interface ConnectRequest {
   // Set when connecting to a saved host so the backend can auto-start that host's port
   // forwards (see ForwardingService). Absent for Quick Connect / Recent.
   hostId?: string
-  // Which of the host's credentials to use. With hostId set and no secret in the request,
-  // the backend resolves the credential itself - which is why this file never handles a
-  // saved host's password or private key.
+  // Which of the host's credentials to use; with hostId set the backend resolves the secret
+  // itself, so this file never handles a saved host's password or private key.
   credentialId?: string
   // Quick Connect's "use a saved key": names a Keychain entry rather than carrying it, since
   // the Keychain listing is masked too.
@@ -43,9 +42,8 @@ export async function disconnect(sessionId: string): Promise<void> {
   await fetch(`/api/ssh/session/${sessionId}`, { method: 'DELETE' })
 }
 
-// Tells the backend to resize the remote PTY to match the browser terminal (see
-// TerminalView). Best-effort: a failed resize just leaves the shell at its previous size,
-// not worth surfacing an error over.
+// Resizes the remote PTY to match the browser terminal; best-effort - a failed resize just
+// leaves the shell at its previous size.
 export async function resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
   await fetch(`/api/ssh/${sessionId}/resize`, {
     method: 'POST',
@@ -58,11 +56,8 @@ export interface SshUploadResponse {
   remotePath: string
 }
 
-// Writes raw bytes (a pasted image, an OS-dropped file) into a remote directory of an SSH
-// tab's session - see server /api/ssh/upload. An SSH tab holds only an interactive shell,
-// not an SFTP channel, so the backend opens a fresh one-shot SFTP connection from the same
-// ConnectRequest the tab already carries. multipart/form-data (not JSON) so the bytes go up
-// as-is rather than base64-inflated.
+// Writes raw bytes into a remote directory of an SSH tab; the backend opens a one-shot SFTP
+// connection from the tab's ConnectRequest. multipart/form-data so the bytes aren't base64-inflated.
 export async function sshUpload(
   request: ConnectRequest,
   remoteDir: string,
@@ -79,10 +74,7 @@ export async function sshUpload(
 }
 
 // `since` is how many bytes of this session's output the caller has already rendered, so a
-// reattach after the socket dropped (the Android app was in the background, the page was
-// reloaded) picks up exactly where the screen left off instead of restarting the stream.
-// Omit it when there's nothing on screen to continue from - the backend then replays the
-// whole tail it still has.
+// reattach picks up where the screen left off; omit it to replay the backend's whole tail.
 export function terminalSocketUrl(sessionId: string, since?: number): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const query = since === undefined ? '' : `?since=${since}`
@@ -100,9 +92,8 @@ export interface LiveSshSession {
   attached: boolean
 }
 
-// The SSH sessions the backend still holds. Losing the terminal WebSocket doesn't end a
-// session any more (it survives detached for a few minutes), so this is what lets a reloaded
-// page find the sessions its restored tabs were already on.
+// The SSH sessions the backend still holds; a detached session survives a few minutes, so a
+// reloaded page can find the sessions its restored tabs were already on.
 export async function listSshSessions(): Promise<LiveSshSession[]> {
   const res = await fetch('/api/ssh/sessions')
   await throwOnError(res)
@@ -119,9 +110,8 @@ export interface LocalShellSupport {
   shell: string | null
 }
 
-// Whether this machine can open a shell on itself, asked once so the entry point can be
-// hidden where it can't. Never throws: a failure here is treated as "not supported", which
-// is the same thing from the UI's point of view.
+// Whether this machine can open a shell on itself; never throws - a failure is treated as
+// "not supported" so the entry point can be hidden where it can't.
 export async function getLocalShellSupport(): Promise<LocalShellSupport> {
   const res = await fetch('/api/local/shell')
   await throwOnError(res)
@@ -162,14 +152,11 @@ export async function listSftpSessions(): Promise<LiveSftpSession[]> {
   return res.json()
 }
 
-//   live    - the backend is still holding this session; reattach to it.
-//   ended   - its shell finished while we were away; the tab is done.
-//   unknown - no such session; whatever it was, it's not coming back.
+//   live - still held (reattach); ended - shell finished; unknown - no such session.
 export type SshSessionState = 'live' | 'ended' | 'unknown'
 
-// What became of a session, asked after the terminal's socket closed. The browser reports a
-// rejected WebSocket upgrade and a dead connection identically, so this is the only way to
-// tell "reattach", "close the tab" and "dial a new connection" apart.
+// What became of a session, asked after the terminal's socket closed - the only way to tell
+// "reattach", "close the tab" and "dial a new connection" apart.
 export async function sshSessionState(sessionId: string): Promise<SshSessionState> {
   try {
     const res = await fetch(`/api/ssh/session/${sessionId}/state`)
@@ -183,9 +170,8 @@ export async function sshSessionState(sessionId: string): Promise<SshSessionStat
   }
 }
 
-// The AI-agent bottom bar's streaming channel - a sibling of terminalSocketUrl using the
-// exact same same-origin construction (so the auth cookie rides the handshake), pointed at
-// /ws/agent/{sessionId} instead. See AgentBar.tsx and the pinned agent WS contract.
+// The AI-agent bottom bar's streaming channel - a sibling of terminalSocketUrl with the same
+// same-origin construction, pointed at /ws/agent/{sessionId}. See AgentBar.tsx.
 export function agentSocketUrl(sessionId: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}/ws/agent/${sessionId}`
@@ -196,9 +182,8 @@ export interface VaultStatus {
   unlocked: boolean
 }
 
-// Where a named credential actually resolved on THIS device. `source` is one of 'inline',
-// 'keychain-local', 'keychain-collection', 'keychain-other', 'ssh-default' or 'none' - a host
-// must never silently connect with a different key than its card claims, so this is shown.
+// Where a named credential resolved on THIS device - shown so a host never silently connects
+// with a different key than its card claims.
 export interface CredentialResolution {
   source: string
   detail?: string | null
@@ -208,7 +193,7 @@ export interface CredentialResolution {
 export interface CredentialRecord {
   id: string
   // 'keychain' carries no secret at all, only keychainName - every device resolves that name
-  // against a key it holds locally, which is what lets a team share hosts without sharing keys.
+  // against a key it holds locally, letting a team share hosts without sharing keys.
   kind: 'password' | 'privateKey' | 'envVar' | 'keychain'
   username?: string
   // Never populated by the server: stored credential material is something the app uses, not
@@ -317,9 +302,8 @@ export async function deleteHost(id: string): Promise<void> {
   await throwOnError(res)
 }
 
-// Returns a portable, encrypted token encoding this host (address/port/credentials) that
-// another slopterm instance can import via importHostShare - backs the "Copy" context-menu
-// action. See server HostShareCodec for the format.
+// A portable, encrypted token encoding this host that another slopterm can import via
+// importHostShare; see server HostShareCodec for the format.
 export async function getHostShareToken(id: string): Promise<string> {
   const res = await fetch(`/api/vault/hosts/${id}/share`)
   await throwOnError(res)
@@ -488,17 +472,16 @@ export interface JobRecord {
   scheduleKind: 'interval' | 'daily' | 'cron'
   intervalMinutes: number
   dailyTime: string // "HH:mm", local time
-  // Standard 5-field cron, evaluated in the machine's local time. Only read when
-  // scheduleKind is 'cron'; the two simpler kinds stay because cron can't express them
-  // ("every 90 minutes" has no cron form).
+  // Standard 5-field cron in local time, only read when scheduleKind is 'cron'; the simpler
+  // kinds stay because cron can't express them.
   cronExpression?: string | null
   enabled: boolean
   runOnStart: boolean
   overlapPolicy: 'skip' | 'queue' | 'kill'
   timeoutSeconds: number
   failurePattern?: string
-  // null = run on any device; otherwise only the install with this id schedules it (see
-  // the backend's DeviceIdentity - it's what stops a synced job running twice).
+  // null = run on any device; otherwise only the install with this id schedules it, so a
+  // synced job doesn't run twice (see the backend's DeviceIdentity).
   ownerDeviceId?: string | null
 }
 
@@ -597,10 +580,8 @@ export async function cancelJobRun(id: string): Promise<void> {
   await fetch(`/api/jobs/${id}/cancel`, { method: 'POST' })
 }
 
-// The next few times a not-yet-saved schedule would fire, from the same code the scheduler
-// runs on - the only real way to check a cron expression says what you meant. `error` is a
-// message about the expression itself, not a failed request, so it comes back 200 with an
-// empty `runs` rather than as a thrown error.
+// The next few times a not-yet-saved schedule would fire, from the scheduler's own code.
+// `error` is about the expression itself, so it comes back 200 with an empty `runs`.
 export interface SchedulePreview {
   runs: string[] // ISO UTC instants
   error?: string | null
@@ -764,27 +745,23 @@ export async function upsertRecentConnection(connection: RecentConnectionRecord)
 }
 
 export interface OpenTabRecord {
-  // A 'local' tab carries no destination and no credential; host/username hold the machine
-  // and shell it ran ("Linux"/"bash") purely so the record's shape - which the vault has
-  // always stored with these fields required - stays the same one it has always been.
+  // A 'local' tab carries no destination; host/username hold the machine and shell purely so
+  // the record's shape stays the same as the vault has always stored it.
   kind: 'ssh' | 'sftp' | 'local'
   label: string
   host: string
   port: number
   username: string
   authMethod: 'password' | 'privateKey'
-  // Only for Quick Connect / Recent tabs, which have no saved host to resolve against. A tab
-  // on a SAVED host carries hostId/credentialId instead and re-resolves on restore, so a
-  // password changed since the tab was opened is picked up rather than replayed stale.
+  // Only for Quick Connect / Recent tabs. A tab on a SAVED host carries hostId/credentialId and
+  // re-resolves on restore, so a changed password is picked up rather than replayed stale.
   secret?: string
   passphrase?: string
   hostId?: string
   credentialId?: string
   startupCommands?: string[]
-  // The live backend session this tab was on, so a reload that happens while the session is
-  // still held (see listSshSessions) reattaches to the running shell instead of dialing a
-  // second connection to the same host. Meaningless across a restart - session ids are
-  // per-process - which is exactly what checking it against the live listing handles.
+  // The live backend session this tab was on, so a reload while it's still held reattaches
+  // instead of dialing a second connection. Meaningless across a restart (ids are per-process).
   sessionId?: string
 }
 
@@ -811,9 +788,8 @@ export async function saveOpenTabs(record: OpenTabsRecord): Promise<void> {
   })
 }
 
-// Appearance (theme colors + fonts) is stored in the vault so it syncs across devices. The
-// server stores it opaquely, so this is typed as unknown - lib/appearance.ts owns the schema
-// and merges it over defaults. Returns null when the vault is locked or nothing's saved yet.
+// Appearance is stored in the vault so it syncs across devices; the server stores it opaquely,
+// so lib/appearance.ts owns the schema. Returns null when locked or nothing's saved.
 export async function getVaultAppearance(): Promise<unknown | null> {
   const res = await fetch('/api/vault/appearance')
   await throwOnError(res)
@@ -876,9 +852,8 @@ export async function setShowSshConfigHosts(enabled: boolean): Promise<AppSettin
   return res.json()
 }
 
-// Android only - the keep-alive notification exists on no other platform. Harmless
-// elsewhere (it's just a settings.json field), but the Settings page only offers it in the
-// mobile app.
+// Android only - the keep-alive notification exists on no other platform; harmless elsewhere
+// (a settings.json field), but the Settings page only offers it in the mobile app.
 export async function setSessionNotificationBadge(enabled: boolean): Promise<AppSettingsInfo> {
   const res = await fetch('/api/settings/session-notification-badge', {
     method: 'POST',
@@ -889,10 +864,8 @@ export async function setSessionNotificationBadge(enabled: boolean): Promise<App
   return res.json()
 }
 
-// A literal alias from ~/.ssh/config (see server SshConfigService) - read-only, never
-// stored in the vault. privateKey is only present when the backend found a usable key on
-// disk (an explicit IdentityFile, or one of the default OpenSSH filenames); absent means
-// the alias likely relies on ssh-agent/interactive auth this app can't drive.
+// A literal alias from ~/.ssh/config (see server SshConfigService) - read-only, never stored.
+// privateKey is present only when the backend found a usable key on disk.
 export interface SshConfigHostEntry {
   alias: string
   hostName: string
@@ -928,12 +901,8 @@ export async function setGithubToken(token: string | null): Promise<GithubTokenS
 }
 
 // --- AI agent ---------------------------------------------------------------------------
-// The agent talks to an OpenAI-compatible server configured by a plaintext base URL, plus an
-// optional API key for hosted endpoints that require one. Models are discovered live and
-// selected only in the agent panel; they are not settings.
-//
-// An empty base URL means no endpoint is configured, which is the default and switches the
-// agent off entirely (no bar on a terminal tab).
+// The agent talks to an OpenAI-compatible server configured by a base URL plus an optional
+// API key. An empty base URL (the default) switches the agent off entirely.
 
 export interface AiSettings {
   baseUrl: string
@@ -986,12 +955,10 @@ export async function getAiStatus(): Promise<AiStatus> {
 }
 
 // --- Agent WebSocket wire shapes --------------------------------------------------------
-// One JSON object per text frame, camelCase, no subprotocol (see agentSocketUrl). These
-// mirror the pinned agent WS contract verbatim.
+// One JSON object per text frame, camelCase, no subprotocol (see agentSocketUrl).
 
-// The three permission tiers: chat = answers only (no shell access), suggest = may TYPE a
-// command for the user to confirm with Enter, auto = may execute, but only after a
-// per-command AI safety check (unsafe commands fall back to suggest behavior).
+// The three permission tiers: chat = answers only, suggest = may TYPE a command for the user
+// to confirm, auto = may execute after a per-command AI safety check.
 export type AgentMode = 'chat' | 'suggest' | 'auto'
 
 export interface ChatMessage {
@@ -1036,9 +1003,8 @@ export type AgentServerEvent =
 // Client -> server frames. open_chat/new_chat/delete_chat manage the per-host saved
 // conversations (new_chat keeps the outgoing one in the list; clear deletes it).
 export type AgentClientMessage =
-  // newChat starts a fresh conversation for this message first (used when sending while the
-  // saved-chats list is open) - folded into the send so no empty history frame wipes the
-  // optimistically-rendered user bubble, unlike firing a separate new_chat frame.
+  // newChat starts a fresh conversation for this message first, folded into the send so no
+  // empty history frame wipes the optimistically-rendered user bubble.
   | { type: 'send'; mode: AgentMode; model: string; text: string; newChat?: boolean }
   | { type: 'stop' }
   | { type: 'clear' }
@@ -1163,9 +1129,8 @@ export async function sftpUpload(sessionId: string, localPath: string, remoteDir
   await throwOnError(res)
 }
 
-// Uploads an OS-dragged File (dropped from the file manager onto a pane) - unlike
-// sftpUpload it has only the file's bytes, no server-side path, so it streams the raw bytes
-// to the bytes-upload endpoint with the name and target remote dir as query params.
+// Uploads an OS-dragged File (dropped onto a pane) - unlike sftpUpload it has only the
+// file's bytes, streamed with the name and target dir as query params.
 export async function sftpUploadBytes(sessionId: string, file: File, remoteDir: string): Promise<void> {
   const query = `?name=${encodeURIComponent(file.name)}&remoteDir=${encodeURIComponent(remoteDir)}`
   const res = await fetch(`/api/sftp/${sessionId}/upload-bytes${query}`, {
@@ -1185,9 +1150,8 @@ export async function sftpDownload(sessionId: string, remotePath: string, localD
   await throwOnError(res)
 }
 
-// Remote file-management ops (backed by SftpSession over the live SFTP connection).
-// newName/name are always leaf names, never full paths, matching the backend's own
-// parent-relative handling.
+// Remote file-management ops (backed by SftpSession). newName/name are always leaf names,
+// never full paths, matching the backend's parent-relative handling.
 export async function sftpRename(sessionId: string, path: string, newName: string): Promise<void> {
   const res = await fetch(`/api/sftp/${sessionId}/rename`, {
     method: 'POST',
@@ -1251,17 +1215,15 @@ export interface WindowPosition {
   height: number
 }
 
-// No throwOnError here on purpose - saving the window position is a best-effort
-// convenience (via navigator.sendBeacon, see App.tsx), never worth surfacing an error
-// for.
+// No throwOnError on purpose - saving the window position is a best-effort convenience
+// (navigator.sendBeacon, see App.tsx), never worth surfacing an error for.
 export async function saveWindowPosition(position: WindowPosition): Promise<void> {
   navigator.sendBeacon('/api/window-position', new Blob([JSON.stringify(position)], { type: 'application/json' }))
 }
 
 // --- Collections ------------------------------------------------------------------------
-// A collection is the unit of sync and sharing: a set of records that converge with one
-// WebDAV URL, end-to-end encrypted under a key the server never sees. The implicit `local`
-// collection has no remote and never leaves the device, so it's never listed here.
+// A collection is the unit of sync and sharing: records that converge with one WebDAV URL,
+// end-to-end encrypted. The implicit `local` collection is never listed here.
 
 export interface SyncScopeInfo {
   name: string
@@ -1351,10 +1313,8 @@ export async function leaveCollection(id: string, keepRecordsLocally: boolean): 
   await throwOnError(res)
 }
 
-// What a collection actually carries, grouped by scope. `syncing` is false for a group
-// whose scope has been turned off: those records still sit in the collection on this device,
-// they just don't converge any more - which is exactly what this view exists to reveal.
-// Labels and short details only; the backend never puts a secret in here.
+// What a collection carries, grouped by scope. `syncing` is false for a scope that's been
+// turned off. Labels and short details only; the backend never puts a secret in here.
 export interface CollectionContentItem {
   id: string
   label: string

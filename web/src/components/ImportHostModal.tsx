@@ -7,8 +7,7 @@ interface ImportHostModalProps {
 }
 
 // The paste side of the host-share round-trip: a token copied from another slopterm
-// instance's "Copy" action is decoded and saved here as a new host (see server
-// HostShareCodec / the /import-share endpoint).
+// instance is decoded and saved here as a new host.
 export function ImportHostModal({ onImported, onClose }: ImportHostModalProps) {
   const [token, setToken] = useState('')
   const [busy, setBusy] = useState(false)

@@ -12,25 +12,13 @@ public sealed class SessionStore<T> where T : class, IDisposable
 
     public T? Get(string id) => _sessions.GetValueOrDefault(id);
 
-    /// <summary>
-    /// How many connections are live. The Android head reads this on its way to the
-    /// background to decide whether keeping the process running is worth a notification
-    /// (see SessionKeepAliveService) - no sessions, no service.
-    /// </summary>
+    /// <summary>How many connections are live; the Android head reads this to decide whether keeping the process running is worth a notification (see SessionKeepAliveService).</summary>
     public int Count => _sessions.Count;
 
-    /// <summary>
-    /// A point-in-time copy, safe to iterate while other threads add and remove - used by
-    /// the detached-session reaper and by the "what's still connected" listing the frontend
-    /// consults after a reload.
-    /// </summary>
+    /// <summary>A point-in-time copy, safe to iterate while other threads add and remove - used by the reaper and the post-reload listing.</summary>
     public KeyValuePair<string, T>[] Snapshot() => _sessions.ToArray();
 
-    /// <returns>
-    /// The removed session, or null if nothing was removed (e.g. a natural WS-close and an
-    /// explicit disconnect call both racing to remove the same id) - callers use this to log
-    /// a "disconnected" event exactly once, not once per call site.
-    /// </returns>
+    /// <returns>The removed session, or null if nothing was removed - callers use this to log a "disconnected" event exactly once.</returns>
     public T? Remove(string id)
     {
         if (_sessions.TryRemove(id, out var session))
@@ -42,12 +30,7 @@ public sealed class SessionStore<T> where T : class, IDisposable
         return null;
     }
 
-    /// <summary>
-    /// The quit path: disposing every session unblocks the blocking shell-read pumps holding
-    /// the terminal WebSocket handlers open, so shutdown never waits on a live connection.
-    /// Best-effort per session - one connection failing to tear down cleanly must not keep
-    /// the rest (or the process) alive.
-    /// </summary>
+    /// <summary>The quit path: disposing every session unblocks the shell-read pumps holding the terminal WS handlers open. Best-effort per session.</summary>
     public void DisposeAll()
     {
         foreach (var id in _sessions.Keys)
@@ -58,7 +41,6 @@ public sealed class SessionStore<T> where T : class, IDisposable
             }
             catch
             {
-                // best-effort teardown on the way out
             }
         }
     }

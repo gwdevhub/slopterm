@@ -38,9 +38,8 @@ interface HostsSectionProps {
   isConnecting: boolean
 }
 
-// 'new' opens the modal empty (creating a host); a SavedHost opens it pre-filled for that
-// host (editing); null means no modal at all - there's no persistent side panel anymore
-// (see HostModal's doc comment for why), so this is the only "what's showing" state left.
+// 'new' opens the modal empty (creating); a SavedHost opens it pre-filled (editing); null
+// means no modal - the only "what's showing" state left.
 type HostModalState = 'new' | SavedHost | null
 
 export function HostsSection({
@@ -85,7 +84,6 @@ export function HostsSection({
       .catch(() => setLocalShell(null))
   }, [])
 
-  // Auto-dismiss the transient "Copied…" pill.
   useEffect(() => {
     if (!notice) return
     const timer = setTimeout(() => setNotice(null), 2500)
@@ -145,18 +143,16 @@ export function HostsSection({
     }
   }
 
-  // After "Duplicate" creates a copy, re-open this same modal for the new host so its
-  // address/username are right there to adjust, instead of leaving the user to find the
-  // copy themselves among the cards.
+  // Re-open this same modal for a freshly duplicated host so its address/username are right
+  // there to adjust.
   async function handleHostDuplicated(newHostId: string) {
     const updated = await refreshHosts()
     const newHost = updated.find((h) => h.id === newHostId)
     setHostModal(newHost ?? null)
   }
 
-  // Ad hoc connections (Quick Connect, or reconnecting via an existing Recent) remember
-  // their credential so next time is one click/double-click away - see
-  // RecentConnectionRecord's doc comment for why this is a separate store from Hosts.
+  // Ad hoc connections remember their credential so next time is one click away (a separate
+  // store from Hosts).
   function rememberRecent(request: ConnectRequest) {
     // A named-key connect has no secret here to remember, and re-resolving the name is the
     // right behaviour anyway - so it's simply not added to Recent.
@@ -202,9 +198,8 @@ export function HostsSection({
     if (request) void onConnectSftp(request, host.host.name)
   }
 
-  // "Copy" - put an encrypted, portable token for this host on the clipboard (see
-  // getHostShareToken). Falls back to a manual-copy modal only if the clipboard API is
-  // unavailable (blocked by policy); 127.0.0.1 is a secure context, so it normally isn't.
+  // Puts an encrypted, portable host token on the clipboard (see getHostShareToken),
+  // falling back to a manual-copy modal only if the clipboard API is unavailable.
   async function handleCopyShare(host: SavedHost) {
     let token: string
     try {
@@ -232,8 +227,7 @@ export function HostsSection({
   }
 
   // Unlike Quick Connect / Recent, an ssh-config alias already lives permanently in
-  // ~/.ssh/config - no need for a second, app-owned copy of the credential, same
-  // reasoning as connecting through an already-saved Host.
+  // ~/.ssh/config, so there's no need for a second, app-owned copy of the credential.
   function handleSshConfigSsh(entry: SshConfigHostEntry) {
     const request = resolveSshConfigConnectRequest(entry)
     if (request) void onConnect(request)
@@ -244,9 +238,8 @@ export function HostsSection({
     if (request) void onConnectSftp(request, entry.alias)
   }
 
-  // The modal already shows this inline via ConnectionForm's own errorMessage prop -
-  // showing it a second time here would be redundant (and an ambiguous duplicate match
-  // in tests).
+  // The modal already shows this inline via ConnectionForm's errorMessage; a second banner
+  // here would be redundant.
   const showBannerHere = hostModal === null && !quickConnectOpen
   const collectionNames = Object.fromEntries(collections.map((collection) => [collection.id, collection.name]))
 

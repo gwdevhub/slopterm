@@ -1,20 +1,7 @@
 import type { Terminal } from '@xterm/xterm'
 
-// Every touch gesture the terminal itself answers to, as one state machine: a plain drag scrolls
-// the scrollback, a long press selects the word under the finger (and dragging on from there
-// extends the selection), and a double tap sends Tab. They belong together rather than in three
-// separate listeners because they all begin with the same touchstart and only diverge later - on
-// how far the finger moved and how long it stayed down. A selection that outlives the press that
-// made it stays adjustable through the two drag handles the caller draws under its ends (see
-// TouchSelection/moveHandle) - without them a selection is whatever one continuous drag managed
-// to cover, which on a phone is one line and a lot of luck.
-//
-// None of this comes from xterm.js. Its SelectionService runs on mouse events, which a touchscreen
-// only ever synthesizes for a tap - never for the press-and-drag a selection needs - and since v6
-// its viewport is a vscode-derived scrollable element with wheel handling but no touch handling at
-// all (the .xterm-viewport element is not a native scroll container: its scrollHeight always
-// equals its clientHeight, so a finger has nothing to pan). That's why the terminal on Android
-// could be neither scrolled back nor selected.
+// Touch gestures the terminal answers to: drag scrolls, long press selects the word, double
+// tap sends Tab. xterm's SelectionService runs on mouse events, which touch never synthesizes.
 
 // xterm's own default `wordSeparator` option, so a long press picks out the same word a desktop
 // double-click does.
@@ -27,18 +14,15 @@ const MOVE_TOLERANCE_PX = 12
 const DOUBLE_TAP_MS = 400
 const DOUBLE_TAP_SLOP_PX = 30
 
-// One of the two drag handles under the ends of a selection, in the same container-relative
-// coordinates as the bubble. `visible` is false when that end has scrolled off the viewport (a
-// selection can outlive the rows it was made on), so the caller just doesn't draw it - the
-// other end stays draggable.
+// A drag handle under one end of a selection, in container-relative coordinates. `visible` is
+// false when that end has scrolled off, so the caller doesn't draw it.
 export interface TouchHandle {
   left: number
   top: number
   visible: boolean
 }
 
-// Where the "Copy" bubble goes and what it would put on the clipboard. Coordinates are relative to
-// the terminal's own container element, so the caller can position it with no geometry of its own;
+// Where the "Copy" bubble goes and what it would copy, in the terminal container's coordinates;
 // `placement` is which side of the selection there was room on.
 export interface TouchSelection {
   text: string
@@ -51,10 +35,8 @@ export interface TouchSelection {
 
 export interface TerminalTouchController {
   dispose: () => void
-  // Drags one end of the live selection to the cell under the given screen point. The caller
-  // owns the handle elements themselves (they're React's, drawn from TouchSelection above) and
-  // forwards their touchmoves here - the gesture handler can't receive them itself, since a
-  // handle sits outside the terminal container it listens on.
+  // Drags one end of the live selection to the cell under the given screen point; the caller
+  // forwards handle touchmoves here, since a handle sits outside the terminal container.
   moveHandle: (which: 'start' | 'end', clientX: number, clientY: number) => void
 }
 
@@ -63,9 +45,8 @@ interface TerminalTouchCallbacks {
   onDoubleTap: () => void
   // null whenever the selection goes away (dismissed, scrolled, or replaced).
   onSelectionChange: (selection: TouchSelection | null) => void
-  // Raw bytes straight to the remote, for the scroll that a full-screen app has to be told about
-  // as cursor keys (see scrollByPixels). The socket is the caller's - xterm has no public way to
-  // inject input, and writing to the terminal itself would only echo it locally.
+  // Raw bytes straight to the remote, for a full-screen app that must be told to scroll (see
+  // scrollByPixels). The socket is the caller's - xterm can't inject input publicly.
   onSendKey: (data: string) => void
 }
 
@@ -84,10 +65,8 @@ export function registerTerminalTouch(
   container: HTMLElement,
   { onDoubleTap, onSelectionChange, onSendKey }: TerminalTouchCallbacks,
 ): TerminalTouchController {
-  // Measured off the rendered screen layer rather than tracked: the cell size changes with the
-  // font (Appearance settings) and the row/column count with every resize, and a getBoundingClientRect
-  // per gesture step is far cheaper than keeping a copy of xterm's internal render dimensions in
-  // sync with both.
+  // Measured off the rendered screen layer rather than tracked, since cell size changes with
+  // the font and resizes; a rect per gesture step is cheaper than keeping dimensions in sync.
   function metrics() {
     const screen = container.querySelector<HTMLElement>('.xterm-screen')
     if (!screen) return null
@@ -114,9 +93,8 @@ export function registerTerminalTouch(
     const text = term.buffer.active.getLine(row)?.translateToString(true) ?? ''
     const isWordChar = (char: string | undefined) => !!char && !WORD_SEPARATORS.includes(char)
     if (!isWordChar(text[col])) {
-      // Pressing the gap between words, or past the end of the line, takes the whole line. On a
-      // phone that's usually the thing worth copying anyway (a path, a URL, an error message),
-      // and selecting one blank cell would be no use to anybody.
+      // Pressing the gap between words, or past the end of the line, takes the whole line -
+      // usually the thing worth copying on a phone.
       return { start: { col: 0, row }, end: { col: text.length, row } }
     }
     let start = col
@@ -139,9 +117,8 @@ export function registerTerminalTouch(
     const topOfStart = offsetY + (start.row - viewportY) * m.cellHeight
     const bottomOfEnd = offsetY + (end.row - viewportY + 1) * m.cellHeight
     const placement = topOfStart > 44 ? 'above' : 'below'
-    // Under each end of the selection, the way the platform's own text handles sit: the first
-    // one under the left edge of the first selected cell, the second under the right edge of
-    // the last (end.col is exclusive, so it already *is* that right edge).
+    // Under each end of the selection: the first under the left edge of the first cell, the
+    // second under the right edge of the last (end.col is exclusive).
     const handleAt = (cell: Cell): TouchHandle => ({
       left: clamp(offsetX + cell.col * m.cellWidth, 0, containerRect.width),
       top: offsetY + (cell.row - viewportY + 1) * m.cellHeight,
@@ -157,13 +134,11 @@ export function registerTerminalTouch(
     }
   }
 
-  // The word the long press landed on. The selection always contains it and only ever grows from
-  // it, in whichever direction the finger drags - which is both easier to control on a small
-  // screen than a free anchor and impossible to collapse to nothing by accident.
+  // The word the long press landed on; the selection always contains it and only grows from it,
+  // which is easier to control than a free anchor.
   let anchor: { start: Cell; end: Cell } | null = null
-  // What's actually selected right now, which is the word plus however far the finger has
-  // dragged past it. Kept separately from the anchor because the anchor must stay put for the
-  // grow-from-the-word rule above, while this is what the handles below adjust afterwards.
+  // What's actually selected now (the word plus how far the finger dragged); kept separate
+  // because the anchor stays put while the handles adjust this.
   let range: { start: Cell; end: Cell } | null = null
 
   function applySelection(dragPoint?: Cell) {
@@ -187,11 +162,8 @@ export function registerTerminalTouch(
     onSelectionChange(bubbleFor(start, end))
   }
 
-  // Drags one end of the existing selection to wherever the finger is, which is what makes a
-  // selection extendable across lines after the press that created it has ended - a long press
-  // alone only ever selects within the row it landed on. Neither end can be dragged through the
-  // other: the far end holds still and the selection never collapses to nothing under a finger
-  // that overshoots, which is the same rule the platform's own handles follow.
+  // Drags one end of the existing selection, making it extendable across lines after the press
+  // ended. Neither end can be dragged through the other.
   function moveHandle(which: 'start' | 'end', clientX: number, clientY: number) {
     if (!range) return
     const cell = pointToCell(clientX, clientY)
@@ -228,10 +200,8 @@ export function registerTerminalTouch(
       term.scrollLines(-lines)
       return
     }
-    // The alternate buffer has no scrollback to move through: a full-screen app (nano, vim, man)
-    // has to be *told* to scroll. A wheel does this on the desktop, so the same thing happens
-    // here - a mouse report where the app asked for one, and otherwise a cursor key per line, in
-    // whichever form the app's own keypad mode calls for.
+    // The alternate buffer has no scrollback: a full-screen app must be *told* to scroll. A
+    // mouse report if it asked for one, otherwise a cursor key per line.
     if (term.modes.mouseTrackingMode !== 'none') {
       for (let i = 0; i < Math.abs(lines); i++) {
         term.element?.dispatchEvent(
@@ -292,9 +262,8 @@ export function registerTerminalTouch(
   function onTouchMove(event: TouchEvent) {
     if (mode === 'idle' || event.touches.length !== 1) return
     const touch = event.touches[0]
-    // Prevented from the first move of a gesture we've taken over, not from the point we decide
-    // which gesture it is: once Chromium has started a scroll of its own, a later preventDefault
-    // is ignored, and the terminal would pan its container instead of its scrollback.
+    // Prevented from the first move of a gesture we've taken over: once Chromium has started a
+    // scroll of its own, a later preventDefault is ignored.
     event.preventDefault()
     if (mode === 'press') {
       if (
@@ -323,21 +292,16 @@ export function registerTerminalTouch(
     const endedMode = mode
     mode = 'idle'
     if (endedMode === 'select') {
-      // The selection has to survive the finger coming off - which it only does if the
-      // compatibility mouse events this touch would otherwise synthesize never fire: xterm's own
-      // SelectionService clears the selection on mousedown, so releasing after a long press would
-      // wipe the highlight the press just put up (leaving nothing but the Copy bubble pointing at
-      // it). Cancelling the touch's default is what suppresses them.
+      // The selection must survive the finger coming off: xterm's SelectionService clears on
+      // mousedown, so the synthesized compatibility mouse events have to be suppressed.
       event.preventDefault()
       return
     }
     // A scroll drag was never a tap either.
     if (endedMode !== 'press') return
     if (event.touches.length > 0 || event.changedTouches.length !== 1) return
-    // With a selection up, a tap anywhere dismisses it - the standard way out of a selection on a
-    // touchscreen, and it must not double as half of a double tap. Deliberately reading our own
-    // anchor rather than term.hasSelection(): the selection may be xterm's, but whether the user
-    // is in the middle of a touch selection is ours to know.
+    // With a selection up, a tap dismisses it and must not double as half of a double tap.
+    // Reading our own anchor, not term.hasSelection().
     if (anchor) {
       clearSelection()
       lastTapAt = 0
@@ -354,10 +318,8 @@ export function registerTerminalTouch(
     lastTapX = touch.clientX
     lastTapY = touch.clientY
     if (!isDoubleTap) return
-    // Suppressing the compatibility mouse events this tap would otherwise synthesize is what
-    // keeps xterm from selecting the word underneath as a side effect of asking for completion
-    // (and stops the browser's double-tap zoom, belt-and-braces with the touch-action style on
-    // the container).
+    // Suppressing the compatibility mouse events keeps xterm from selecting the word underneath
+    // and stops the browser's double-tap zoom.
     event.preventDefault()
     onDoubleTap()
   }

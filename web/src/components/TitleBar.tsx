@@ -13,13 +13,8 @@ interface TitleBarProps {
   updateAvailable?: boolean
 }
 
-// The app's own title bar for the chromeless desktop window (server makes the OS window
-// borderless - see AppWindowManager). One integrated bar at the top: a hamburger menu on
-// the left holding the app-chrome actions that used to sit in the sidebar (collapse,
-// Settings), and the window's minimize/maximize/close controls on the right, at the same
-// height. The whole bar is draggable to move the window (CSS app-region); the buttons and
-// the hamburger opt back out so they stay clickable. Only rendered inside Photino (see
-// isDesktopApp) - a normal browser keeps its own chrome and the sidebar keeps these controls.
+// The app's own title bar for the chromeless desktop window (see AppWindowManager): a
+// hamburger on the left, window controls on the right, draggable via CSS app-region.
 export function TitleBar({ collapsed, onToggleCollapsed, onSelectSection, updateAvailable }: TitleBarProps) {
   const [maximized, setMaximized] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
@@ -39,13 +34,8 @@ export function TitleBar({ collapsed, onToggleCollapsed, onSelectSection, update
     if (rect) setMenu({ x: rect.left, y: rect.bottom + 2 })
   }
 
-  // Fallback window drag: the CSS `-webkit-app-region: drag` above only moves the window on
-  // WebView2 runtimes new enough to honor the experimental draggable-regions flag (see
-  // AppWindowManager) - on the ones that ignore it, the bar is a normal DOM region and this
-  // pointerdown fires instead, handing the press to the OS's own caption-drag loop. Where
-  // the flag *does* work, the draggable region swallows the pointer event so this never
-  // runs, so keeping both is safe. Left button only, and not when the press lands on a
-  // control (the buttons opt out of dragging) so their clicks still register.
+  // Fallback window drag: the CSS app-region only works on WebView2 runtimes that honor the
+  // draggable-regions flag, so on others this hands the press to the OS's caption-drag loop.
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return
     if ((event.target as HTMLElement).closest('button, .app-no-drag')) return

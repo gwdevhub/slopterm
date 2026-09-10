@@ -6,8 +6,7 @@ namespace Slopterm.Tests;
 
 /// <summary>
 /// The precedence rules behind "a host can name a credential instead of carrying one" - the
-/// feature that lets a team share a host inventory while every member connects with their
-/// own key.
+/// feature that lets a team share a host inventory while every member connects with their own key.
 /// </summary>
 [Collection("vault-dir")]
 public sealed class CredentialResolverTests : IDisposable
@@ -32,8 +31,8 @@ public sealed class CredentialResolverTests : IDisposable
     }
 
     /// <summary>
-    /// The whole point: the same synced host resolves to a DIFFERENT local key on each
-    /// device, and neither device's private key ever needed to travel.
+    /// The whole point: the same synced host resolves to a DIFFERENT local key on each device,
+    /// and neither device's private key ever needed to travel.
     /// </summary>
     [Fact]
     public void TheSameNameResolvesToADifferentLocalKeyOnEachDevice()
@@ -98,9 +97,8 @@ public sealed class CredentialResolverTests : IDisposable
     }
 
     /// <summary>
-    /// Nothing resolves: the card shows "no key on this device" and SSH/SFTP are disabled -
-    /// exactly how a ~/.ssh/config alias with no resolvable identity already behaves. It must
-    /// never silently connect with something else.
+    /// Nothing resolves: the card shows "no key on this device" and SSH/SFTP are disabled,
+    /// and it must never silently connect with something else.
     /// </summary>
     [Fact]
     public void ReportsNoKeyOnThisDeviceRatherThanConnectingWithSomethingElse()
@@ -111,9 +109,8 @@ public sealed class CredentialResolverTests : IDisposable
         var host = new HostRecord { Name = "prod-db", Address = "10.0.0.5", Credentials = [NamedKey("prod-deploy")] };
         var resolved = CredentialResolver.ResolveForHost(vault, "team", host)!;
 
-        // ~/.ssh may or may not hold a default identity on the machine running these tests,
-        // so the assertion is the one that matters either way: it never silently picks a
-        // DIFFERENT named key.
+        // ~/.ssh may or may not hold a default identity on the test machine, so the assertion
+        // that matters either way: it never silently picks a DIFFERENT named key.
         Assert.NotEqual("NOT-IT", resolved.PrivateKey);
         Assert.Contains(resolved.Source, new[] { "none", "ssh-default" });
         if (resolved.Source == "none")
@@ -154,7 +151,7 @@ public sealed class CredentialResolverTests : IDisposable
 
     /// <summary>
     /// A host may list several credentials; the first CONNECTABLE one is used, so an
-    /// unresolvable named key doesn't shadow a working password sitting behind it.
+    /// unresolvable named key doesn't shadow a working password behind it.
     /// </summary>
     [Fact]
     public void SkipsAnUnresolvableCredentialForOneThatWorks()

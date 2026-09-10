@@ -22,12 +22,8 @@ const PHASE_LABEL: Record<string, string> = {
   restarting: 'Restarting slopterm…',
 }
 
-// Polls /api/update/progress while an update is being applied. Once the backend reaches
-// "restarting" it calls app.StopAsync() and spawns the replacement process (see
-// Program.cs's /api/update/apply) - the old process (and this poll) dies right around
-// there, so a failed poll after "restarting" is expected, not an error: it means the
-// swap is done and we should start waiting for the *new* process to come back up instead
-// of surfacing a scary error message.
+// Polls /api/update/progress while an update is applied, then waits for the replacement
+// process to answer. A failed poll after the backend starts restarting is expected, not an error.
 function UpdateProgressDialog({ onDone }: { onDone: () => void }) {
   const [phase, setPhase] = useState<string>('downloading')
   const [percent, setPercent] = useState(0)
@@ -36,14 +32,8 @@ function UpdateProgressDialog({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     let cancelled = false
-    // Once verification passes, the backend swaps the exe in place and calls
-    // app.StopAsync() to free the port before spawning the replacement process - the
-    // whole install+shutdown sequence is fast enough that a real run never actually
-    // managed to report "installing"/"restarting" before the connection dropped (verified
-    // against the real repo/API: observed phases went straight from "verifying" to the
-    // connection being refused). So the threshold for "a dropped connection here is the
-    // expected restart, not a failure" has to be "verification already passed" - waiting
-    // to see "restarting" specifically would show a false error on every real run.
+    // The backend swaps the exe and calls app.StopAsync() before spawning the replacement, so
+    // the connection drops after verification - a drop then is the expected restart, not a failure.
     let pastPointOfNoReturn = false
 
     async function pollProgress() {
@@ -75,9 +65,8 @@ function UpdateProgressDialog({ onDone }: { onDone: () => void }) {
       if (cancelled || !pastPointOfNoReturn) return
       setWaitingForRestart(true)
 
-      // The old process is gone by now (or about to be) - poll the root URL directly
-      // (not /api/update/progress, which belongs to a process that no longer exists)
-      // until the *new* process answers, then reload to pick it up fresh.
+      // The old process is gone by now - poll the root URL (not /api/update/progress, which
+      // belongs to a process that no longer exists) until the new process answers, then reload.
       while (!cancelled) {
         try {
           const res = await fetch('/', { cache: 'no-store' })
@@ -170,18 +159,13 @@ export function UpdateSection() {
   }
 
   const updateAvailable = check?.supported && !check.error && check.updateAvailable
-  // Prefer the stamped informational version (0.0.2-beta.2, or 0.0.2-beta.2+abcdefg for a
-  // rolling build); fall back to the exe's sha256 prefix for builds/releases that predate
-  // version stamping. latestTagName is only a fallback too - the rolling tag is literally
-  // "latest", which tells the user nothing.
+  // Prefer the stamped informational version; fall back to the exe's sha256 prefix. latestTagName
+  // is only a fallback too - the rolling tag is literally "latest", which tells the user nothing.
   const currentLabel = check?.currentVersion ?? shortSha(check?.currentSha256 ?? null)
   const targetLabel = check ? (check.latestVersion ?? check.latestTagName) : null
 
-  // One button whose meaning tracks whatever state the check is in - "Update now" only
-  // when there's actually somewhere to go, "Check now" otherwise (including right after
-  // an error or in dev mode, where re-checking is harmless even if unlikely to help),
-  // and disabled with a "Checking…" label while a check is in flight so it's never
-  // ambiguous whether a click landed.
+  // One button whose meaning tracks the check state - "Update now" only when there's
+  // somewhere to go, "Check now" otherwise, disabled while a check is in flight.
   function handlePrimaryAction() {
     if (checking) return
     if (updateAvailable) {

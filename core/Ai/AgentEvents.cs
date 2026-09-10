@@ -3,21 +3,15 @@ using System.Text.Json;
 namespace Slopterm.Server.Ai;
 
 /// <summary>
-/// The single shared serializer for the agent WebSocket channel. Unlike REST (which the
-/// minimal-API framework serializes with web defaults automatically), the agent WS handler is
-/// manual, so every SendAsync/Deserialize on that channel MUST route through this so the wire
-/// stays camelCase and matches the pinned contract.
+/// The single shared serializer for the agent WebSocket channel - every SendAsync/Deserialize on
+/// that channel must route through it so the wire stays camelCase and matches the pinned contract.
 /// </summary>
 public static class AgentJson
 {
     public static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web);
 }
 
-/// <summary>
-/// Inbound client frame: <c>send</c> / <c>stop</c> / <c>clear</c> / <c>list_chats</c> /
-/// <c>open_chat</c> / <c>new_chat</c> / <c>delete_chat</c> (the chat operations carry
-/// <c>Id</c>).
-/// </summary>
+/// <summary>Inbound client frame: <c>send</c>/<c>stop</c>/<c>clear</c>/<c>list_chats</c>/<c>open_chat</c>/<c>new_chat</c>/<c>delete_chat</c> (chat ops carry <c>Id</c>).</summary>
 public sealed class AgentClientMessage
 {
     public string? Type { get; set; }
@@ -27,10 +21,8 @@ public sealed class AgentClientMessage
     public string? Id { get; set; }
 
     /// <summary>
-    /// On a <c>send</c>: start a fresh conversation for this message first (the "New chat then
-    /// send" flow), used when the user sends while the saved-chats list is open. Done as part of
-    /// the send rather than a separate <c>new_chat</c> frame precisely so no empty <c>history</c>
-    /// frame is emitted to wipe the message the client just rendered optimistically.
+    /// On a <c>send</c>: start a fresh conversation first. Done as part of the send (not a separate
+    /// <c>new_chat</c> frame) so no empty <c>history</c> frame wipes the optimistically-rendered message.
     /// </summary>
     public bool NewChat { get; set; }
 }

@@ -6,22 +6,13 @@ namespace Slopterm.Server;
 /// <summary>Per-rule forwarding state reported to the UI.</summary>
 public sealed record ForwardStatus(string RuleId, string HostId, string State, string? Error);
 
-/// <summary>
-/// Owns the app's SSH port forwards. Each saved host that has active forwards gets ONE
-/// dedicated background SshClient (separate from any terminal/SFTP tab, so a forward outlives
-/// the tab and can run with no tab at all), and every rule on that host is a ForwardedPort on
-/// it. Forwards are brought up automatically when a terminal/SFTP session to the host opens
-/// (StartRulesForHost, called from the connect endpoint) and, for AutoStart rules, in the
-/// background at app launch (StartAutoForwards). A per-host monitor keeps the connection alive
-/// and re-establishes it (with backoff) if it drops, so a background forward stays up
-/// unattended. Everything here is best-effort: failures surface in GetStatus, never as throws
-/// that could take the app down.
-/// </summary>
+/// <summary>Owns the app's SSH port forwards - one dedicated background SshClient per host,
+/// kept alive by a reconnecting monitor. Failures surface in GetStatus, never as throws.</summary>
 public sealed class ForwardingService : IDisposable
 {
     private readonly VaultService _vault;
     private readonly object _lock = new();
-    private readonly Dictionary<string, HostForwarding> _hosts = new(); // key: hostId
+    private readonly Dictionary<string, HostForwarding> _hosts = new();
     private bool _disposed;
 
     public ForwardingService(VaultService vault) => _vault = vault;
@@ -117,9 +108,8 @@ public sealed class ForwardingService : IDisposable
         }
         catch
         {
-            // Best-effort per rule - a missing host/credential for one rule must never stop
-            // the others (or crash launch). The failure is visible in GetStatus once started,
-            // and simply absent if it never got far enough to register.
+            // Best-effort per rule - a missing host/credential for one must never stop the
+            // others or crash launch. The failure shows in GetStatus once started.
         }
     }
 
@@ -279,9 +269,8 @@ public sealed class ForwardingService : IDisposable
                 }
                 catch (Exception ex) when (!token.IsCancellationRequested)
                 {
-                    // Anything unexpected here (e.g. SSH.NET's IsConnected throwing once a
-                    // session has died from a timeout) must never end this loop - a dead host
-                    // forward that nothing retries is worse than a noisy retry.
+                    // Anything unexpected (e.g. IsConnected throwing on a dead session) must
+                    // never end this loop - a dead forward nothing retries is worse.
                     lock (_lock)
                     {
                         DisposeClientLocked();
@@ -328,7 +317,7 @@ public sealed class ForwardingService : IDisposable
                         }
                     }
 
-                    fresh = null; // ownership handed to _client
+                    fresh = null;
                     backoff = TimeSpan.FromSeconds(2);
                 }
                 catch (Exception ex)
@@ -481,12 +470,8 @@ public sealed class ForwardingService : IDisposable
     }
 }
 
-/// <summary>
-/// Maps a saved <see cref="HostRecord"/> onto the <see cref="ConnectRequest"/> the SSH layer
-/// expects - the server-side mirror of the frontend's resolveConnectRequest, needed because
-/// forwarding builds connections itself (at launch / from a host id) rather than being handed
-/// a ConnectRequest the way the terminal connect endpoint is.
-/// </summary>
+/// <summary>Maps a saved <see cref="HostRecord"/> onto the <see cref="ConnectRequest"/> the
+/// SSH layer expects - forwarding builds connections itself rather than being handed one.</summary>
 public static class HostConnect
 {
     public static ConnectRequest? Resolve(HostRecord host)

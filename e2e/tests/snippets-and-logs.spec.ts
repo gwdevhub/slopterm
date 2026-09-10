@@ -57,7 +57,6 @@ test('a snippet can be edited in place, and Cancel discards unsaved changes', as
   await page.click('button:has-text("Cancel")')
   await expect(page.getByText('echo original')).toBeVisible()
 
-  // Save changes does persist.
   await page.click('button:has-text("Edit")')
   await page.fill('input[placeholder=Name]', 'edit test snippet RENAMED')
   await page.fill('textarea[placeholder=Command]', 'echo updated')
@@ -72,11 +71,8 @@ test('a snippet can be edited in place, and Cancel discards unsaved changes', as
 test('records connection attempts in the logs section', async ({ page }) => {
   await page.goto(ctx.baseUrl)
 
-  // Armed before navigating: LogsList starts with logs=[] until its own fetch resolves,
-  // so "No connection history yet." can render transiently even when the server already
-  // has entries from another test file (the vault/log store is shared across every e2e
-  // test file - see vault-helpers.ts). Waiting for the real response avoids racily
-  // treating "not fetched yet" as "already empty" and skipping the clear below.
+  // Armed before navigating: "No connection history yet." can render transiently before
+  // LogsList's fetch resolves, which would racily skip the clear below.
   const initialLogsFetch = page.waitForResponse((res) => res.url().includes('/api/vault/logs') && res.request().method() === 'GET')
   await gotoSection(page, 'Logs')
   await ensureVaultUnlocked(page)
@@ -87,7 +83,6 @@ test('records connection attempts in the logs section', async ({ page }) => {
     await expect(page.getByText('No connection history yet.')).toBeVisible({ timeout: 10_000 })
   }
 
-  // A real successful connect via a saved host's "SSH" button.
   await gotoSection(page, 'Hosts')
   await page.click('button:has-text("New host")')
   await page.fill('#name', 'log test host')
@@ -102,8 +97,7 @@ test('records connection attempts in the logs section', async ({ page }) => {
   await expect(page.locator('.xterm-rows:visible')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
 
-  // The real failed-connect case, via Quick Connect (deliberately wrong password) rather
-  // than a second saved host.
+  // Failed-connect case via Quick Connect (wrong password) rather than a second saved host.
   await gotoSection(page, 'Hosts')
   await page.click('button:has-text("Quick connect")')
   await page.fill('#host', ctx.sshHost)
@@ -111,9 +105,8 @@ test('records connection attempts in the logs section', async ({ page }) => {
   await page.fill('#username', ctx.sshUsername)
   await page.fill('#password', 'definitely-wrong')
   await page.getByRole('button', { name: 'Connect', exact: true }).click()
-  // Scoped to the error paragraph's own styling rather than a broad text regex - the
-  // static "Authentication" section label on this same form also matches a naive
-  // /authentication/i search, which is an ambiguous strict-mode match in Playwright.
+  // Scoped to the error paragraph's styling: the form's "Authentication" label also matches
+  // a naive /authentication/i search, an ambiguous strict-mode match in Playwright.
   await expect(page.locator('p.text-red-300')).toBeVisible({ timeout: 15_000 })
   await page.keyboard.press('Escape')
 

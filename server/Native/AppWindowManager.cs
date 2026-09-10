@@ -7,24 +7,9 @@ using Photino.NET;
 namespace Slopterm.Server.Native;
 
 /// <summary>
-/// Enforces "only ever one slopterm window": EnsureWindowOpen restores/focuses the
-/// window if one already exists, or creates it fresh otherwise - never a second one.
-/// Owns a real native window (Photino, a thin WebView2/WebKitGTK/WKWebView wrapper)
-/// pointed at the same local Kestrel server everything else already talks to - unlike
-/// the previous approach of launching an external browser process (BrowserLauncher.cs,
-/// kept as the fallback here if the platform's webview runtime isn't installed), which
-/// never gave us a window handle to reliably single-instance or reposition.
-///
-/// The single PhotinoWindow instance is created once and kept alive for the rest of the
-/// process's lifetime - "closing" it with CloseToTray on hides it instead of destroying it
-/// (and the tray icon shows that same window again later). This isn't just a UX choice:
-/// creating a *second* PhotinoWindow instance after a first one is actually destroyed reliably
-/// crashes the whole process natively (a silent, unrecoverable process death - no
-/// catchable .NET exception, confirmed by reproducing it directly: the process was
-/// consistently gone within ~1s of the second window's Load() call completing). Never
-/// destroying the window at all sidesteps that failure mode entirely, which matters more
-/// than being able to fully dispose of the native window before quitting the app (which
-/// happens automatically as part of process exit anyway).
+/// Enforces "only ever one slopterm window": EnsureWindowOpen restores/focuses the existing
+/// window or creates it. The PhotinoWindow is never destroyed - recreating one after destruction
+/// crashes the process natively with no catchable exception.
 /// </summary>
 public static class AppWindowManager
 {
@@ -32,51 +17,30 @@ public static class AppWindowManager
     private static readonly ManualResetEventSlim WindowReady = new(false);
     private static PhotinoWindow? _window;
 
-    // Only ever populated by the BrowserLauncher fallback below (no webview runtime
-    // installed) - tracked so "Quit" can close these along with the rest of the app
-    // instead of leaving an orphaned window pointed at a now-dead server. Every fallback
-    // launch appends here rather than replacing, since clicking "Open" repeatedly while
-    // still in fallback mode currently opens a new window each time (see EnsureWindowOpen -
-    // it can never find a tracked native window to focus in this mode, so it always retries).
+    // Only populated by the BrowserLauncher fallback; tracked so Quit can close these rather
+    // than leave an orphaned window pointed at a now-dead server.
     private static readonly List<Process> FallbackBrowserProcesses = [];
 
-    // Guards against a genuine race: EnsureWindowOpen's "does a window exist yet" check
-    // and the point where RunWindow actually assigns _window happen on different threads
-    // with real work (constructing the PhotinoWindow, loading the icon) in between. Two
-    // calls close enough together (e.g. the tray icon's WM_LBUTTONUP firing twice for one
-    // click, which does happen) could otherwise both see _window as null and each try to
-    // create their own window - the second of which would hit the native crash described
-    // above. This flag closes that race.
+    // Guards the race where two EnsureWindowOpen calls both see _window as null and each try
+    // to create a window - the second of which hits the native crash.
     private static bool _creating;
 
-    // Set once from Program.cs before the first window opens. _closeToTray reports the live
-    // CloseToTray setting value - read at each close, so toggling it in Settings takes
-    // effect without a restart; _onQuit runs the same clean shutdown the tray's "Quit" does.
+    // Set once from Program.cs before the first window opens; _closeToTray is read live at each
+    // close (toggling applies without restart) and _onQuit runs the clean tray "Quit" shutdown.
     private static Func<bool>? _closeToTray;
     private static Action? _onQuit;
 
-    // True once the webview has posted its first message (wc:ready). Photino's native
-    // SendWebMessage dereferences the webview without a null check, and the window's own
-    // Maximized/Restored events can fire DURING window creation - before WebView2 exists -
-    // which crashes the whole process with an uncatchable 0xC0000005 (observed on startup:
-    // OnRestored -> SendWebMessage(wc:restored) -> access violation). A message received
-    // FROM the webview is proof it exists, and it exists for the rest of the process's
-    // lifetime after that (the window is never destroyed - see the class doc comment), so
-    // outbound state pushes are gated on this. Nothing is lost before then: the title bar
-    // asks for the current state via wc:ready when it mounts.
+    // True once the webview has posted its first message; an outbound SendWebMessage before that
+    // (during window creation) dereferences a nonexistent webview - an uncatchable native crash.
     private static volatile bool _webviewReady;
 
-    // The taskbar frame currently hidden by "close to tray", or Zero when the window is
-    // shown. Written on the window thread (a close) and read on the tray thread (a click),
-    // hence the interlocked/volatile access.
+    // The taskbar frame hidden by "close to tray", or Zero when the window is shown. Written on
+    // the window thread (a close) and read on the tray thread (a click).
     private static nint _hiddenWindowHandle;
 
     /// <summary>
-    /// Wires up what closing the window does: hide it to the tray (keeping the app running,
-    /// with no taskbar button left behind) when <paramref name="closeToTray"/> reports true,
-    /// or quit outright (the default) via <paramref name="onQuit"/>. Call once at startup before the first window
-    /// is opened. The predicate is evaluated at each close, not captured, so a Settings
-    /// toggle applies without a restart.
+    /// Wires up what closing the window does: hide to tray when closeToTray reports true, else
+    /// quit via onQuit. Call once before the first window opens.
     /// </summary>
     public static void Configure(Func<bool> closeToTray, Action onQuit)
     {
@@ -118,11 +82,8 @@ public static class AppWindowManager
     }
 
     /// <summary>
-    /// Called from the tray icon's "Quit" so nothing opened on the user's behalf is left
-    /// dangling once the app itself is gone - the Photino window doesn't need any special
-    /// handling here (it lives on a background thread that dies with the process once
-    /// Program.cs's own shutdown falls through), but a fallback browser window/tab is a
-    /// completely separate OS process that Quit would otherwise never touch at all.
+    /// Called from tray Quit so nothing opened on the user's behalf is orphaned - a fallback
+    /// browser window is a separate OS process Quit would otherwise never touch.
     /// </summary>
     public static void CloseAllFallbackBrowserWindows()
     {
@@ -142,10 +103,8 @@ public static class AppWindowManager
                     continue;
                 }
 
-                // CloseMainWindow asks it to close itself gracefully first (its own exit
-                // handlers, if any, still get to run) - Kill is the fallback for a window
-                // that doesn't respond (e.g. the app-mode window never got focus/a message
-                // loop tick to process the close request).
+                // Close gracefully first; Kill is the fallback for a window that doesn't
+                // respond.
                 if (!process.CloseMainWindow())
                 {
                     process.Kill();
@@ -165,20 +124,14 @@ public static class AppWindowManager
 
     private static void RunWindow(string url)
     {
-        // WebView2 ignores the title bar's CSS -webkit-app-region: drag (used to move the
-        // chromeless window) unless non-client region support is enabled - which Photino
-        // doesn't expose, so switch it on through WebView2's browser-args env var before the
-        // webview is created below. Without this the window simply won't move when dragged.
+        // WebView2 ignores CSS -webkit-app-region: drag unless non-client region support is
+        // enabled via its browser-args env var, before the webview is created below.
         EnableWebViewDraggableRegions();
 
         try
         {
-            // Chromeless (no native OS title bar/border) so the React app can draw its own
-            // Termius-style title bar - the hamburger menu (collapse/settings) and the
-            // window's minimize/maximize/close controls all live in one integrated top bar
-            // at the same height, instead of an OS caption stacked above our own toolbar.
-            // The window stays resizable (Photino's Resizable defaults on, independent of
-            // the caption) and draggable via the title bar's CSS -webkit-app-region: drag.
+            // Chromeless so the React app can draw its own Termius-style title bar; the window
+            // stays resizable and draggable via CSS -webkit-app-region: drag.
             var window = new PhotinoWindow().SetTitle("slopterm").SetChromeless(true);
 
             var iconPath = EmbeddedIcon.ExtractToTempFile();
@@ -187,10 +140,8 @@ public static class AppWindowManager
                 window.SetIconFile(iconPath);
             }
 
-            // A chromeless window on Windows MUST have an explicit size and location -
-            // Photino rejects UseOsDefaultLocation/Size for it ("Size and location must be
-            // specified"). So always set both: the saved position if we have one, otherwise
-            // a sensible default centered on the primary screen for a first cold start.
+            // A chromeless window MUST have an explicit size and location (Photino rejects OS
+            // defaults) - saved position if any, else centered on the primary screen.
             window.SetUseOsDefaultLocation(false).SetUseOsDefaultSize(false);
             var saved = WindowPositionStore.Load();
             if (saved is not null)
@@ -207,17 +158,8 @@ public static class AppWindowManager
                 window.SetLocation(new Point(x, y)).SetSize(new Size(defaultWidth, defaultHeight));
             }
 
-            // Shared by both the native close (Alt+F4) and the title bar's own close button
-            // (the "wc:close" message below). SavePosition is captured here, right before
-            // minimizing - not continuously via LocationChanged/SizeChanged, since many
-            // windowing APIs fire spurious move/resize events while minimizing or tearing a
-            // window down (classic Win32 reports a minimized window at (-32000,-32000)),
-            // which would otherwise overwrite a perfectly good saved position with garbage.
-            //   - CloseToTray on: hide the window and leave the app running behind its tray
-            //     icon only (see HideToTray).
-            //   - CloseToTray off (default): quit slopterm outright. The window is never
-            //     destroyed here - _onQuit stops the process, and letting process exit tear
-            //     it down is the one destruction path proven safe (see the class doc).
+            // Shared by Alt+F4 and the title-bar close button; save before minimizing since
+            // that fires spurious move/resize events. CloseToTray on hides, off quits.
             void HandleClose(PhotinoWindow w)
             {
                 SavePosition(w);
@@ -231,9 +173,8 @@ public static class AppWindowManager
                 }
             }
 
-            // The chromeless window has no OS caption, so the React title bar draws the
-            // window controls and drives them through this message bridge - posted from JS
-            // via window.external.sendMessage, handled here on the window's own thread.
+            // The chromeless window has no OS caption, so the React title bar drives window
+            // controls through this message bridge, handled on the window's own thread.
             window.RegisterWebMessageReceivedHandler((sender, message) =>
             {
                 var w = (PhotinoWindow)sender!;
@@ -263,11 +204,8 @@ public static class AppWindowManager
                 }
             });
 
-            // Keep that glyph in sync when the state changes by any other means too
-            // (double-click drag-to-top, Win+Up, aero snap), not just our own button. Gated
-            // on _webviewReady: these events also fire during window creation, before the
-            // webview exists, and an ungated SendWebMessage there is a native process crash
-            // (see _webviewReady's comment).
+            // Keep the glyph in sync when state changes by other means (Win+Up, aero snap).
+            // Gated on _webviewReady - an ungated SendWebMessage here is a native crash.
             window.RegisterMaximizedHandler((sender, _) =>
             {
                 if (_webviewReady)
@@ -301,19 +239,12 @@ public static class AppWindowManager
 
             WindowReady.Set();
 
-            // Give the taskbar window slopterm's icon. This can't be done synchronously
-            // here: WebView2 clears the window's shell identity during the async init it
-            // starts from Load() above, so a single set is wiped and the taskbar shows a
-            // generic tile. The applier re-asserts it on its own thread until it sticks
-            // (see WindowsTaskbarIdentity) - it also finds the real top-level frame itself,
-            // since Photino's WindowHandle isn't the window that owns the taskbar button.
+            // Can't be done synchronously: WebView2 clears the shell identity during Load()'s
+            // async init, so the applier re-asserts it on its own thread until it sticks.
             StartTaskbarIdentityApplier();
 
-            // Blocks this dedicated thread only - Kestrel and everything else keeps
-            // running regardless of whether the window is currently visible or
-            // minimized. In normal operation this never actually returns (every close
-            // attempt is cancelled above); it's only reached if something outside our
-            // control forces the window closed, which process exit handles regardless.
+            // Blocks this dedicated thread only; in normal operation it never returns
+            // (every close is cancelled above).
             window.WaitForClose();
         }
         catch (Exception ex)
@@ -346,11 +277,8 @@ public static class AppWindowManager
     }
 
     /// <summary>
-    /// Turns on WebView2's non-client region support (so CSS -webkit-app-region: drag makes
-    /// the title bar move the window) by appending the enabling feature flag to WebView2's
-    /// additional-browser-args env var. Appends rather than overwrites so it composes with
-    /// anything already set (e.g. a --remote-debugging-port passed in for testing). Must run
-    /// before the webview is created; idempotent.
+    /// Turns on WebView2 non-client region support by appending the feature flag to its
+    /// additional-browser-args env var. Must run before the webview is created; idempotent.
     /// </summary>
     private static void EnableWebViewDraggableRegions()
     {
@@ -395,13 +323,8 @@ public static class AppWindowManager
     }
 
     /// <summary>
-    /// Closing with CloseToTray on must leave the app reachable from the tray icon and
-    /// *nowhere else* - so hide the window outright instead of minimizing it. A minimized
-    /// window still owns its taskbar button, which is precisely the entry the setting is
-    /// meant to get rid of; only ShowWindow(SW_HIDE) actually takes it off the taskbar.
-    ///
-    /// The window itself is still never destroyed (see the class doc) - hiding is purely a
-    /// visibility change, and ShowIfHidden puts it back exactly as it was.
+    /// Hides the window (SW_HIDE) rather than minimizing - a minimized window still owns its
+    /// taskbar button, which close-to-tray is meant to remove. The window is never destroyed.
     /// </summary>
     private static void HideToTray(PhotinoWindow window)
     {
@@ -410,9 +333,8 @@ public static class AppWindowManager
             var frame = ResolveTaskbarWindow(window);
             if (frame != nint.Zero)
             {
-                // Remembered because the lookup below can never find this window again once
-                // it's hidden (it only matches visible windows) - this handle is the only way
-                // back. Stored before the hide so a tray click racing it still finds it.
+                // The lookup only matches visible windows, so this handle is the only way back;
+                // stored before the hide so a racing tray click still finds it.
                 Volatile.Write(ref _hiddenWindowHandle, frame);
                 ShowWindow(frame, SwHide);
                 return;
@@ -425,10 +347,8 @@ public static class AppWindowManager
     }
 
     /// <summary>
-    /// The top-level frame that owns the taskbar button. Photino's own WindowHandle isn't it
-    /// (see WindowsTaskbarIdentity, which enumerates the process's windows to find the real
-    /// one - reused here); GA_ROOTOWNER off the Photino handle is the fallback for the case
-    /// where that enumeration comes up empty.
+    /// The top-level frame that owns the taskbar button (see WindowsTaskbarIdentity);
+    /// GA_ROOTOWNER off the Photino handle is the fallback when that enumeration comes up empty.
     /// </summary>
     [SupportedOSPlatform("windows")]
     private static nint ResolveTaskbarWindow(PhotinoWindow window)
@@ -443,9 +363,8 @@ public static class AppWindowManager
     }
 
     /// <summary>
-    /// Undoes HideToTray. SW_SHOW restores the window in whatever state it was hidden in
-    /// (including maximized) and hands the taskbar its button back. Needed as its own step
-    /// because a hidden window isn't a minimized one - un-minimizing wouldn't reveal it.
+    /// Undoes HideToTray: SW_SHOW restores the window (including maximized) and its taskbar
+    /// button. A hidden window isn't minimized, so un-minimizing wouldn't reveal it.
     /// </summary>
     private static void ShowIfHidden()
     {
@@ -471,11 +390,8 @@ public static class AppWindowManager
                 window.SetMinimized(false);
             }
 
-            // A topmost toggle is the one cross-platform trick that reliably raises a
-            // window across window managers; SetForegroundWindow is the correct, more
-            // direct mechanism on Windows specifically (allowed here without the usual
-            // foreground-stealing restrictions, since this process already owns the
-            // window it's asking to be focused).
+            // A topmost toggle reliably raises a window cross-platform; SetForegroundWindow is
+            // the direct Windows mechanism, allowed since this process already owns the window.
             window.SetTopMost(true);
             window.SetTopMost(false);
             if (OperatingSystem.IsWindows() && window.WindowHandle != nint.Zero)
@@ -491,15 +407,9 @@ public static class AppWindowManager
     }
 
     /// <summary>
-    /// Starts moving the window by handing the current mouse-down off to the OS's own caption
-    /// drag loop - the reliable way to move a borderless window, independent of WebView2's
-    /// experimental <c>msWebView2EnableDraggableRegions</c> flag (which some runtime versions
-    /// silently ignore, so CSS <c>-webkit-app-region: drag</c> alone doesn't move the window on
-    /// those - reported on real Windows 11). The title bar posts <c>wc:drag</c> on pointerdown;
-    /// releasing the webview's mouse capture and then telling the top-level window a
-    /// non-client (caption) press happened makes Windows run its normal move loop - snapping,
-    /// multi-monitor and all - until the button is released. Runs on the window's UI thread
-    /// (the web-message handler's thread), which is where these calls must happen.
+    /// Hands the current mouse-down to the OS caption drag loop - the reliable way to move a
+    /// borderless window, since some WebView2 runtimes ignore the draggable-regions flag. Runs
+    /// on the window's UI thread.
     /// </summary>
     private static void BeginNativeDrag(PhotinoWindow window)
     {
@@ -561,10 +471,8 @@ public static class AppWindowManager
             return;
         }
 
-        // The applier locates the real taskbar window itself (by enumerating this process's
-        // visible top-level windows) and re-applies the shell identity until it holds, so
-        // there's nothing to capture from the PhotinoWindow here. Best-effort background
-        // work: taskbar decoration must never affect whether the window itself opens.
+        // The applier locates the real taskbar window itself and re-applies until it holds;
+        // best-effort so taskbar decoration never affects whether the window opens.
         var thread = new Thread(WindowsTaskbarIdentity.ApplyWindowIdentityWithRetry)
         {
             IsBackground = true,
@@ -574,9 +482,8 @@ public static class AppWindowManager
     }
 
     /// <summary>
-    /// Photino throws if the platform's webview runtime isn't installed (WebView2 on
-    /// Windows, WebKitGTK on Linux/macOS) - caught in RunWindow above, which falls back
-    /// to BrowserLauncher so the user isn't stranded with no way to reach the app at all.
+    /// Photino throws when the platform webview runtime (WebView2/WebKitGTK) isn't installed;
+    /// caught in RunWindow, which falls back to BrowserLauncher.
     /// </summary>
     private static void ReportMissingRuntime(Exception ex)
     {

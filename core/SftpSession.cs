@@ -16,11 +16,8 @@ public sealed class SftpSession : IDisposable
     public string Username { get; }
     public string HomeDirectory { get; }
 
-    /// <summary>
-    /// Whether the SSH link under this SFTP channel is still up. An SFTP session holds no
-    /// WebSocket, so nothing else would ever notice it going stale - and a stale one is worse
-    /// than absent, since a tab reattached to it looks connected but fails on every click.
-    /// </summary>
+    /// <summary>Whether the SSH link under this SFTP channel is still up - nothing else would
+    /// notice it going stale, and a stale session looks connected but fails on every click.</summary>
     public bool IsConnected
     {
         get
@@ -51,11 +48,8 @@ public sealed class SftpSession : IDisposable
         var connectionInfo = SshConnectionInfoFactory.Create(request);
         var client = new SftpClient(connectionInfo)
         {
-            // A file-browsing tab is idle between clicks, and an idle SFTP channel is reaped
-            // by NAT/sshd just like an idle shell - which showed up as the first click after
-            // leaving the app sitting for a while failing. Matches ForwardingService/
-            // SyncService/TerminalSession; set on the client, since in SSH.NET the property
-            // lives on BaseClient rather than on ConnectionInfo.
+            // An idle SFTP channel is reaped just like an idle shell, which showed up as the
+            // first click after a long idle failing. Set on the client (BaseClient, not ConnectionInfo).
             KeepAliveInterval = TimeSpan.FromSeconds(30),
         };
         client.Connect();
@@ -85,12 +79,8 @@ public sealed class SftpSession : IDisposable
         await _client.UploadFileAsync(stream, remotePath, ct);
     }
 
-    /// <summary>
-    /// Writes raw bytes to a remote directory under the given file name, returning the full
-    /// remote path they landed at. Backs the SSH tab's paste/drag-to-upload flow, where the
-    /// bytes come straight from the browser (a pasted image, an OS-dropped file) rather than
-    /// from a local file on disk like <see cref="UploadFileAsync"/>.
-    /// </summary>
+    /// <summary>Writes raw bytes to a remote directory under the given name; backs the SSH
+    /// tab's paste/drag-to-upload flow (bytes from the browser, not a local file).</summary>
     public async Task<string> WriteBytesAsync(string remoteDir, string fileName, byte[] data, CancellationToken ct)
     {
         var remotePath = JoinPosixPath(remoteDir, fileName);
@@ -164,7 +154,7 @@ public sealed class SftpSession : IDisposable
         var trimmed = path.TrimEnd('/');
         if (string.IsNullOrEmpty(trimmed))
         {
-            return null; // already root
+            return null;
         }
 
         var idx = trimmed.LastIndexOf('/');

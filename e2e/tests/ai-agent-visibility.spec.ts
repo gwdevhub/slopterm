@@ -14,13 +14,11 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
 }
 
 // Deliberately unreachable, like the collections specs' WebDAV URL: the bar's existence is
-// decided by "is an endpoint configured", not by whether that endpoint answers, and this test
-// is about exactly that distinction.
+// decided by "is an endpoint configured", not by whether that endpoint answers.
 const UNREACHABLE_AI = 'http://127.0.0.1:9/v1'
 
-// The AI agent is opt-in: an SSH client shouldn't carry a bar for a feature that can't run.
-// With no endpoint set - the state a fresh install is in - a terminal tab has no AI strip at
-// all, and entering a URL brings it into being without a reload.
+// The AI agent is opt-in: with no endpoint set - a fresh install - a terminal tab has no AI
+// strip at all, and entering a URL brings it into being without a reload.
 test('the AI agent bar appears only once an endpoint is configured', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')
@@ -58,9 +56,8 @@ test('the AI agent bar appears only once an endpoint is configured', async ({ pa
   await page.getByRole('button', { name: 'Save AI settings' }).click()
   await expect(page.getByText('Off - no server URL set', { exact: false })).not.toBeVisible({ timeout: 10_000 })
 
-  // Back to the tab: opening a section deselects it (handleSelectSection clears the active
-  // tab), and the tab strip's own label button is what selects it again. `.first()` because
-  // its "Close <label>" sibling matches the same substring, and the label comes first.
+  // Opening a section deselects the tab, so select it again via the tab strip's own label
+  // button (`.first()` skips its neighboring "Close <label>" sibling).
   await page.getByRole('button', { name: `${ctx.sshUsername}@${ctx.sshHost}` }).first().click()
   await expect(page.getByRole('button', { name: 'AI agent' })).toBeVisible({ timeout: 10_000 })
 

@@ -7,9 +7,7 @@ import { SnippetsIcon } from './icons'
 const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
 
-// Saved, reusable commands - copied to the clipboard rather than sent directly into a
-// terminal (the nav rail and an active session tab are mutually exclusive in the current
-// layout). Same card-grid layout as the Hosts tab (see CardGrid), with create/edit in a modal.
+// Saved, reusable commands, copied to the clipboard rather than sent directly into a terminal.
 export function SnippetsSection() {
   return (
     <VaultGate>
@@ -66,10 +64,8 @@ function SnippetsList() {
               key={s.id}
               icon={<SnippetsIcon aria-hidden="true" className="h-5 w-5 text-slate-400" />}
               title={<span className="truncate font-medium text-slate-100">{s.snippet.name}</span>}
-              // The saved command is text you'd want to grab (there's even a Copy button for it) -
-              // opt just this string into selection + the native right-click menu, scoped to the
-              // span so the surrounding card and card grid stay non-selectable chrome like the
-              // host grid (same select-text + data-selectable-text marker; see index.css / #61).
+              // The saved command is text worth grabbing, so opt just this span into selection
+              // and the native right-click menu (see index.css / #61).
               subtitle={
                 <span data-selectable-text className="select-text font-mono" title={s.snippet.command}>
                   {s.snippet.command}

@@ -30,36 +30,14 @@ public sealed class UpdateElevationRequiredException(string tempPath, string exe
     public string ExePath { get; } = exePath;
 }
 
-/// <summary>
-/// Self-update: compares the SHA256 of the currently-running single-file executable
-/// against the matching asset in this repo's rolling "latest" GitHub Release (see
-/// .github/workflows/release.yml), and can download+swap+relaunch in place.
-///
-/// gwdevhub/slopterm is public, so both the metadata lookup and the asset download work
-/// unauthenticated. A GitHub token stays supported but is purely optional - it only raises
-/// GitHub's unauthenticated rate limit (see VaultService.GetGithubToken/SetGithubToken and
-/// Settings' "Updates" section).
-///
-/// Two API details worth keeping, verified end-to-end against the real repo/API: a call to
-/// /releases/tags/latest returns each asset's `digest` (sha256:&lt;hex&gt;, computed by GitHub
-/// itself on upload - no need to download an asset just to hash it), and the download uses
-/// GET /releases/assets/{id} with `Accept: application/octet-stream` rather than the asset's
-/// own `browser_download_url`, which is a redirect aimed at a browser session.
-///
-/// Desktop only. CheckAsync bails out before touching the network on Android, where updates
-/// come from Google Play instead - there's no single-file exe to hash or swap, no release
-/// asset for the platform, and a self-update would fight Play's own installer. This is what
-/// PRIVACY.md's "no update check on mobile" claim rests on, so keep the guard first.
-/// </summary>
+/// <summary>Self-update: hashes the running single-file exe, compares it against this repo's
+/// rolling "latest" GitHub Release, and can download+swap+relaunch. Desktop only.</summary>
 public sealed class UpdateService
 {
     private const string Repo = "gwdevhub/slopterm";
 
-    /// <summary>
-    /// Tiny text asset on the rolling "latest" release (written by release.yml) holding the
-    /// build's informational version - how CheckAsync learns the TARGET version, since the
-    /// rolling release's tag is always literally "latest" and carries no version information.
-    /// </summary>
+    /// <summary>Tiny text asset on the rolling "latest" release holding the build's
+    /// informational version - the rolling tag is literally "latest" and carries no version.</summary>
     private const string VersionStampAssetName = "slopterm-version.txt";
     private static readonly byte[] BundleHeaderSignature =
     [
@@ -79,11 +57,8 @@ public sealed class UpdateService
 
     public async Task<UpdateCheckResult> CheckAsync(string? githubToken, CancellationToken ct = default)
     {
-        // First, and before any network call: the Android head runs this same SloptermHost
-        // (see MainActivity) and the shared web UI checks for updates on mount, so without
-        // this the phone would reach out to api.github.com only to fail later at
-        // AssetNameForCurrentPlatform. Supported:false is the same shape a dev build returns -
-        // the UI already renders it as "no update dot", not as an error.
+        // First, before any network call: Android runs this same host and the shared web UI
+        // checks on mount, but updates come from Play. Supported:false renders as "no update dot".
         if (OperatingSystem.IsAndroid())
         {
             return new UpdateCheckResult(false, false, null, null, null, null, null, null,
@@ -142,12 +117,9 @@ public sealed class UpdateService
         return new UpdateCheckResult(true, updateAvailable, currentSha, latestSha, release?.TagName, currentVersion, latestVersion, asset.Id, null);
     }
 
-    /// <summary>
-    /// Downloads the given release asset, verifies its SHA256 against what CheckAsync
-    /// already reported (never apply an unverified binary), then replaces the running
-    /// executable in place. Does NOT restart the process itself - the caller (Program.cs)
-    /// does that once this returns, since only it knows how to cleanly stop Kestrel first.
-    /// </summary>
+    /// <summary>Downloads the asset, verifies its SHA256 against what CheckAsync reported,
+    /// then swaps the running exe in place. Does not restart - the caller does that. When the
+    /// install dir isn't writable, throws <see cref="UpdateElevationRequiredException"/>.</summary>
     public async Task ApplyAsync(long assetId, string expectedSha256Hex, string? githubToken, IProgress<UpdateProgress> progress, CancellationToken ct)
     {
         var exePath = CurrentExePath() ?? throw new InvalidOperationException("Not running as a published single-file build.");
@@ -222,12 +194,8 @@ public sealed class UpdateService
 
         progress.Report(new UpdateProgress("installing", 100));
 
-        // Renaming the running exe out of the way (rather than overwriting it directly)
-        // works even while it's the current process's own executing image - the OS only
-        // needs the open file handle, not the directory entry/name, to keep running it.
-        // Kept as ".old" rather than deleted immediately: if the new exe somehow fails to
-        // start, there's still a way to recover by hand. The *next* successful startup
-        // deletes it (see Program.cs).
+        // Renaming the running exe out of the way works even while it's the executing image.
+        // Kept as ".old" (not deleted) so a failed new exe can be recovered by hand.
         var backupPath = exePath + ".old";
         if (File.Exists(backupPath))
         {
@@ -334,10 +302,8 @@ public sealed class UpdateService
             return null;
         }
 
-        // IncludeAllContentForSelfExtract extracts managed assemblies before startup, so
-        // Assembly.Location is non-empty even for our genuine single-file releases. Inspect
-        // the apphost's bundle marker instead; an ordinary apphost has the same marker with a
-        // zero header offset, while dotnet publish fills in the real bundle header offset.
+        // IncludeAllContentForSelfExtract makes Assembly.Location non-empty even for genuine
+        // single-file releases, so inspect the apphost's bundle marker instead.
         return IsSingleFileBundle(path) ? path : null;
     }
 
@@ -381,23 +347,15 @@ public sealed class UpdateService
         }
     }
 
-    /// <summary>
-    /// The informational version stamped into the entry assembly at publish time from the
-    /// repo-root VERSION file (see server/Slopterm.Server.csproj) - "0.0.2-beta.2" for a
-    /// numbered build, "0.0.2-beta.2+abcdefg" for a rolling "latest" build. Null only when
-    /// the attribute is somehow absent; an unstamped build reports the SDK default "1.0.0".
-    /// </summary>
+    /// <summary>The informational version stamped at publish time from the repo-root VERSION
+    /// file (see Slopterm.Server.csproj).</summary>
     private static string? ComputeCurrentVersion() =>
         Assembly.GetEntryAssembly()?
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
             .InformationalVersion;
 
-    /// <summary>
-    /// Best-effort fetch of the rolling release's <see cref="VersionStampAssetName"/> stamp,
-    /// downloaded through the assets API (same endpoint shape ApplyAsync uses). Purely
-    /// cosmetic, so any failure - including an older rolling release that predates the stamp
-    /// asset - just yields null and the UI falls back to showing hashes.
-    /// </summary>
+    /// <summary>Best-effort fetch of the release's version stamp asset. Cosmetic only, so any
+    /// failure - including an older release without the asset - yields null.</summary>
     private static async Task<string?> TryDownloadVersionStampAsync(GithubRelease? release, string? githubToken, CancellationToken ct)
     {
         var stamp = release?.Assets?.FirstOrDefault(a => string.Equals(a.Name, VersionStampAssetName, StringComparison.OrdinalIgnoreCase));

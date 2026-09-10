@@ -4,29 +4,9 @@ using Slopterm.Server.VaultSync;
 namespace Slopterm.Tests;
 
 /// <summary>
-/// Two independent vaults - "the laptop" and "the phone" - converging through one remote.
-/// Each is handed its own vault directory directly. It used to flip the process-wide
-/// SLOPTERM_VAULT_DIR between constructing the two, which worked right up until anything else
-/// in the process also had a vault: the variable is shared, so which directory the next
-/// `new VaultService()` picked up depended on ordering nobody controlled.
-///
-/// Each device gets its OWN hybrid logical clock, with its own node name, reading a wall
-/// clock the FIXTURE controls. Both halves of that matter.
-///
-/// Separate clocks, because with one process-wide clock the two devices can never issue the
-/// same reading and so can never tie - which hides the tiebreak path entirely and couples
-/// their stamps in a way no real pair of devices is.
-///
-/// A controlled wall clock, because once they CAN tie, "the laptop edited after the phone"
-/// stops being true just by writing the two lines in that order: if both land in the same
-/// millisecond the winner is decided by node name, not by which line ran first. Against a
-/// real clock that made these tests fail roughly one run in six, always for the same
-/// non-reason - the machine was fast enough that two edits shared a millisecond.
-///
-/// So the clock advances a millisecond on every read. Program order is then exactly clock
-/// order, for both devices, which is what a test that writes "the phone edits, then the
-/// laptop edits" actually means. <see cref="Freeze"/> opts out, for the one test that is
-/// specifically about what happens when two devices genuinely tie.
+/// Two independent vaults - "the laptop" and "the phone" - converging through one remote,
+/// each with its own directory, node name, and a fixture-controlled wall clock so program
+/// order is exactly clock order. <see cref="Freeze"/> opts into genuine ties.
 /// </summary>
 public sealed class TwoDeviceFixture : IDisposable
 {
@@ -41,9 +21,8 @@ public sealed class TwoDeviceFixture : IDisposable
         Phone = new Device(Path.Combine(_root, "phone"), remoteFactory, "phone000", Read);
     }
 
-    // Shared by both devices and advanced on every read, so anything either of them stamps is
-    // ordered by when the test asked for it. Not thread-safe on purpose: these tests await
-    // every sync, so there is only ever one caller.
+    // Shared by both devices and advanced on every read, so stamps are ordered by when the
+    // test asked for them. Not thread-safe on purpose: these tests await every sync.
     private DateTimeOffset Read()
     {
         if (!_frozen)

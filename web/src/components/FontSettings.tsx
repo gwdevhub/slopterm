@@ -2,11 +2,7 @@ import { useRef, useState, type ChangeEvent } from 'react'
 import type { FontConfig } from '../lib/appearance'
 
 // A self-contained editor for a single font "slot" - family, weight, size, letter-spacing and
-// line-height, with a live preview. The app uses more than one font (the interface sans and the
-// terminal mono), so this is deliberately generic: the Appearance screen renders one per slot,
-// passing the slot's presets, size range and preview sample. It only edits a FontConfig and
-// reports changes up via onChange - registering custom fonts and pushing values into CSS/xterm
-// is the caller's job (see lib/appearance.ts).
+// line-height, with a live preview. It only edits a FontConfig; applying it is the caller's job.
 
 export interface FontPreset {
   label: string

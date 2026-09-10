@@ -6,58 +6,8 @@ using Slopterm.Server;
 
 namespace Slopterm.Mobile;
 
-// Keeps the app's process running normally for a few minutes after the user switches away,
-// so the SSH connections it holds stay up. It exists only while both halves of that sentence
-// hold: there is something live to keep, and the app is genuinely in the background.
-//
-// The problem this solves is not battery policy, which is why setting slopterm to
-// "unrestricted" background energy usage doesn't help: an app with no visible Activity and no
-// service has no foreground component at all, so it drops to the cached-app state, and from
-// Android 12 the platform freezes cached processes outright (SIGSTOP on every thread) within
-// seconds. Frozen means Kestrel, SSH.NET's transport reader and the shell pumps all stop dead
-// - nobody answers the server's keepalives, nobody drains the sockets - and the connections
-// are reaped from the other end. The battery allowlist governs Doze and App Standby buckets;
-// it has no bearing on the freezer or on how eagerly lmkd kills the process, both of which key
-// on process state. A foreground service is the supported way to change process state, and
-// this is the smallest one that does the job: it exists only while it's needed, and it stops
-// itself.
-//
-// The notification is the visible cost of that, and it should only ever be seen when it's
-// buying something: connections open, app not on screen. Neither condition can be settled at
-// the moment the service starts. Connections are checked by MainActivity before it starts us
-// at all and re-checked below as they come and go; being in the background can't be checked
-// yet at all, because the only hook allowed to start a foreground service (OnPause) fires
-// before the app is one - a dialog or a picker pauses the Activity exactly the same way. So
-// the promotion here is provisional: it happens immediately, because Android requires it
-// within about five seconds of the start, and is withdrawn again if OnStop doesn't follow
-// shortly after (see WaitForBackgroundAsync). On Android 12+, which holds a foreground-service
-// notification back for ten seconds before drawing it, that withdrawal beats the draw and
-// nothing is ever shown.
-//
-// What it cannot be is absent: an app cannot hold a foreground service without a notification,
-// so the only thing actually on the table is how loudly it's presented - which is what the two
-// channels below are for. A client that appears to keep connections open with no notification
-// at all is either doing what the quiet channel here does (Min importance: silent, sorted to
-// the bottom, collapsed out of the shade, no badge) or simply running without the
-// POST_NOTIFICATIONS permission, which is the user's to grant or deny in the system settings
-// and costs nothing either way - the service still runs and the connections still survive.
-//
-// It is deliberately short-lived, and the cap below is what "keep connections open for a few
-// minutes in the background" actually means. Note that while this service is running the
-// WebView usually keeps its terminal WebSocket open too, so the backend's own five-minute
-// detach grace never even starts counting - that grace is for a socket that was lost, not for
-// an app that stepped away. The two mechanisms are complementary, not a handoff.
-//
-// When the cap expires the process goes back to being cached and is frozen as before; the
-// connections then rot as the far end times them out. That's the intended end of the window,
-// and it isn't silent: the session's reader sees the transport fail and reports it as a lost
-// connection, so the tab reconnects when the user returns instead of vanishing.
-//
-// Type: dataSync. A live SSH/SFTP channel is a data transfer, it's the standard type Google
-// Play accepts with no declaration form, and it's what the [Service] attribute can emit
-// directly. specialUse would need a hand-written <service> block (the attribute can't emit
-// the required <property> child element) plus a written Play justification; connectedDevice
-// is for Bluetooth/USB/companion hardware, not a host reachable over IP.
+// Keeps the process out of the cached/frozen state for a few minutes after the user switches
+// away so SSH connections survive; a provisional foreground service that stops itself (see WaitForBackgroundAsync).
 [Service(
     Name = "com.gwdevhub.slopterm.SessionKeepAliveService",
     Exported = false,
@@ -66,33 +16,21 @@ public sealed class SessionKeepAliveService : Service
 {
     private const int NotificationId = 2;
 
-    // Two channels rather than one reconfigured on the fly, because a channel's badge and
-    // importance are fixed at creation: the platform ignores both fields on a channel that
-    // already exists (and recreating a deleted id restores the old values), so the only way to
-    // honor the setting is to post on a different channel. The quiet one is the default and
-    // takes the importance all the way down to Min, which is as close to Termius' "no
-    // notification" as an app is allowed to get from the inside - Android still requires a
-    // notification for the foreground service that keeps the connections alive, but a Min
-    // channel is silent, sorted to the bottom, collapsed by the shade, and badges nothing.
+    // Two channels because a channel's badge/importance are fixed at creation; the quiet default
+    // takes importance to Min, the closest to "no notification" an app can get.
     private const string QuietChannelId = "slopterm_sessions_quiet";
     private const string BadgeChannelId = "slopterm_sessions_badge";
 
-    // Superseded by the pair above, which differ from it in badge/importance. Deleted on the
-    // way past so upgrading installs don't leave a dead entry in the app's notification
-    // settings - the user never chose it, so there's nothing of theirs to preserve.
+    // Superseded by the pair above; deleted so upgrading installs don't leave a dead entry.
     private const string LegacyChannelId = "slopterm_sessions_channel";
 
-    // The whole point of the exercise: how long connections survive the user switching apps.
-    // Bounded so a forgotten app can't hold a wake-worthy service (and a notification) all
-    // day; generous enough to cover looking something up elsewhere and coming back.
+    // How long connections survive the user switching apps; bounded so a forgotten app can't
+    // hold a wake-worthy service all day.
     private static readonly TimeSpan MaxLifetime = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(20);
 
-    // How long to wait for MainActivity.OnStop after the OnPause that started us, before
-    // concluding the app isn't going anywhere (see WaitForBackgroundAsync). Under the ten
-    // seconds Android 12+ defers a foreground-service notification by, so on those versions
-    // the notification of a service that gives up here is never drawn at all; comfortably
-    // over the sub-second OnPause -> OnStop gap of a real app switch.
+    // How long to wait for OnStop after the OnPause that started us; under the 10s Android 12+
+    // defers a notification by, and over a real app switch's sub-second gap.
     private static readonly TimeSpan BackgroundGrace = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan BackgroundPollInterval = TimeSpan.FromMilliseconds(250);
 
@@ -136,10 +74,8 @@ public sealed class SessionKeepAliveService : Service
             new Intent(this, typeof(MainActivity)).SetFlags(ActivityFlags.SingleTop),
             PendingIntentFlags.Immutable | PendingIntentFlags.UpdateCurrent);
 
-        // Off by default: this notification is a requirement of running in the foreground, not
-        // something the user asked to be told about, so it shouldn't also mark the launcher
-        // icon. Settings turns it back up for anyone who wants to see at a glance that
-        // connections are being held (see AppSettings.SessionNotificationBadge).
+        // Off by default: the notification is a foreground-service requirement, not something
+        // the user asked for (see AppSettings.SessionNotificationBadge).
         var badge = MainActivity.SessionNotificationBadgeEnabled;
 
         Notification.Builder builder;
@@ -171,10 +107,8 @@ public sealed class SessionKeepAliveService : Service
 #pragma warning restore CA1422
         }
 
-        // Called as statements rather than chained: every one of these returns
-        // Notification.Builder? in the bindings, so a fluent chain is a string of
-        // dereferences the compiler can't prove safe. They all mutate and return the same
-        // builder, so discarding the result costs nothing.
+        // Statements rather than a fluent chain: each call returns Notification.Builder? in the
+        // bindings, so chaining is a string of dereferences the compiler can't prove safe.
         builder.SetSmallIcon(Resource.Drawable.ic_launcher);
         builder.SetContentTitle("slopterm");
         builder.SetContentText(text);
@@ -193,15 +127,8 @@ public sealed class SessionKeepAliveService : Service
         }
     }
 
-    // Stops as soon as either of the two conditions that justify this service stops holding -
-    // the app came back to the foreground, or there's nothing left to keep alive - and in any
-    // case at the hard cap. The count can reach zero while backgrounded - a shell exits on its
-    // own, a forward fails - and the notification goes away as soon as it does rather than
-    // sitting out the rest of the window.
-    //
-    // Note this never runs long enough to meet Android 15's six-hours-per-day dataSync budget,
-    // which is why Service.OnTimeout isn't implemented - the cap above is two orders of
-    // magnitude below it.
+    // Stops when the app returns, nothing is left to keep alive, or the hard cap is reached;
+    // never long enough to meet Android 15's six-hours-per-day dataSync budget, so OnTimeout is unused.
     private CancellationTokenSource StartSelfStopWatch()
     {
         var cts = new CancellationTokenSource();
@@ -248,22 +175,8 @@ public sealed class SessionKeepAliveService : Service
         return cts;
     }
 
-    // True once the app is actually in the background with something worth holding open, false
-    // if it turns out not to be going anywhere. Both conditions have to hold for this service
-    // to be justified, and only one of them is known when it starts.
-    //
-    // MainActivity has to start us from OnPause - past that point the platform refuses a
-    // foreground-service start - but OnPause is not "the app went to the background". It also
-    // fires for a dialog, a share sheet, our own document picker, the unfocused half of a
-    // split screen: the Activity is still on screen, the process is still held at visible
-    // importance, and no notification should be shown for any of them. OnStop is the event
-    // that means what we need, and it lands a beat later, so this waits for it.
-    //
-    // A real app switch gets there in well under a second. When nothing arrives inside the
-    // grace, the app is still up and this service is redundant - it stops, and on Android 12+
-    // (which sits on a foreground-service notification for ten seconds before drawing it) the
-    // user never sees anything at all. The other exit - the user coming straight back - is
-    // MainActivity.OnResume stopping the service outright, which cancels our token.
+    // True once the app is actually backgrounded with something to keep; false if it isn't
+    // going anywhere. OnPause can't tell (dialogs/pickers fire it too), so this waits for OnStop.
     private static async Task<bool> WaitForBackgroundAsync(CancellationToken token)
     {
         var giveUp = DateTimeOffset.UtcNow + BackgroundGrace;
@@ -292,9 +205,7 @@ public sealed class SessionKeepAliveService : Service
 
     public override void OnDestroy()
     {
-        // Cancelled but not disposed: the watchdog task holds this token, and disposing the
-        // source out from under it is the kind of teardown race that shows up as a crash on
-        // the way out of the app for no benefit at all.
+        // Cancelled but not disposed: the watchdog task holds this token.
         _stopWatch?.Cancel();
         _stopWatch = null;
         StopForeground(StopForegroundFlags.Remove);

@@ -13,10 +13,8 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
   sshPassword: string
 }
 
-// Unlike the port-forwarding section (whose live path needs AllowTcpForwarding, which the
-// shared e2e sshd has off), a scheduled job only needs an SSH exec channel - so this drives
-// the whole feature for real: create a job through the form, run it against the disposable
-// sshd, and assert its actual stdout comes back in the run history.
+// Unlike port-forwarding, a scheduled job only needs an SSH exec channel, so this drives the
+// whole feature: create, run against the disposable sshd, assert the real stdout comes back.
 async function seedHost(page: Page, name: string) {
   return page.evaluate(
     async ([hostName, address, port, username, password]) => {
@@ -41,9 +39,8 @@ async function openJobsSection(page: Page) {
   await gotoSection(page, 'Hosts')
   await ensureVaultUnlocked(page)
   await gotoSection(page, 'Scheduled Jobs')
-  // The section is the Hosts-style toolbar + card grid (see CardGrid) with no heading, so
-  // the "New job" button is what confirms it rendered. Explicit 10s like the suite's other
-  // post-navigation waits - a first section render on a cold start can miss the default 5s.
+  // No heading - Hosts-style toolbar + card grid (see CardGrid), so the "New job" button
+  // confirms it rendered; 10s like the suite's other post-navigation waits.
   await expect(page.getByRole('button', { name: 'New job' })).toBeVisible({ timeout: 10_000 })
 }
 
@@ -82,7 +79,6 @@ test('scheduled jobs: create a job, run it, and see its real output in the histo
   await expect(card.getByText('echo hello-from-slopterm-job')).toBeVisible()
   await expect(card.getByText(/Every 1h on jobs-e2e-host/)).toBeVisible()
 
-  // Run it for real against the disposable sshd, then read the run history back.
   await card.getByRole('button', { name: 'Run now' }).click()
   await card.getByRole('button', { name: 'History' }).click()
 

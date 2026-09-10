@@ -31,10 +31,8 @@ test('saves a key in the Keychain and reuses it from the shared connection form 
   // names and "has a key" flags, never key material.
   await expect(page.getByText('Stored, not shown')).toBeVisible()
 
-  // Reuse it from the "new host" form, which shares ConnectionForm with the Quick
-  // Connect modal (a third caller, triggered from the Hosts screen's own button). A host
-  // NAMES a key rather than copying it, so the same host resolves to whatever key each
-  // device happens to hold under that name.
+  // The "new host" form shares ConnectionForm with Quick Connect; a host NAMES a key rather
+  // than copying it, so it resolves to whatever key each device holds under that name.
   await gotoSection(page, 'Hosts')
   await page.click('button:has-text("New host")')
   await page.getByRole('radio', { name: 'Use a key named…' }).check()
@@ -44,9 +42,8 @@ test('saves a key in the Keychain and reuses it from the shared connection form 
   // No private-key textarea in this mode at all: there is nothing for the form to hold.
   await expect(page.locator('#privateKey')).toHaveCount(0)
 
-  // The "new host" form is a real modal now (HostModal), unlike the old inline side
-  // panel - it covers the whole page and blocks navigating elsewhere until closed, so
-  // abandoning it (never actually saving a host here) needs an explicit Escape first.
+  // The "new host" form is a real modal now (HostModal) that blocks navigating elsewhere
+  // until closed, so abandoning it (never saving a host here) needs an explicit Escape first.
   await page.keyboard.press('Escape')
   await gotoSection(page, 'Keychain')
   await page.click('button:has-text("Delete")')
@@ -66,9 +63,8 @@ test('a keychain entry is edited by replacement, never by revealing the key', as
   await expect(page.getByText('edit test key')).toBeVisible({ timeout: 10_000 })
   await expect(page.getByText('Stored, not shown · passphrase set')).toBeVisible()
 
-  // Edit shows the NAME and nothing else. The key and passphrase are deliberately empty
-  // with a "stored" placeholder - masking them is a guardrail against casual copying and
-  // shoulder-surfing, not a claim that the key is inaccessible to a determined user.
+  // Edit shows only the NAME; key and passphrase are deliberately empty with a "stored"
+  // placeholder - a guardrail against casual copying, not a claim of inaccessibility.
   await page.click('button:has-text("Edit")')
   await expect(page.locator('input[placeholder=Name]')).toHaveValue('edit test key')
   await expect(page.locator('#keychain-private-key')).toHaveValue('')
@@ -112,10 +108,8 @@ test('browses a key file and can opt in to saving it to the Keychain', async ({ 
   await page.getByLabel('Save this key to Keychain for reuse').check()
   await page.fill('input[placeholder="Key name"]', 'e2e browsed key')
 
-  // The "new host" form only ever saves to the vault - it never attempts a connection
-  // itself (that's a deliberate separate step, the card's own "SSH"/"SFTP" buttons) - so
-  // what this test cares about is that the opt-in Keychain save fires as part of that
-  // save, not that any connection happens.
+  // The form only saves to the vault, never connects (that's the card's SSH/SFTP buttons);
+  // what matters here is the opt-in Keychain save firing as part of that save.
   await page.fill('#name', 'e2e key browse host')
   await page.fill('#host', ctx.sshHost)
   await page.fill('#port', String(ctx.sshPort))

@@ -3,23 +3,16 @@ import { listRecentConnections, type SavedRecentConnection } from '../lib/api'
 import { HostCard } from './HostCard'
 
 interface RecentConnectionsProps {
-  // Bumped whenever a new ad hoc connection is remembered (Quick Connect submit, or
-  // reconnecting to an existing Recent) so this list re-fetches and picks up the change -
-  // there's no push channel from the backend, so a token-based refetch is the simplest fit.
+  // Bumped whenever a new ad hoc connection is remembered so this list re-fetches; there's
+  // no push channel from the backend.
   refreshToken: number
   onSsh: (recent: SavedRecentConnection) => void
   onSftp: (recent: SavedRecentConnection) => void
   isConnecting?: boolean
 }
 
-// Sits below the host card grid on the Hosts screen - unlike the old log-derived Recent
-// list (host/port/username only, see LogEntryRecord), these entries actually retain the
-// credential that was used (RecentConnectionRecord), so reconnecting is one click/
-// double-click away instead of needing to retype a password/key every time. Rendered with
-// the same HostCard as the grid above so Recent doesn't look like a different, lesser
-// feature. HostsSection is always vault-gated, but the fetch stays best-effort (like the
-// Keychain lookup in ConnectionForm) so a transient failure just means this section
-// renders nothing rather than blocking the rest of the page.
+// Sits below the host card grid: unlike the old log-derived list, these entries retain the
+// credential used, so reconnecting is one click away.
 export function RecentConnections({ refreshToken, onSsh, onSftp, isConnecting }: RecentConnectionsProps) {
   const [recents, setRecents] = useState<SavedRecentConnection[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)

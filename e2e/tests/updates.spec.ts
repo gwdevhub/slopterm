@@ -7,26 +7,16 @@ import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as { baseUrl: string }
 
-// The e2e harness runs the server via `dotnet run` (see global-setup.ts) against a debug
-// apphost, not a real published single-file exe - UpdateService.CheckAsync still hashes
-// and checks *something* real (Environment.ProcessPath resolves to that debug apphost),
-// which means this test's outcome depends on live network access to api.github.com and on
-// gwdevhub/slopterm's latest release - neither of which this suite controls or should
-// depend on for a deterministic pass/fail. So this only asserts the section renders and
-// reaches *some* terminal state, not which one - the actual download/swap/relaunch flow is
-// verified separately against a real published build and the real GitHub API/repo, see
-// AGENTS.md's Self-update section.
+// The debug apphost's update result depends on live GitHub state, so this only asserts the
+// section reaches *some* terminal state; the real download/swap flow is verified elsewhere.
 test('Settings shows the Updates section and reaches a terminal state', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Settings')
   await ensureVaultUnlocked(page)
 
   await expect(page.getByRole('heading', { name: 'Updates' })).toBeVisible({ timeout: 10_000 })
-  // The primary button starts disabled with "Checking…" while the initial check is in
-  // flight, then settles to an enabled "Check now" or "Update now" once it resolves -
-  // never clicked here (which live outcome shows up depends on live network/repo state,
-  // and clicking "Update now" would kick off a real, destructive apply against this dev
-  // server), just observed reaching one of those two labels.
+  // Never clicked: which outcome appears depends on live network/repo state, and "Update now"
+  // would kick off a real, destructive apply against this dev server.
   const button = page.getByRole('button', { name: /Checking…|Check now|Update now/ })
   await expect(button).toBeVisible({ timeout: 10_000 })
   await expect(button).toBeEnabled({ timeout: 15_000 })

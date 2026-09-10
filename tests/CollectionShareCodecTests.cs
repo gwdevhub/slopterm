@@ -43,8 +43,7 @@ public sealed class CollectionShareCodecTests
     }
 
     /// <summary>
-    /// Both formats decode to a list, so the join flow has exactly one code path whichever
-    /// the user happened to paste.
+    /// Both formats decode to a list, so the join flow has one code path whichever the user pasted.
     /// </summary>
     [Fact]
     public void CarriesItsFormatInThePrefix()

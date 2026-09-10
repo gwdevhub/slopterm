@@ -3,14 +3,8 @@ using System.Text.Json;
 namespace Slopterm.Server.VaultSync;
 
 /// <summary>
-/// Which kinds of record a collection carries. A scope maps one-to-one onto a vault
-/// subfolder and onto a remote records/{type}/ folder, so adding a syncable kind is one
-/// entry here plus whatever UI names it.
-///
-/// The three kinds that are deliberately absent - logs, open tabs and the GitHub token -
-/// are not "off by default", they have no scope at all: logs are append-only and noisy,
-/// open tabs describe one device's live session, and the GitHub token is a credential for
-/// something unrelated to any collection (see todo/webdav-sync.md's scope table).
+/// Which kinds of record a collection carries; a scope maps onto a vault subfolder and a remote
+/// records/{type}/ folder. Logs, open tabs and the GitHub token deliberately have no scope.
 /// </summary>
 public sealed record SyncScope(string Name, string Folder, bool DefaultOn, string Label, string? Warning = null);
 
@@ -49,16 +43,8 @@ public static class SyncScopes
 }
 
 /// <summary>
-/// collections/{cid}/collection.json - everything about one collection except its records:
-/// where it syncs, under which key, what it last did. Vault-encrypted at rest like any
-/// other record, because it carries both the remote password and the collection key.
-///
-/// Access control is the WebDAV server's, not this app's. Several people can each have
-/// their own account on the server pointed at one shared folder, or everyone can share a
-/// single account, or the folder can need no auth at all - slopterm neither knows nor cares.
-/// A read-only share simply answers 403 to a write, which surfaces as "this collection is
-/// read-only for you" rather than as a sync error loop. Revoking someone is done where their
-/// access actually lives: on the server.
+/// collections/{cid}/collection.json - everything about one collection except its records,
+/// vault-encrypted at rest. Access control belongs to the WebDAV server, not this app.
 /// </summary>
 public sealed class CollectionRecord
 {
@@ -68,18 +54,15 @@ public sealed class CollectionRecord
     // at a share) - it just never syncs until a URL is set.
     public string RemoteUrl { get; set; } = string.Empty;
 
-    // The WebDAV account this device uses. Two devices in the same collection may well use
-    // DIFFERENT accounts against the same folder; nothing here assumes otherwise. Both may
-    // also be empty, for a share that needs no authentication.
+    // Two devices in one collection may use DIFFERENT accounts (or none) against the same folder.
     public string? RemoteUsername { get; set; }
     public string? RemotePassword { get; set; }
 
     public List<string> Scopes { get; set; } = [.. SyncScopes.Defaults];
 
     /// <summary>
-    /// Base64 AES-256 key the records are encrypted under before they're uploaded, so the
-    /// server stores ciphertext it can't read. Independent of the vault key - see
-    /// CollectionCrypto - and shared with other devices by the collection's token.
+    /// Base64 AES-256 key records are encrypted under before upload. Independent of the vault key
+    /// and shared by the collection's token.
     /// </summary>
     public required string CollectionKey { get; set; }
 
@@ -97,10 +80,8 @@ public sealed class CollectionRecord
 }
 
 /// <summary>
-/// What this device knows about one record's last agreed state with the remote: the ETag
-/// it last saw (so a PROPFIND can skip unchanged records without downloading them) and the
-/// HLC it last pushed or pulled (so "changed locally since the last sync" is answerable
-/// without keeping a second copy of the record).
+/// One record's last agreed state with the remote: the ETag last seen and the HLC last pushed
+/// or pulled.
 /// </summary>
 public sealed class RecordSyncState
 {
@@ -109,8 +90,7 @@ public sealed class RecordSyncState
 }
 
 /// <summary>
-/// &lt;base&gt;/slopterm/v1/collection.json - the human-facing description of a share, so a
-/// person poking at the WebDAV folder can tell what it is. Deliberately carries no secrets.
+/// &lt;base&gt;/slopterm/v1/collection.json - the human-facing description of a share; no secrets.
 /// </summary>
 public sealed class RemoteCollectionInfo
 {
@@ -121,10 +101,8 @@ public sealed class RemoteCollectionInfo
 }
 
 /// <summary>
-/// One record as it travels: the same id/timestamp-outside-the-ciphertext shape the vault
-/// already uses on disk, plus the clock reading merging needs. The ciphertext is AES-GCM
-/// under the collection key, never the vault key - a no-password vault derives its key from
-/// a public seed, so anything leaving the device has to be encrypted under something else.
+/// One record as it travels; ciphertext is AES-GCM under the collection key, never the vault key
+/// (a no-password vault's key derives from a public seed).
 /// </summary>
 public sealed class SyncEnvelope
 {
@@ -137,9 +115,8 @@ public sealed class SyncEnvelope
 }
 
 /// <summary>
-/// A deletion, kept as its own tiny file so a device that was offline learns the record is
-/// gone rather than re-uploading its stale copy. Carries an HLC for exactly the same reason
-/// a record does: a tombstone only wins against an edit that happened before it.
+/// A deletion kept as its own file so an offline device learns the record is gone rather than
+/// re-uploading it. Carries an HLC: a tombstone only wins against an earlier edit.
 /// </summary>
 public sealed class SyncTombstone
 {
@@ -150,13 +127,8 @@ public sealed class SyncTombstone
 }
 
 /// <summary>
-/// The payload behind a "slopterm:collection:v1:" token - everything another device needs
-/// to join: where the share is, how to authenticate to it, and the key its records are
-/// encrypted under. The UI treats it exactly like a password, because that is what it is.
-///
-/// The WebDAV credentials are included so the common case (one paste, it works) needs no
-/// second step - but the receiving device can replace them with its own account, which is
-/// the point of the server owning access control rather than this app.
+/// The payload behind a "slopterm:collection:v1:" token: where the share is, how to authenticate
+/// and the key its records use. The UI treats it like a password; credentials can be replaced.
 /// </summary>
 public sealed class CollectionInviteToken
 {
@@ -170,10 +142,7 @@ public sealed class CollectionInviteToken
     public List<string> Scopes { get; set; } = [];
 }
 
-/// <summary>
-/// The payload behind "slopterm:sync-config:v1:" - every collection at once, so setting up
-/// a new device is one paste rather than one token per collection.
-/// </summary>
+/// <summary>The payload behind "slopterm:sync-config:v1:" - every collection at once.</summary>
 public sealed class SyncConfigurationToken
 {
     public int V { get; set; } = 1;
@@ -181,9 +150,8 @@ public sealed class SyncConfigurationToken
 }
 
 /// <summary>
-/// Where a host's named credential actually resolved on THIS device, so the card can show
-/// it. Source is one of "local", "collection", "other-collection", "ssh-config" or
-/// "none" - a host must never silently connect with a different key than the card claims.
+/// Where a host's named credential resolved on THIS device. Source is one of "local",
+/// "collection", "other-collection", "ssh-config" or "none".
 /// </summary>
 public sealed record CredentialResolution(string Source, string? Detail, bool Resolved);
 

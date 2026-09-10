@@ -15,11 +15,8 @@ using Slopterm.Server;
 
 // SSH to remote hosts needs the network; the WebView also talks to our own loopback Kestrel.
 [assembly: UsesPermission(Manifest.Permission.Internet)]
-// Lets SessionKeepAliveService hold the process out of the cached (and therefore frozen)
-// state for a few minutes after the user switches away, so open connections survive it.
-// FOREGROUND_SERVICE_DATA_SYNC is mandatory from Android 14 for the type that service
-// declares - without it the platform refuses the promotion outright. Spelled out as strings
-// rather than via Manifest.Permission constants that only exist in newer bindings.
+// FOREGROUND_SERVICE_DATA_SYNC is mandatory from Android 14 for the type SessionKeepAliveService
+// declares; spelled as strings rather than Manifest.Permission constants absent from older bindings.
 [assembly: UsesPermission("android.permission.FOREGROUND_SERVICE")]
 [assembly: UsesPermission("android.permission.FOREGROUND_SERVICE_DATA_SYNC")]
 // From Android 13 a notification isn't shown without this, and a foreground service must
@@ -28,16 +25,8 @@ using Slopterm.Server;
 
 namespace Slopterm.Mobile;
 
-// The Android head. It hosts the identical slopterm backend (SloptermHost, shared with the
-// desktop app via Slopterm.Core) in-process and shows its web UI in a WebView - the phone
-// equivalent of the desktop Photino window. The backend is a normal loopback Kestrel server,
-// so SSH.NET gets the real TCP sockets it needs (unlike a browser-sandboxed WASM build - see
-// AGENTS.md's Mobile section for why that route was rejected).
-// ConfigurationChanges: handle rotation, dark-mode toggles and window resizes in-place rather
-// than letting the framework destroy and recreate the Activity. A recreation would tear down
-// the WebView (and with it every terminal WebSocket) and re-enter OnCreate - which, before the
-// static host below, also started a second Kestrel on a fallback port. Users experience that
-// as "rotating my phone killed my connections", the same complaint as backgrounding.
+// ConfigurationChanges: handle rotation/dark-mode/resize in-place; a recreation would tear down
+// the WebView and every terminal WebSocket, and re-enter OnCreate.
 [Activity(
     Label = "slopterm",
     MainLauncher = true,
@@ -50,10 +39,8 @@ public class MainActivity : Activity
     private const int RequestCreateDocument = 1002;
     private const int RequestPostNotifications = 1003;
 
-    // The backend outlives any one Activity instance: it owns the live SSH sessions, and
-    // starting it twice would bind a second Kestrel. Static (rather than a guard inside
-    // SloptermHost.Start) so the desktop head, which legitimately calls Start once per
-    // process, is left exactly as it was.
+    // The backend outlives any one Activity: it owns the live sessions, and starting it twice
+    // would bind a second Kestrel. Static so the desktop head, which calls Start once per process, is unaffected.
     private static readonly object HostLock = new();
     internal static SloptermHostContext? HostContext { get; private set; }
 
@@ -75,18 +62,15 @@ public class MainActivity : Activity
         base.OnCreate(savedInstanceState);
         CrashLogger.Install();
 
-        // Draw edge-to-edge AND make the framework dispatch the resulting window insets to our
-        // views. Without this explicit opt-in the inset callback below isn't reliably delivered,
-        // which is why the first attempt left the app's top bar under the status bar.
+        // Draw edge-to-edge and opt into framework dispatch of window insets; without this the
+        // inset callback below isn't reliably delivered.
         if (OperatingSystem.IsAndroidVersionAtLeast(30))
         {
             Window?.SetDecorFitsSystemWindows(false);
         }
 
-        // Resize (never pan) for the keyboard. On API 30+ with SetDecorFitsSystemWindows(false)
-        // the framework doesn't resize the window at all and reports the keyboard as an inset
-        // instead - which is what the listener below applies - but this is still what makes
-        // older devices shrink the window rather than sliding it up out of the status bar.
+        // Resize (never pan) for the keyboard; on API 30+ the framework reports it as an inset
+        // instead, but this makes older devices shrink rather than slide the window.
         Window?.SetSoftInputMode(SoftInput.AdjustResize);
 
         var webView = new TerminalWebView(this);
@@ -96,18 +80,13 @@ public class MainActivity : Activity
         webView.Settings.AllowFileAccess = true;
         // Keep navigation inside the WebView instead of bouncing out to a browser.
         webView.SetWebViewClient(new WebViewClient());
-        // A plain WebView ignores <input type=file> and blob downloads. The chrome client wires
-        // file inputs (Browse / Import backup) to the Android document picker; the JS bridge
-        // gives Export a native "save file" dialog (see the web side's androidBridge helper),
-        // since a WebView can't turn a blob into a download on its own.
+        // A plain WebView ignores <input type=file> and blob downloads: the chrome client wires
+        // file inputs to the document picker, the JS bridge gives Export a native save dialog.
         webView.SetWebChromeClient(new FileChooserChromeClient(this));
         webView.AddJavascriptInterface(new SaveFileBridge(this), "SloptermAndroid");
 
-        // Put the WebView inside a container and inset the *container*, not the WebView. Some
-        // WebView builds ignore their own padding for web-content layout, but a FrameLayout
-        // always lays its child out within its padding, so this reliably shrinks the WebView's
-        // bounds into the safe area (below the status bar, above the nav bar, clear of any
-        // cutout). The container's dark background fills the inset strips so they match the UI.
+        // Inset a container, not the WebView: some WebView builds ignore their own padding, but
+        // a FrameLayout lays its child within its padding, reliably shrinking into the safe area.
         var root = new FrameLayout(this);
         root.SetBackgroundColor(Color.ParseColor("#0f172b"));
         root.AddView(webView, new FrameLayout.LayoutParams(
@@ -117,10 +96,8 @@ public class MainActivity : Activity
 
         RequestNotificationPermissionIfNeeded();
 
-        // Start the backend off the UI thread: SloptermHost.Start does vault work (Argon2 key
-        // derivation) that's too heavy for OnCreate, then load the UI once it's listening.
-        // Reuses the already-running host if this Activity is a recreation - the sessions it
-        // holds are the thing we're trying not to lose.
+        // Start the backend off the UI thread (Argon2 key derivation is too heavy for OnCreate);
+        // reuse the running host on recreation so its sessions aren't lost.
         Task.Run(() =>
         {
             SloptermHostContext host;
@@ -129,17 +106,15 @@ public class MainActivity : Activity
                 host = HostContext ??= SloptermHost.Start([]);
             }
 
-            // Auto-start rules come up as part of Start, so this is the first chance to know
-            // whether there are forwards to keep alive.
+            // Auto-start rules come up as part of Start; first chance to know if forwards are live.
             RefreshForwardCount();
             RefreshSessionNotificationBadge();
             RunOnUiThread(() => webView.LoadUrl(host.LaunchUrl));
         });
     }
 
-    // Asked for once, on first launch. Declining costs only the visibility of the keep-alive
-    // service's notification - the service itself still runs and the connections are still
-    // held.
+    // Asked for once, on first launch; declining only hides the keep-alive notification, not
+    // the service.
     private void RequestNotificationPermissionIfNeeded()
     {
         if (!OperatingSystem.IsAndroidVersionAtLeast(33))
@@ -162,16 +137,8 @@ public class MainActivity : Activity
         }
     }
 
-    // Whether the Activity has actually left the screen. OnStop - not OnPause - is what "the
-    // app is in the background" means here: it's the point at which nothing of ours is visible
-    // any more, which is also the point at which the platform is free to treat the process as
-    // cached and freeze it. A merely paused Activity (a dialog or a share sheet over the top,
-    // the unfocused half of a split screen) is still visible, so the process is still held at
-    // visible importance and needs no service at all.
-    //
-    // Static and volatile because SessionKeepAliveService's watchdog reads it from its own
-    // background thread; false to start with, since the process is only ever brought up by the
-    // Activity launching.
+    // Whether the Activity has left the screen: OnStop, not OnPause - a paused Activity (dialog,
+    // share sheet, split screen) is still visible. Static/volatile: the watchdog reads it off-thread.
     private static volatile bool _backgrounded;
 
     internal static bool IsBackgrounded => _backgrounded;
@@ -188,23 +155,8 @@ public class MainActivity : Activity
         _backgrounded = true;
     }
 
-    // Going to the background is where connections used to die: with no foreground component
-    // the process is frozen within seconds and every session goes with it. Promote to a
-    // foreground service on the way out so the backend keeps running (see
-    // SessionKeepAliveService, which stops itself once the connections are gone or the few
-    // minutes are up), and drop it again the moment the user is back.
-    //
-    // OnPause, not OnStop: from Android 12 an app can't start a foreground service once it's
-    // in the background, and OnPause still runs while the Activity is on screen. This is the
-    // ONLY hook that can start it, which is why it can't tell yet whether the app is actually
-    // leaving - something merely covering it (our own document picker, a permission dialog)
-    // pauses it exactly the same way, and skipping the start there wouldn't defer it, it would
-    // cancel it outright for however long the user spends in that picker.
-    //
-    // So the start here is provisional: the service comes up, but it only stays up if OnStop
-    // follows within a few seconds. If the Activity is still on screen after that - or comes
-    // back first, which OnResume below handles - the service stops again before its
-    // notification is ever shown. See SessionKeepAliveService.WaitForBackgroundAsync.
+    // Promote to a foreground service on the way out so the process isn't frozen; only OnPause
+    // can start one and can't yet tell if the app is leaving, so the start is provisional (see WaitForBackgroundAsync).
     protected override void OnPause()
     {
         base.OnPause();
@@ -228,9 +180,7 @@ public class MainActivity : Activity
         }
         catch (Java.Lang.Exception)
         {
-            // The platform refused the start (a background-start restriction). Nothing to do
-            // but let the sessions take their chances - failing here must not crash the app
-            // on its way out.
+            // Platform refused the start (background-start restriction); must not crash the app.
         }
     }
 
@@ -249,21 +199,13 @@ public class MainActivity : Activity
         }
     }
 
-    // Port forwards, counted the last time RefreshForwardCount ran. Cached rather than read
-    // on demand because ForwardingService.GetStatus takes a lock its monitor loop holds
-    // across blocking SSH work (connecting, disconnecting, starting a remote forward - up to
-    // the 10s connect timeout), and the two places that need this number are the worst
-    // possible threads to block: OnPause, mid-transition on the UI thread, and the keep-alive
-    // service's OnStartCommand, which Android kills the app for not returning within ~5s.
+    // Port forwards, counted the last time RefreshForwardCount ran. Cached because GetStatus
+    // takes a lock held across blocking SSH work, and the readers (OnPause, OnStartCommand) must not block.
     private static volatile int _forwardCount;
 
     /// <summary>
-    /// Everything the backend is holding open that dies if this process is frozen: terminal
-    /// shells, SFTP channels, and port forwards. Forwards are counted because they're the one
-    /// thing here that can exist with no tab at all - a host with auto-start rules brings up
-    /// its own SSH client at launch (see ForwardingService), so a user whose whole use of the
-    /// app is a background tunnel would otherwise get no keep-alive at all. Cheap and
-    /// non-blocking: two dictionary counts and a cached int.
+    /// Everything the backend holds that dies if the process is frozen: shells, SFTP channels,
+    /// and port forwards (which can exist with no tab via auto-start rules). Cheap and non-blocking.
     /// </summary>
     internal static int LiveConnectionCount()
     {
@@ -276,10 +218,8 @@ public class MainActivity : Activity
         return host.Sessions.Count + host.SftpSessions.Count + _forwardCount;
     }
 
-    // Refreshes the cached forward count off the UI thread. Called whenever the app comes
-    // forward and from the keep-alive service's own background poll, so the value OnPause
-    // reads is at most a few seconds old - fine for a decision about whether to hold the
-    // process up for the next few minutes.
+    // Refreshes the cached forward count off the UI thread; at most a few seconds stale, fine
+    // for the keep-alive decision.
     internal static void RefreshForwardCount()
     {
         var host = HostContext;
@@ -303,18 +243,13 @@ public class MainActivity : Activity
 
     private static bool HasLiveConnections() => LiveConnectionCount() > 0;
 
-    // AppSettings.SessionNotificationBadge as of the last refresh. Cached for the same reason
-    // as _forwardCount: the keep-alive service reads it inside OnStartCommand, which Android
-    // kills the app for not returning promptly, and GetSettings() is a file read + JSON parse
-    // that can also throw on a corrupt settings.json.
+    // AppSettings.SessionNotificationBadge as of the last refresh; cached for the same reason
+    // as _forwardCount, since GetSettings() is a file read that can throw.
     private static volatile bool _sessionNotificationBadge;
 
     internal static bool SessionNotificationBadgeEnabled => _sessionNotificationBadge;
 
     // Refreshes that cache off the UI thread, on the same two occasions as the forward count.
-    // The setting can only be changed from the app's own Settings page, which means the app is
-    // in the foreground and OnResume has either already run or is about to - so a value read
-    // from the last visit is never stale by the time it matters.
     internal static void RefreshSessionNotificationBadge()
     {
         var host = HostContext;
@@ -331,15 +266,12 @@ public class MainActivity : Activity
             }
             catch (Exception)
             {
-                // Best-effort, exactly like the forward count: an unreadable settings.json
-                // leaves the previous value rather than taking down the app over a preference.
+                // Best-effort: an unreadable settings.json leaves the previous value.
             }
         });
     }
 
-    // Called from the JS bridge (any thread) to save bytes the web app produced (e.g. a vault
-    // backup) - opens the system "create document" dialog so the user picks the destination,
-    // then OnActivityResult writes the bytes to the chosen location.
+    // Called from the JS bridge to save bytes the web app produced; OnActivityResult writes them.
     internal void PromptSaveFile(byte[] bytes, string fileName, string mimeType)
     {
         _pendingSaveBytes = bytes;
@@ -413,8 +345,7 @@ public class MainActivity : Activity
         }
     }
 
-    // Exposed to the web app as window.SloptermAndroid.saveFile(base64, name, mime). Used by the
-    // Export backup flow, which can't do a blob download inside a WebView.
+    // Exposed to the web app as window.SloptermAndroid.saveFile(...) for the Export backup flow.
     private sealed class SaveFileBridge : Java.Lang.Object
     {
         private readonly MainActivity _activity;
@@ -438,14 +369,8 @@ public class MainActivity : Activity
             return _activity.GetKeyboardHeight();
         }
 
-        // Called by the web keyboard toolbar (see KeyboardToolbar.tsx's usePressProps) right
-        // before it acts on a button press, so whatever word the IME is still holding
-        // uncommitted lands in the shell before the button's own bytes do, rather than being
-        // torn down and lost outright. Deliberately fire-and-forget: this call returning only
-        // means the UI thread has been asked to commit, not that the page has actually
-        // processed it - the ordering guarantee that used to be attempted here by blocking the
-        // bridge thread has moved entirely to the JS side (see finishAndroidComposing() in
-        // androidBridge.ts), which waits for the real compositionend DOM event instead.
+        // Called by the web toolbar right before it acts, so uncommitted IME text lands in the
+        // shell first. Fire-and-forget; the ordering guarantee lives on the JS side (androidBridge.ts).
         [JavascriptInterface]
         [Export("finishComposing")]
         public void FinishComposing()
@@ -453,13 +378,8 @@ public class MainActivity : Activity
             _activity.RunOnUiThread(() => _activity._webView?.FinishComposingText());
         }
 
-        // Called when the web app opens a panel of its own that the on-screen keyboard would
-        // otherwise cover (the toolbar's "More keys" and snippet panels - see KeyboardToolbar).
-        // The page can't do this itself: blurring is the only lever JavaScript has over the IME,
-        // and the toolbar's whole design is built on *not* moving focus off xterm's textarea
-        // (see usePressProps), so the keyboard simply stayed up over the panel that was just
-        // opened. Hiding it natively leaves focus exactly where it was, so typing carries on
-        // when the keyboard comes back.
+        // Called when the web app opens a panel the keyboard would cover; hiding it natively
+        // leaves focus in place, which JS blurring couldn't.
         [JavascriptInterface]
         [Export("hideKeyboard")]
         public void HideKeyboard()
@@ -482,15 +402,8 @@ public class MainActivity : Activity
         imm?.HideSoftInputFromWindow(token, HideSoftInputFlags.None);
     }
 
-    // The IME can go away without the page ever hearing about it - the system back gesture and
-    // a keyboard's own "hide" chevron both dismiss it without blurring whatever was focused, so
-    // xterm's hidden textarea (or any input) stays the DOM's activeElement. WebView then
-    // restores focus to that same element on the very next touch anywhere in it - a toolbar
-    // button included, even though its own pointerdown handler cancels the DOM-level default
-    // specifically to avoid taking focus (see usePressProps in KeyboardToolbar.tsx) - and
-    // Chromium reopens the IME as part of that restore. Blurring here, right as the keyboard
-    // closes, leaves nothing for that restore to reattach to; tapping the terminal itself still
-    // focuses it and brings the keyboard back on purpose.
+    // The IME can dismiss without blurring (back gesture, "hide" chevron); WebView then restores
+    // focus on the next touch and reopens it, so blur the active element as the keyboard closes.
     private void OnImeVisibilityChanged(bool imeVisible)
     {
         if (_imeWasVisible && !imeVisible)
@@ -513,24 +426,8 @@ public class MainActivity : Activity
         return 0;
     }
 
-    // A WebView that tells the IME this is a terminal, not a message box. Gboard (and every
-    // other keyboard) otherwise shows its suggestion/emoji strip above the keys - useless for
-    // shell input, and it steals the row the web app's own key toolbar needs - and feeds every
-    // keystroke into its personalized dictionary. TextFlagNoSuggestions is exactly the flag
-    // for this: it turns the strip and autocorrect off without also touching composing, unlike
-    // the TextVariationVisiblePassword this used to also carry.
-    //
-    // Composing is deliberately left on now (previously disabled here). A keyboard in normal
-    // text mode holds the word being typed in a *composing region*, and while it's live xterm.js
-    // renders it itself right at the terminal cursor (see the .composition-view class it ships,
-    // used for exactly this) - which is what typing actually looked instantaneous from, not the
-    // shell echoing it back over the WebSocket. Turning composing off (the previous fix here)
-    // silenced that local preview along with it, and every keystroke started waiting on a real
-    // network round trip to appear at all. The bug composing off was actually fixing - the shell
-    // never receiving "-al" because it was still uncommitted when the toolbar's Left arrow tore
-    // the composition down - is fixed directly instead: SaveFileBridge.FinishComposing (called
-    // from the web toolbar right before it acts, see KeyboardToolbar.tsx) commits whatever's
-    // still composing into the shell first, so the toolbar's own bytes never race ahead of it.
+    // Tells the IME this is a terminal: TextFlagNoSuggestions turns off suggestion strips and
+    // autocorrect. Composing stays on so xterm renders the composing region locally (see FinishComposing).
     private sealed class TerminalWebView : WebView
     {
         private IInputConnection? _connection;
@@ -548,14 +445,12 @@ public class MainActivity : Activity
             return _connection;
         }
 
-        // Commits any text the IME is still composing, as if the user had finished typing it
-        // normally - must run on the UI thread, same as the InputConnection it's calling into.
+        // Commits any text the IME is still composing; must run on the UI thread.
         public void FinishComposingText() => _connection?.FinishComposingText();
     }
 
-    // Insets the view by the space the system bars + any display cutout occupy, detected at
-    // runtime so it's correct on any device/orientation (notch, punch-hole, gesture vs 3-button
-    // nav, landscape) rather than hard-coded.
+    // Insets the view by the system bars + display cutout, detected at runtime so it's correct
+    // on any device/orientation rather than hard-coded.
     private sealed class SafeAreaInsetsListener : Java.Lang.Object, View.IOnApplyWindowInsetsListener
     {
         private readonly Action<bool> _onImeVisibilityChanged;
@@ -570,14 +465,8 @@ public class MainActivity : Activity
             if (OperatingSystem.IsAndroidVersionAtLeast(30))
             {
                 var bars = insets.GetInsets(WindowInsets.Type.SystemBars() | WindowInsets.Type.DisplayCutout());
-                // The keyboard is an inset too, and drawing edge-to-edge means nothing else
-                // accounts for it: without this the WebView keeps its full height and the
-                // keyboard is simply painted over the bottom of the page, burying the terminal's
-                // own key toolbar. Insetting by it shrinks the WebView to the visible area, so
-                // the toolbar ends up directly above the keyboard - and Chromium's
-                // visualViewport shrinks with it, which is what the web side keys off (see
-                // useVisualViewportHeight). Max, not sum: while the keyboard is up it covers the
-                // nav bar's strip anyway.
+                // Inset by the IME too: edge-to-edge means the keyboard would otherwise paint
+                // over the page. Max, not sum - the keyboard covers the nav bar strip anyway.
                 var ime = insets.GetInsets(WindowInsets.Type.Ime());
                 _onImeVisibilityChanged(ime.Bottom > 0);
                 view.SetPadding(bars.Left, bars.Top, bars.Right, Math.Max(bars.Bottom, ime.Bottom));

@@ -22,9 +22,7 @@ const inputClasses =
 const labelClasses = 'mb-1 block text-xs font-medium text-slate-400'
 
 // One-way local -> remote folder sync, tunnelled through a saved host over SFTP (see the
-// backend SyncService). Watches the local folder and mirrors every create/change/rename/
-// delete under the remote folder; remote-side changes are NOT picked up (SFTP has no push/
-// notify - see SyncService's doc comment). Same card-grid layout as Port Forwarding.
+// backend SyncService). Remote-side changes are not picked up (SFTP has no push/notify).
 export function SyncSection() {
   return (
     <VaultGate>

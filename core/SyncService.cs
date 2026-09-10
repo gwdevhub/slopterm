@@ -7,25 +7,13 @@ namespace Slopterm.Server;
 /// <summary>Per-rule sync state reported to the UI.</summary>
 public sealed record SyncStatus(string RuleId, string HostId, string State, string? Error, DateTimeOffset? LastSyncUtc);
 
-/// <summary>
-/// Owns folder sync rules. Each rule gets its own dedicated background worker: a retrying
-/// SftpClient connection to the rule's host, plus (depending on Direction) a
-/// FileSystemWatcher on the local folder to push local changes out and/or a periodic remote
-/// directory listing to pull remote changes in - SFTP has no push/notify, so the remote side
-/// can only ever be polled, never truly watched. A file that changes on both sides between
-/// passes in "twoWay" mode is resolved by whichever side's modified time is newer - simple
-/// last-writer-wins, not real conflict/version handling.
-///
-/// Same "outlives the tab, AutoStart rules come up at launch" shape as ForwardingService,
-/// and the same monitor-loop lesson learned there: every iteration is guarded so a single
-/// unexpected failure (including SSH.NET's IsConnected throwing once a session has died) can
-/// never permanently end the retry loop.
-/// </summary>
+/// <summary>Owns folder sync rules - one background worker each: a retrying SftpClient plus
+/// a local FileSystemWatcher and/or a periodic remote poll (SFTP has no push/notify).</summary>
 public sealed class SyncService : IDisposable
 {
     private readonly VaultService _vault;
     private readonly object _lock = new();
-    private readonly Dictionary<string, RuleSync> _rules = new(); // key: ruleId
+    private readonly Dictionary<string, RuleSync> _rules = new();
     private bool _disposed;
 
     public SyncService(VaultService vault) => _vault = vault;
@@ -170,9 +158,8 @@ public sealed class SyncService : IDisposable
         // Not volatile - DateTimeOffset? isn't a valid volatile field type. Status-display
         // only, so a reader briefly seeing a slightly stale value is harmless.
         private DateTimeOffset? _lastSyncUtc;
-        // Snapshot from the last remote poll (remoteToLocal/twoWay only) - diffed against the
-        // next poll's listing to notice files removed on the remote side, the same way a
-        // Deleted FileSystemWatcher event does for the local side.
+        // Snapshot from the last remote poll (pull modes only) - diffed against the next
+        // listing to notice remote deletions, like a Deleted event does for the local side.
         private Dictionary<string, (long Size, DateTime ModifiedUtc)> _knownRemoteEntries = new();
         private DateTimeOffset _nextRemotePollUtc;
 
@@ -200,10 +187,8 @@ public sealed class SyncService : IDisposable
                 }
                 catch (Exception ex) when (!token.IsCancellationRequested)
                 {
-                    // Anything unexpected here (a missing local folder, a dropped connection
-                    // surfacing through some other call, IsConnected itself throwing) must
-                    // never end this loop - see ForwardingService's own history with exactly
-                    // this failure mode.
+                    // Anything unexpected must never end this loop - see ForwardingService's
+                    // history with exactly this failure mode.
                     SetError(ex.Message);
                     TearDown();
                     Wait(token, backoff);
@@ -273,11 +258,8 @@ public sealed class SyncService : IDisposable
             _wake.Reset();
         }
 
-        // Local folder is the source when pushing (must already exist - an auto-created empty
-        // folder would just silently sync nothing, masking a typo) and the destination when
-        // only pulling (created on demand, same as EnsureRemoteDir does for a push destination).
-        // Remote folder is the mirror image: destination when pushing (created on demand),
-        // source when only pulling (must already exist - nothing to pull from otherwise).
+        // Local folder must already exist when pushing (an auto-created empty folder would
+        // sync nothing and mask a typo); the remote folder is the mirror image.
         private void EnsureRoots()
         {
             if (PushLocal && !Directory.Exists(rule.LocalPath))
@@ -314,11 +296,8 @@ public sealed class SyncService : IDisposable
             }
         }
 
-        // Remote -> local: SFTP has no push/notify, so this is a poll, not a watch - list the
-        // whole remote tree, download anything new/changed, and (if DeleteExtraneous) remove
-        // local files whose relative path was in the previous poll's listing but isn't in this
-        // one. The very first poll after (re)connect never deletes anything (nothing to diff
-        // against yet), matching how the local watcher can't see deletions predating its start.
+        // Remote -> local: SFTP has no push/notify, so this is a poll - list the whole tree and
+        // download anything new/changed; DeleteExtraneous removes local files gone remote-side.
         private void PollRemote(CancellationToken token)
         {
             var remoteRoot = NormalizedRemoteRoot();
@@ -392,7 +371,7 @@ public sealed class SyncService : IDisposable
                 var localInfo = new FileInfo(localPath);
                 if (localInfo.Length == remoteSize && localInfo.LastWriteTimeUtc >= remoteModifiedUtc)
                 {
-                    return; // already up to date
+                    return;
                 }
             }
 
@@ -537,7 +516,7 @@ public sealed class SyncService : IDisposable
                 var remoteAttrs = _client.GetAttributes(remotePath);
                 if (!remoteAttrs.IsDirectory && remoteAttrs.Size == localInfo.Length && remoteAttrs.LastWriteTimeUtc >= localInfo.LastWriteTimeUtc)
                 {
-                    return; // already up to date
+                    return;
                 }
             }
 

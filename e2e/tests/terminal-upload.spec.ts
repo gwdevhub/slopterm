@@ -39,12 +39,8 @@ async function cleanup(page: Page, hostName: string) {
   await deleteHost(page, hostName)
 }
 
-// Simulates a screenshot-tool paste: the browser fires a native `paste` on xterm's helper
-// textarea carrying an image File (no meaningful name of its own) and no text. TerminalView's
-// listener must intercept it, upload the bytes over /api/ssh/upload, and never feed them into
-// the shell as literal input. Dispatching a real ClipboardEvent with a DataTransfer is the
-// closest faithful reproduction of what Snipping Tool / a browser image paste actually does -
-// Playwright has no higher-level "paste a file" primitive.
+// Simulates a screenshot-tool paste: a native ClipboardEvent on xterm's helper textarea
+// carrying an image File - Playwright has no higher-level "paste a file" primitive.
 async function pasteImage(page: Page, fileName: string, contents: string) {
   await page.evaluate(
     ({ fileName, contents }) => {
@@ -62,18 +58,16 @@ test('pasting an image into an SSH tab uploads it into the prompted directory an
   const hostName = 'paste upload test host'
   await connect(page, hostName)
 
-  // This shell (the openssh-server test container) doesn't emit OSC 7, so cwd is unknown and
-  // the upload falls back to prompting for a destination. Answer it with the SSH login
-  // directory (the container user's writable home, `/config` on lscr.io/linuxserver/openssh-server).
+  // The container doesn't emit OSC 7, so cwd is unknown and the upload prompts for a
+  // destination; answer with the container user's writable home (/config).
   page.once('dialog', (dialog) => void dialog.accept('/config'))
 
   const fileName = `pasted-${Date.now()}.png`
   const contents = `paste-upload-e2e-${Date.now()}`
   await pasteImage(page, fileName, contents)
 
-  // The confirmation toast reports the exact remote path the bytes landed at - proves the
-  // /api/ssh/upload round-trip (fresh one-shot SFTP write) actually succeeded, not just that
-  // a request was dispatched.
+  // The toast reports the exact remote path - proves the /api/ssh/upload round-trip (fresh
+  // one-shot SFTP write) actually succeeded.
   await expect(page.getByText(`Uploaded to /config/${fileName}`)).toBeVisible({ timeout: 15_000 })
 
   // And the paste must NOT have leaked into the shell as literal input - the file's textual

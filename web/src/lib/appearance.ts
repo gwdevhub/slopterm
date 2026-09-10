@@ -1,17 +1,5 @@
-// Client-side appearance settings (colors + fonts), persisted in localStorage so they apply
-// instantly at first paint - before the vault is even unlocked - and never need a backend
-// round-trip. The whole app is styled with Tailwind v4 utilities, and Tailwind v4 compiles
-// every color utility to `var(--color-<name>)` and every font utility to `var(--font-*)`.
-// So re-theming at runtime is just a matter of overriding those custom properties: index.css
-// remaps the specific stops the app uses onto a small set of semantic `--app-*` tokens (with
-// color-mix filling the in-between stops), and applyAppearance() below writes those tokens
-// onto <html>. The terminal (xterm) doesn't read CSS for its font, so its metrics are pushed
-// straight into the Terminal instance - see TerminalView.tsx, which subscribes here.
-//
-// Appearance is also stored in the vault (see api.ts's get/saveVaultAppearance) so it syncs
-// across a user's devices. localStorage is the local cache that themes instantly at startup -
-// even while the vault is still locked - and the vault copy is authoritative once it can be
-// decrypted: App.tsx pulls it on unlock and every edit pushes back up (debounced).
+// Client-side appearance settings (colors + fonts). localStorage themes instantly at first
+// paint (before unlock); the vault copy syncs across devices and wins once decrypted.
 
 import { getVaultAppearance, saveVaultAppearance } from './api'
 
@@ -22,15 +10,13 @@ export interface ColorToken {
   // The `--app-*` custom property this token drives (see index.css's remap).
   cssVar: string
   label: string
-  // Grouping for the Appearance UI.
   group: 'Base' | 'Text' | 'Status'
   hint: string
   default: string
 }
 
-// One editable token per semantic role. index.css derives the neighbouring Tailwind stops
-// (e.g. indigo-500/-400, slate-600/-200) from these with color-mix, so a single pick shifts
-// a whole coherent ramp rather than needing a picker for all ~30 raw stops the app uses.
+// One editable token per semantic role; index.css derives the neighbouring Tailwind stops
+// from these with color-mix, so a single pick shifts a whole ramp.
 export const COLOR_TOKENS: ColorToken[] = [
   { id: 'accent', cssVar: '--app-accent', label: 'Accent', group: 'Base', hint: 'Buttons, active tab/nav, focus rings', default: '#4f46e5' },
   { id: 'bg', cssVar: '--app-bg', label: 'Canvas', group: 'Base', hint: 'The app background behind everything', default: '#020617' },
@@ -45,10 +31,8 @@ export const COLOR_TOKENS: ColorToken[] = [
   { id: 'success', cssVar: '--app-success', label: 'Success', group: 'Status', hint: 'Confirmations and healthy status', default: '#10b981' },
 ]
 
-// The two built-in palettes. Dark mirrors each token's `default` (and the CSS defaults in
-// index.css, so a fresh install needs no JS to look right); light flips the neutral ramp to
-// a light-on-dark-text scheme while keeping the accent/status hues saturated. Picking a theme
-// on the Appearance screen loads the matching palette; individual colors can then be tweaked.
+// The two built-in palettes. Dark mirrors each token's `default` (and index.css's defaults);
+// light flips the neutral ramp while keeping the accent/status hues saturated.
 export const COLOR_PRESETS: Record<ThemeName, Record<string, string>> = {
   dark: Object.fromEntries(COLOR_TOKENS.map((t) => [t.id, t.default])),
   light: {
@@ -68,9 +52,8 @@ export const COLOR_PRESETS: Record<ThemeName, Record<string, string>> = {
   },
 }
 
-// A custom font supplied by the user, either uploaded (stored inline as a data: URL so it
-// survives a reload without a server) or fetched from a URL. Registered as a FontFace under
-// `family` when applied - see registerFont below.
+// A custom font supplied by the user, uploaded (stored inline as a data: URL) or fetched from
+// a URL; registered as a FontFace under `family` when applied (see registerFont).
 export interface FontSource {
   kind: 'upload' | 'url'
   url: string
@@ -79,22 +62,21 @@ export interface FontSource {
 }
 
 export interface FontConfig {
-  // The CSS font-family name to use. Empty means "use the slot's built-in default stack".
-  // For a custom source, this is also the name the FontFace is registered under.
+  // The CSS font-family name; empty means the slot's built-in default stack. For a custom
+  // source this is also the name the FontFace is registered under.
   family: string
   source: FontSource | null
   weight: number
   // px. For the interface slot this is the root font size (a UI scale); for the terminal
   // slot it's xterm's fontSize.
   size: number
-  letterSpacing: number // px
-  lineHeight: number // unitless multiplier
+  letterSpacing: number
+  lineHeight: number
 }
 
 export interface AppearanceSettings {
-  // Which built-in palette the colors came from. Editing individual colors keeps the label
-  // (they're now a customized version of that theme); it only drives which preset the theme
-  // toggle and "reset" restore to.
+  // Which built-in palette the colors came from; it only drives which preset the theme toggle
+  // and "reset" restore to.
   theme: ThemeName
   colors: Record<string, string>
   interfaceFont: FontConfig
@@ -125,9 +107,8 @@ function mergeFont(base: FontConfig, saved: Partial<FontConfig> | undefined): Fo
   }
 }
 
-// Merges a saved/synced blob over the defaults so a partial or older payload (e.g. a token or
-// field added in a later version, or the pre-theme schema) never leaves anything undefined.
-// Used for both the localStorage cache and the vault copy.
+// Merges a saved/synced blob over the defaults so a partial or older payload never leaves
+// anything undefined; used for both the localStorage cache and the vault copy.
 export function mergeAppearance(saved: Partial<AppearanceSettings> | null | undefined): AppearanceSettings {
   if (!saved || typeof saved !== 'object') return structuredClone(DEFAULT_APPEARANCE)
   return {
@@ -151,9 +132,8 @@ function save(settings: AppearanceSettings) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
   } catch {
-    // Quota exceeded (an uploaded font too big to store) or storage disabled - the live
-    // settings still apply for this session; they just won't persist. The UI surfaces the
-    // upload-size guard separately, so this is a best-effort write.
+    // Quota exceeded (font too big) or storage disabled - the live settings still apply for
+    // this session, they just won't persist.
   }
 }
 
@@ -206,9 +186,8 @@ export function getAppearance(): AppearanceSettings {
   return current
 }
 
-// Writes the settings onto <html> as CSS custom properties (colors + interface font metrics),
-// registers any custom fonts, and notifies subscribers. Safe to call on every keystroke in the
-// editor - it's just style property writes.
+// Writes the settings onto <html> as CSS custom properties, registers custom fonts, and
+// notifies subscribers; just style writes, safe to call on every keystroke.
 export function applyAppearance(settings: AppearanceSettings) {
   current = settings
   const root = document.documentElement
@@ -245,17 +224,15 @@ export function applyAppearance(settings: AppearanceSettings) {
   emit()
 }
 
-// Coalesces the vault write - the editor calls setAppearance on every slider tick, but the
-// local cache/apply is cheap while a vault POST encrypts and writes a file, so only the last
-// change in a burst is synced.
+// Coalesces the vault write - the editor calls setAppearance on every slider tick, but only
+// the last change in a burst is synced.
 let vaultPushTimer: ReturnType<typeof setTimeout> | null = null
 function scheduleVaultPush() {
   if (vaultPushTimer) clearTimeout(vaultPushTimer)
   vaultPushTimer = setTimeout(() => {
     vaultPushTimer = null
-    // Best-effort: no-ops server-side while the vault is locked, and a transient failure just
-    // means this device is momentarily out of sync (the local cache still has it). The next
-    // edit, or the next unlock-time pull, reconciles.
+    // Best-effort: no-ops while the vault is locked, and a transient failure just means this
+    // device is momentarily out of sync (the local cache still has it).
     void saveVaultAppearance(current).catch(() => {})
   }, 400)
 }
@@ -267,9 +244,8 @@ export function setAppearance(settings: AppearanceSettings) {
   scheduleVaultPush()
 }
 
-// Called once the vault is unlocked (App.tsx). The vault copy is the authoritative synced
-// source, so when present it wins over the local cache; when absent, seed it from whatever
-// this device has so a first customization propagates to the user's other devices.
+// Called once the vault is unlocked (App.tsx). The vault copy wins over the local cache when
+// present; when absent, seed it from this device so a customization propagates.
 export async function pullAppearanceFromVault(): Promise<void> {
   let remote: unknown
   try {

@@ -20,22 +20,14 @@ interface HostModalProps {
   onClose: () => void
   onSaved: () => void
   onDeleted: (hostId: string) => void
-  // Fired after "Duplicate" creates the copy, with its new id - the caller re-opens this
-  // same modal for that copy so the user can immediately adjust the address/username
-  // rather than having to find and re-open it themselves (issue #54).
+  // Fired after "Duplicate" creates the copy, with its new id, so the caller can re-open
+  // this modal for the copy (issue #54).
   onDuplicated: (newHostId: string) => void
   isConnecting?: boolean
 }
 
-// Maps a saved host's first credential onto the flat form shape ConnectionForm edits. The
-// form (like the "new host" flow) edits a single credential; a host with several keeps the
-// rest only until it's saved from here - consistent with there being no multi-credential
-// UI yet (issue #12).
-//
-// No secret comes across: the backend masks credential material out of every listing, so the
-// form shows "stored, not shown" and only replaces a value the user actually types. The
-// credential's ID does come across, because that's what the backend matches on to carry the
-// stored secret forward - a fresh id on every save would orphan it.
+// Maps a saved host's first credential onto the flat form shape ConnectionForm edits. No
+// secret comes across; the credential id does, so the backend can carry the stored secret forward.
 function hostToFormValues(host: SavedHost): ConnectionFormValues {
   const credential = host.host.credentials[0]
   const authMethod: ConnectionFormValues['authMethod'] =
@@ -87,12 +79,8 @@ function formValuesToHost(values: ConnectionFormValues): HostRecord {
   }
 }
 
-// Replaces the old always-visible right-hand Host Details sidebar - most of the time
-// users just want to dive straight into a host (SSH/SFTP buttons, double-click), not
-// browse its details, so that space was wasted for the common case. Editing (and, now,
-// duplicating/deleting) is a deliberate action via a card's small pencil icon or its
-// context menu, opening this modal instead of permanently reserving desktop real estate
-// for it.
+// Replaces the old always-visible Host Details sidebar: editing, duplicating and deleting
+// are deliberate actions via a card's pencil icon or context menu, opening this modal.
 export function HostModal({ host, onClose, onSaved, onDeleted, onDuplicated, isConnecting }: HostModalProps) {
   const [error, setError] = useState<string | null>(null)
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)

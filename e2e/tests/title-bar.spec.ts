@@ -7,11 +7,8 @@ import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as { baseUrl: string }
 
-// The custom title bar only renders inside the chromeless Photino desktop window, detected
-// via window.external.sendMessage (see lib/photino.ts). The e2e harness runs a plain
-// browser, so we stand in a fake bridge before the app loads: it records every wc:* command
-// the title bar posts, and echoes maximize/restore state back the way the real host does, so
-// the whole desktop-mode title bar can be exercised without an actual native window.
+// The title bar only renders inside the Photino desktop window (detected via
+// window.external.sendMessage), so stand in a fake bridge that records wc:* commands.
 test('desktop mode: title bar owns the window controls + the collapse/Settings hamburger', async ({ page }) => {
   await page.addInitScript(() => {
     const w = window as unknown as { __wc: string[]; __recv?: (m: string) => void; external: unknown }
@@ -34,16 +31,13 @@ test('desktop mode: title bar owns the window controls + the collapse/Settings h
   await gotoSection(page, 'Hosts')
   await ensureVaultUnlocked(page)
 
-  // The window controls live in the title bar.
   for (const label of ['Menu', 'Minimize', 'Maximize', 'Close']) {
     await expect(page.getByRole('button', { name: label, exact: true })).toBeVisible()
   }
 
-  // ...and the sidebar dropped its own collapse toggle and Settings item (now in the hamburger).
   await expect(page.getByRole('button', { name: /Collapse sidebar|Expand sidebar/ })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0)
 
-  // The hamburger holds Collapse + Settings, and Settings navigates to the Settings section.
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await expect(page.getByRole('menuitem', { name: /Collapse sidebar/ })).toBeVisible()
   await page.getByRole('menuitem', { name: 'Settings' }).click()

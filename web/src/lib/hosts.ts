@@ -1,13 +1,7 @@
 import type { ConnectRequest, SavedHost, SavedRecentConnection, SavedSnippet, SshConfigHostEntry } from './api'
 
-// Shared by the saved-host "Connect"/"SSH"/"SFTP" buttons (HostModal, HostGrid).
-//
-// Deliberately carries NO credential material: the frontend never receives a saved host's
-// password or private key any more, so the request names the host (and, when the host has
-// more than one, which credential) and the backend resolves it - which is also what makes
-// "use a key named prod-deploy" work, since only the backend can see this device's keychain.
-// `canConnect` is likewise server-computed, from the same resolver, so the button state and
-// what actually happens on click can't drift apart.
+// Shared by the saved-host "Connect"/"SSH"/"SFTP" buttons (HostModal, HostGrid). Deliberately
+// carries no credential material - the backend resolves it from hostId/credentialId.
 export function resolveConnectRequest(host: SavedHost): ConnectRequest | undefined {
   if (!host.canConnect) {
     return undefined
@@ -51,11 +45,8 @@ export function describeCredentialResolution(host: SavedHost): string | undefine
   }
 }
 
-// Resolves a host's attached startup snippets to actual command text, in the order
-// they're listed on the host - looked up fresh from the current snippets list rather than
-// a snapshot, so editing/deleting a snippet is reflected the next time this host connects
-// (see HostRecord.StartupSnippetIds's doc comment). An id whose snippet no longer exists
-// is silently skipped rather than erroring the whole connect.
+// Resolves a host's startup snippets to command text, in order, looked up fresh from the
+// current list so edits are reflected; an id whose snippet is gone is silently skipped.
 export function resolveStartupCommands(host: SavedHost, snippets: SavedSnippet[]): string[] {
   const ids = host.host.startupSnippetIds ?? []
   return ids
@@ -64,8 +55,7 @@ export function resolveStartupCommands(host: SavedHost, snippets: SavedSnippet[]
 }
 
 // Mirrors resolveConnectRequest, but for a Recent connection - RecentConnectionRecord
-// always carries exactly one credential (never a list), so there's no "first usable
-// credential" search needed.
+// always carries exactly one credential, so no "first usable" search is needed.
 export function resolveRecentConnectRequest(recent: SavedRecentConnection): ConnectRequest {
   const { connection } = recent
   return {
@@ -81,11 +71,8 @@ export function resolveRecentConnectRequest(recent: SavedRecentConnection): Conn
   }
 }
 
-// Mirrors resolveRecentConnectRequest, for a ~/.ssh/config-sourced entry (the Settings
-// "Show hosts from ~/.ssh/config" toggle). Undefined when the backend found no usable
-// private key for this alias - it likely relies on ssh-agent/interactive auth this app
-// has no way to drive, so its card shows read-only but not connectable (see HostCard's
-// canConnect).
+// Mirrors resolveRecentConnectRequest for a ~/.ssh/config entry. Undefined when there's no
+// usable private key - the alias likely relies on ssh-agent/interactive auth this app can't drive.
 export function resolveSshConfigConnectRequest(entry: SshConfigHostEntry): ConnectRequest | undefined {
   if (!entry.privateKey) {
     return undefined

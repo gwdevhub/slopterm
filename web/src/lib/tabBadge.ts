@@ -1,8 +1,5 @@
-// Optional favicon tab badge (off by default): when enabled, the browser-tab icon gets a
-// small counter showing how many session tabs are open, and that counter turns the accent
-// color when a background tab has produced output the user hasn't looked at yet (see
-// TerminalView's onActivity / App.tsx's unseen tracking). Purely a client-side visual
-// preference, so it lives in localStorage rather than the vault.
+// Optional favicon tab badge (off by default): a counter of open session tabs that turns the
+// accent color when a background tab has unseen output. Lives in localStorage, not the vault.
 
 const STORAGE_KEY = 'slopterm.faviconTabBadge'
 
@@ -67,9 +64,8 @@ function restoreIcon() {
   if (originalHref) link.setAttribute('href', originalHref)
 }
 
-// The base favicon, rasterized once into an <img> we can composite the badge over. Resolves
-// to null if it can't be loaded/drawn (e.g. a tainted canvas), in which case we draw a plain
-// accent tile as the base so the badge still works.
+// The base favicon rasterized into an <img> we composite the badge over; null if it can't be
+// loaded, in which case a plain accent tile is drawn instead.
 let baseImagePromise: Promise<HTMLImageElement | null> | null = null
 function loadBaseImage(): Promise<HTMLImageElement | null> {
   if (baseImagePromise) return baseImagePromise
@@ -96,9 +92,8 @@ interface BadgeState {
 
 let renderToken = 0
 
-// Redraws (or restores) the favicon for the given state. Idempotent and cheap enough to call
-// on every tab add/remove/activity change. Async only because the base favicon image loads
-// once; a renderToken guards against an older in-flight draw landing after a newer state.
+// Redraws (or restores) the favicon for the given state; cheap enough for every tab change.
+// renderToken guards against an older in-flight draw landing after a newer state.
 export async function applyFaviconBadge(state: BadgeState) {
   ensureIconLink()
 
@@ -120,16 +115,14 @@ export async function applyFaviconBadge(state: BadgeState) {
   if (base) {
     ctx.drawImage(base, 0, 0, ICON_SIZE, ICON_SIZE)
   } else {
-    // Fallback base: a rounded accent tile.
     ctx.fillStyle = accentColor()
     ctx.beginPath()
     ctx.roundRect(4, 4, ICON_SIZE - 8, ICON_SIZE - 8, 12)
     ctx.fill()
   }
 
-  // Badge: a filled circle in the bottom-right, with a white halo so it separates from the
-  // icon and any browser-tab background. Accent-colored when there's unseen activity,
-  // otherwise a neutral slate so it reads as just a count.
+  // Badge: a filled circle bottom-right with a white halo; accent-colored when there's unseen
+  // activity, otherwise a neutral slate.
   const r = 19
   const cx = ICON_SIZE - r - 2
   const cy = ICON_SIZE - r - 2

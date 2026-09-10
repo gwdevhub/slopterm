@@ -14,8 +14,7 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
 }
 
 // Uses a saved Host's "SSH" button rather than Quick Connect - these tests care about the
-// terminal itself, not the connect flow, so a saved host keeps each test's setup identical
-// regardless of which entry point was used to get there.
+// terminal itself, not the connect flow, so the setup stays identical across tests.
 async function connect(page: Page, hostName: string) {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')
@@ -34,23 +33,16 @@ async function connect(page: Page, hostName: string) {
   await expect(page.locator('.xterm-rows')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
 }
 
-// Closes the tab and deletes the saved host - other spec files assert "No saved hosts
-// yet." against this same shared vault, so anything created here must not leak past
-// whichever test created it.
+// Closes the tab and deletes the saved host - other spec files assert "No saved hosts yet."
+// against this shared vault, so anything created here must not leak.
 async function cleanup(page: Page, hostName: string) {
   await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
   await gotoSection(page, 'Hosts')
   await deleteHost(page, hostName)
 }
 
-// Double-clicks the given (already-visible, on-screen-by-itself) word inside the
-// terminal - xterm.js's own SelectionService resolves this to a word-boundary selection
-// from real mouse coordinates, independent of the getSelection() API used elsewhere.
-// `.xterm-rows` is xterm's screen-reader-only text mirror (handy for reading rendered
-// output, per the other e2e specs) - it sits *behind* `.xterm-screen`, the actual layer
-// that receives pointer events, so clicking the row locator directly never lands.
-// Reading its bounding box for the coordinates and dispatching a raw mouse dblclick
-// there hits the real interactive layer at the right spot instead.
+// Double-clicks the word via real mouse coordinates: `.xterm-rows` sits behind the
+// pointer-receiving `.xterm-screen`, so clicking the locator directly never lands.
 async function selectWord(page: Page, word: string) {
   const box = await page.locator('.xterm-rows').getByText(word, { exact: true }).boundingBox()
   if (!box) throw new Error(`could not locate "${word}" in the terminal to select`)
@@ -76,9 +68,8 @@ test('ctrl+c copies the selection and clears it, so a second ctrl+c interrupts i
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(marker)
   }).toPass({ timeout: 5_000 })
 
-  // The selection should now be cleared. A second Ctrl+C with nothing selected must act
-  // as the interrupt signal instead of copying again - overwrite the clipboard with a
-  // sentinel first so an (incorrect) second copy would be observable.
+  // Selection should now be cleared: a second Ctrl+C must interrupt, not copy. Sentinel the
+  // clipboard first so an incorrect second copy is observable.
   await page.evaluate(() => navigator.clipboard.writeText('sentinel-value'))
   await page.keyboard.press('Control+c')
   await page.waitForTimeout(500)
@@ -103,9 +94,8 @@ test('ctrl+shift+c copies the selection without clearing it', async ({ page, con
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(marker)
   }).toPass({ timeout: 5_000 })
 
-  // The selection must have survived: overwrite the clipboard, then a plain Ctrl+C
-  // should find the same selection still active and copy it again (rather than the
-  // selection being gone and Ctrl+C instead sending an interrupt).
+  // Selection must have survived: overwrite the clipboard, then a plain Ctrl+C should still
+  // copy it (not fall through to an interrupt).
   await page.evaluate(() => navigator.clipboard.writeText('sentinel-value'))
   await page.keyboard.press('Control+c')
   await expect(async () => {
@@ -127,9 +117,8 @@ test('ctrl+c with no selection sends an interrupt to the remote process', async 
   const marker = `interruptmarker${Date.now()}`
   await page.keyboard.type(`echo ${marker}`)
   await page.keyboard.press('Enter')
-  // If the interrupt hadn't actually reached the shell, this would only appear after the
-  // full 20s sleep finishes - bounding the wait well below that makes a swallowed
-  // interrupt a hard failure rather than a slow pass.
+  // If the interrupt hadn't reached the shell, this would only appear after the full 20s
+  // sleep - bounding the wait makes a swallowed interrupt a hard failure.
   await expect(page.locator('.xterm-rows')).toContainText(marker, { timeout: 5_000 })
 
   await cleanup(page, hostName)

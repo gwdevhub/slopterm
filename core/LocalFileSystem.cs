@@ -1,8 +1,7 @@
 namespace Slopterm.Server;
 
-// The "local" side of the SFTP dual-pane browser - lists directories on the machine
-// running slopterm itself, using the same FsListing/FsEntry shape SftpSession returns for
-// the remote side so the frontend can render both panes with identical logic.
+// The "local" side of the SFTP dual-pane browser: lists directories on the machine running
+// slopterm, same FsListing/FsEntry shape as the remote side so both panes render identically.
 public static class LocalFileSystem
 {
     public static FsListing ListDirectory(string? path)
@@ -26,7 +25,6 @@ public static class LocalFileSystem
         return new FsListing(dir.FullName, dir.Parent?.FullName, entries);
     }
 
-    // Renames a local file or directory to a new leaf name within the same parent directory.
     public static void Rename(string path, string newName)
     {
         var parent = Directory.GetParent(path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))?.FullName
@@ -42,7 +40,6 @@ public static class LocalFileSystem
         }
     }
 
-    // Deletes a local file or directory (directories are removed recursively).
     public static void Delete(string path)
     {
         if (Directory.Exists(path))
@@ -55,6 +52,5 @@ public static class LocalFileSystem
         }
     }
 
-    // Creates a new directory named `name` under the given parent directory.
     public static void MakeDirectory(string parentDir, string name) => Directory.CreateDirectory(Path.Combine(parentDir, name));
 }

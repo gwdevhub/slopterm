@@ -34,11 +34,8 @@ test('a host card\'s SFTP button opens a dual-pane browser with independent loca
   await expect(localPane).toBeVisible({ timeout: 10_000 })
   await expect(remotePane).toBeVisible()
 
-  // The remote pane is a real, independent SFTP connection to the container - ".ssh" is
-  // always present in the test image's home directory (sshd creates it), and asserting
-  // it specifically in the Remote region (not just anywhere on the page) proves this
-  // isn't the local listing duplicated - the e2e runner's own home directory may well
-  // have its own unrelated ".ssh" folder too.
+  // ".ssh" is always present in the test image's home dir; asserting it inside the Remote
+  // region proves this isn't the local listing duplicated.
   await expect(remotePane.getByText('.ssh', { exact: true })).toBeVisible({ timeout: 10_000 })
   const remotePathBefore = await remotePane.locator('span.truncate.text-slate-500').innerText()
 
@@ -49,7 +46,6 @@ test('a host card\'s SFTP button opens a dual-pane browser with independent loca
     expect(path).toContain('.ssh')
   }).toPass({ timeout: 10_000 })
 
-  // ".." navigates back up to the original remote directory.
   await remotePane.getByText('..', { exact: true }).click()
   await expect(async () => {
     const path = await remotePane.locator('span.truncate.text-slate-500').innerText()

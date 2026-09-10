@@ -20,28 +20,8 @@ public sealed record JobStatus(
     JobRunSummary? LastRun);
 
 /// <summary>
-/// Runs saved commands against saved hosts on a schedule (see JobRecord). One background
-/// loop owns every job rather than a task per job the way ForwardingService/SyncService do:
-/// a job is idle between runs by definition, so there's nothing per-job to keep alive, and a
-/// single loop is also the only place that has to know "what's due next".
-///
-/// The loop re-reads the job records from the vault on every pass instead of being told about
-/// changes, so creating/editing/enabling a job needs no start/stop call and live state can't
-/// drift from what's saved. That also means a locked vault is simply a no-op pass: jobs start
-/// running on their own within one poll of the vault being unlocked, no unlock hook needed.
-///
-/// Each run opens its own SSH connection and closes it again - deliberately NOT a long-lived
-/// per-host client like forwarding uses. A job that runs hourly (or nightly) would otherwise
-/// hold an idle connection open between runs purely to save a handshake, and inherit the
-/// whole "did this connection die while we weren't looking" retry problem for nothing.
-///
-/// Runs go over an SSH exec channel, not the interactive PTY the terminal tabs use: a job
-/// wants an exit code and clean stdout/stderr, not a shell prompt and escape sequences.
-///
-/// Everything is best-effort in the same sense as the other two services: a failure is
-/// recorded against the job (and visible in GetStatus / its run history), never thrown
-/// somewhere that could take the loop - or the app - down. And the same monitor-loop lesson
-/// applies: every iteration is guarded so one unexpected exception can't end the loop.
+/// Runs saved commands against saved hosts on a schedule. One background loop owns every job;
+/// each run opens its own short-lived SSH exec channel (for an exit code, not a PTY).
 /// </summary>
 public sealed class SchedulerService : IDisposable
 {
@@ -50,7 +30,7 @@ public sealed class SchedulerService : IDisposable
 
     private readonly VaultService _vault;
     private readonly object _lock = new();
-    private readonly Dictionary<string, TrackedJob> _tracked = new(); // key: jobId
+    private readonly Dictionary<string, TrackedJob> _tracked = new();
     private readonly ManualResetEventSlim _wake = new(false);
     private CancellationTokenSource? _cts;
     private Task? _loop;
@@ -88,11 +68,8 @@ public sealed class SchedulerService : IDisposable
         }
     }
 
-    /// <summary>
-    /// Runs a job immediately, regardless of its schedule, whether it's enabled, or which
-    /// device owns it - this is an explicit user action on this machine. Honours the overlap
-    /// policy so a manual run can't collide with a scheduled one already in flight.
-    /// </summary>
+    /// <summary>Runs a job immediately regardless of schedule/enabled/ownership, honouring
+    /// the overlap policy so a manual run can't collide with a scheduled one.</summary>
     public void RunNow(string jobId)
     {
         var match = _vault.ListJobs().FirstOrDefault(j => j.Id == jobId);
@@ -142,10 +119,8 @@ public sealed class SchedulerService : IDisposable
         var jobs = SafeListJobs();
         var deviceId = DeviceIdentity.Current;
 
-        // Entirely in-memory: the UI polls this every couple of seconds while the section is
-        // open, and reading each job's run history off disk to find its last outcome would
-        // mean decrypting every job's whole (capped-but-not-small) history on every poll.
-        // TrackedJob.LastRun is seeded from disk once, when the job is adopted.
+        // Entirely in-memory: reading each job's run history off disk on every poll would mean
+        // decrypting every job's full history. LastRun is seeded from disk once on adoption.
         lock (_lock)
         {
             return jobs.Select(j =>
@@ -160,11 +135,8 @@ public sealed class SchedulerService : IDisposable
         }
     }
 
-    /// <summary>
-    /// The job's most recent run as recorded on disk. Read from the persisted history rather
-    /// than only remembered in-process, so "the last run failed" survives a restart - which
-    /// is exactly when it matters most.
-    /// </summary>
+    /// <summary>The job's most recent run as recorded on disk, so "the last run failed"
+    /// survives a restart.</summary>
     private JobRunSummary? LoadLastRunSummary(string jobId)
     {
         var last = _vault.ListJobRuns(jobId).FirstOrDefault();
@@ -231,9 +203,8 @@ public sealed class SchedulerService : IDisposable
         var jobs = SafeListJobs();
         var deviceId = DeviceIdentity.Current;
 
-        // Seed the last-run summary for jobs we haven't seen yet (app launch, or a job just
-        // created), OUTSIDE the lock - it reads and decrypts a file, and the status endpoint
-        // takes this same lock. From here on that summary is maintained in memory.
+        // Seed the last-run summary for unseen jobs OUTSIDE the lock - it reads/decrypts a
+        // file, and the status endpoint takes this same lock.
         List<string> unseen;
         lock (_lock)
         {
@@ -272,10 +243,8 @@ public sealed class SchedulerService : IDisposable
                 }
                 else if (tracked.RecordUpdatedAt != updatedAt)
                 {
-                    // The schedule may have changed under us - recompute rather than keeping
-                    // a next-run time derived from the old record. Deliberately NOT
-                    // FirstRunUtc: RunOnStart means "at app start", so editing a job's name
-                    // shouldn't kick off a run right there and then.
+                    // The schedule may have changed under us - recompute. Deliberately NOT
+                    // FirstRunUtc: RunOnStart means "at app start", not "when edited".
                     tracked.RecordUpdatedAt = updatedAt;
                     tracked.NextRunUtc = NextRunUtcAfter(job, now);
                 }
@@ -293,10 +262,8 @@ public sealed class SchedulerService : IDisposable
                     continue;
                 }
 
-                // A defensive fallback for a job that lost its next-run time without its
-                // record changing (it was disabled, or pinned to another device, and came
-                // back). NextRunUtcAfter, not FirstRunUtc: RunOnStart only ever means the
-                // first time this job is picked up, never "every time it's re-enabled".
+                // Defensive: a job that lost its next-run time without its record changing.
+                // NextRunUtcAfter, not FirstRunUtc - RunOnStart only means the first pickup.
                 tracked.NextRunUtc ??= NextRunUtcAfter(job, now);
 
                 if (tracked.Queued && tracked.Run is null)
@@ -474,21 +441,12 @@ public sealed class SchedulerService : IDisposable
             ?? throw new InvalidOperationException("That host has no usable SSH credential.");
     }
 
-    /// <summary>
-    /// When a job first comes under the scheduler's care - app launch, the job being created,
-    /// or the vault being unlocked (a locked vault means the loop can't see any jobs at all).
-    /// RunOnStart is the systemd Persistent=true convention; without it a schedule that came
-    /// due while the app was closed is simply skipped, which is the safer default - nobody
-    /// expects two days of missed backups to all fire at once on launch.
-    /// </summary>
+    /// <summary>When a job first comes under the scheduler's care - app launch, creation, or
+    /// vault unlock. RunOnStart skips missed windows (systemd Persistent=true convention).</summary>
     private static DateTimeOffset? FirstRunUtc(JobRecord job, DateTimeOffset now) =>
         job.RunOnStart ? now : NextRunUtcAfter(job, now);
 
-    /// <summary>
-    /// When this job should next fire, or null if it never will - which a cron expression can
-    /// legitimately say (30 February matches nothing), and which the caller already handles by
-    /// simply leaving NextRunUtc unset so the job sits there without ever coming due.
-    /// </summary>
+    /// <summary>When this job should next fire, or null if a cron expression never matches.</summary>
     private static DateTimeOffset? NextRunUtcAfter(JobRecord job, DateTimeOffset now)
     {
         if (job.ScheduleKind == "cron")
@@ -498,11 +456,8 @@ public sealed class SchedulerService : IDisposable
 
         if (job.ScheduleKind == "daily")
         {
-            // Local wall-clock time on purpose: "every morning at 6" means 6am where the
-            // user is. The UTC offset is taken at the TARGET instant rather than right now,
-            // so the run either side of a DST change still lands at 6am local instead of
-            // drifting an hour. (A time that a spring-forward skips entirely resolves to the
-            // pre-transition offset, i.e. it fires at the jump - close enough for a job.)
+            // Local wall-clock time on purpose: "every morning at 6" means 6am where the user
+            // is. The offset is taken at the target instant so DST changes don't drift the run.
             var localNow = now.ToLocalTime().DateTime;
             var candidate = localNow.Date + ParseDailyTime(job.DailyTime);
             if (candidate <= localNow)
@@ -521,21 +476,8 @@ public sealed class SchedulerService : IDisposable
             ? parsed
             : TimeSpan.FromHours(6); // matches JobRecord.DailyTime's default
 
-    /// <summary>
-    /// The next instant a cron expression matches, in the machine's local time zone for the
-    /// same reason "daily" is local: "weekdays at 9" means 9am where the user is. Cronos
-    /// resolves the DST cases against the zone itself, and its rules are the ones you'd want:
-    /// a fixed time of day that a spring-forward skips fires at the jump rather than being
-    /// lost for that day, and one inside the repeated autumn hour fires once, not twice. An
-    /// interval-style expression (*/30) does match both passes of that repeated hour, which is
-    /// also right - those are two real half-hours. (Checked against Europe/Berlin's 2027
-    /// transitions rather than assumed.)
-    ///
-    /// Null for an expression that never matches, and also for one that doesn't parse: the
-    /// save path (ValidateCronExpression) is what rejects a bad expression, so anything
-    /// reaching here is either already-persisted or a bug, and neither is worth throwing on a
-    /// scheduler pass that's also serving every other job.
-    /// </summary>
+    /// <summary>The next instant a cron expression matches, in local time ("weekdays at 9"
+    /// means 9am where the user is). Null if it never matches or doesn't parse.</summary>
     private static DateTimeOffset? NextCronRunUtcAfter(string? expression, DateTimeOffset now)
     {
         var parsed = TryParseCron(expression);
@@ -551,9 +493,8 @@ public sealed class SchedulerService : IDisposable
 
         try
         {
-            // Standard 5-field cron (plus the @daily/@hourly macros). Deliberately not
-            // CronFormat.IncludeSeconds: a per-second schedule is not something this feature
-            // should make easy, and the 6-field form silently shifts what every field means.
+            // Standard 5-field cron (plus @daily/@hourly macros). Deliberately not
+            // IncludeSeconds - the 6-field form silently shifts what every field means.
             return CronExpression.Parse(expression.Trim(), CronFormat.Standard);
         }
         catch (CronFormatException)
@@ -562,15 +503,8 @@ public sealed class SchedulerService : IDisposable
         }
     }
 
-    /// <summary>
-    /// The next <paramref name="count"/> times this job would run, for the "next runs" preview
-    /// in the job form - the check that a cron expression means what the user thought before
-    /// they save it. Empty when the schedule never comes due.
-    ///
-    /// Deliberately walks the same NextRunUtcAfter the loop uses rather than reimplementing
-    /// each kind, so the preview can't drift from what actually happens. For "interval" that
-    /// means the preview is measured from now, which is exactly what that kind does.
-    /// </summary>
+    /// <summary>The next <paramref name="count"/> times this job would run, for the job form's
+    /// preview. Walks the same NextRunUtcAfter the loop uses so it can't drift.</summary>
     public static IReadOnlyList<DateTimeOffset> PreviewNextRuns(JobRecord job, int count)
     {
         var runs = new List<DateTimeOffset>();
@@ -589,10 +523,8 @@ public sealed class SchedulerService : IDisposable
         return runs;
     }
 
-    /// <summary>
-    /// Null if the expression is a usable cron schedule, otherwise the message to show the
-    /// user. Shared by the save path and the preview endpoint so both reject the same things.
-    /// </summary>
+    /// <summary>Null if the expression is a usable cron schedule, otherwise the user-facing
+    /// message. Shared by the save path and preview so both reject the same things.</summary>
     public static string? ValidateCronExpression(string? expression)
     {
         if (string.IsNullOrWhiteSpace(expression))
@@ -667,11 +599,8 @@ public sealed class SchedulerService : IDisposable
 
 internal static class WaitHandleExtensions
 {
-    /// <summary>
-    /// Awaits a WaitHandle without burning a thread pool thread blocking on it - the
-    /// scheduler is idle almost all of the time, so parking a whole thread on its wake
-    /// signal for hours would be the single most expensive thing about the feature.
-    /// </summary>
+    /// <summary>Awaits a WaitHandle without parking a thread pool thread on it - the
+    /// scheduler is idle almost all the time.</summary>
     public static async Task WaitOneAsync(this WaitHandle handle, TimeSpan timeout, CancellationToken token)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

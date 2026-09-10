@@ -26,21 +26,7 @@ const inputClasses =
 const labelClasses = 'mb-1 block text-xs font-medium text-slate-400'
 
 // Collections: a set of records that converge with a WebDAV URL across every device holding
-// the collection's token, encrypted end to end. Teams share a collection by sharing its
-// token; a person shares one with their own phone the same way.
-//
-// Who may read and write is the WebDAV server's business, not this app's. Everyone can use
-// one shared account, or each person can have their own against the same folder, or the
-// folder can need no auth at all - and removing someone is done on the server, where their
-// access actually lives. That's why there's no member list, no per-device keys and no
-// rotation here: an app-level permission model on top of the server's would be a second,
-// weaker one that lies about what it enforces.
-//
-// The hard part of this feature on a phone is typing a WebDAV URL and password, and the
-// answer here is a single line of text you copy and paste - not a camera. Scanning a QR
-// inside the WebView would mean the CAMERA manifest permission and a camera entry on the
-// Play data-safety form, which is a permanent, visible cost on an SSH client in exchange for
-// a one-time convenience.
+// the collection's token, encrypted end to end. Access control is the WebDAV server's business.
 export function CollectionsSection() {
   return (
     <VaultGate>
@@ -490,10 +476,8 @@ function JoinModal({ onClose, onJoined }: { onClose: () => void; onJoined: () =>
   )
 }
 
-// "Which of my hosts does the team actually see?" - the card's record count says how many
-// records converge, not which. This lists them by scope, by name, so sharing a collection is
-// something you can check rather than infer. Read-only on purpose: moving a record between
-// collections belongs on the record's own card, where the rest of its editing lives.
+// Shows which records a collection actually carries, by scope and name - read-only, since
+// moving a record belongs on the record's own card.
 function ContentsModal({ collection, onClose }: { collection: Collection; onClose: () => void }) {
   const [contents, setContents] = useState<CollectionContents | null>(null)
   const [error, setError] = useState<string | null>(null)

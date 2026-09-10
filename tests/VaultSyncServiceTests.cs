@@ -6,8 +6,6 @@ namespace Slopterm.Tests;
 
 /// <summary>
 /// The merge matrix, end to end: two vaults, one remote, real crypto, real envelopes.
-/// Every test here is a scenario a user would recognise - "I added it on the laptop", "I
-/// deleted it on the phone", "we both edited it".
 /// </summary>
 [Collection("vault-dir")]
 public sealed class VaultSyncServiceTests : IDisposable
@@ -65,10 +63,7 @@ public sealed class VaultSyncServiceTests : IDisposable
         Assert.Single(_fixture.Laptop.HostNames());
     }
 
-    /// <summary>
-    /// The bug this whole design is built around: a delete must stay deleted. Without a
-    /// tombstone the other device would faithfully re-upload the copy it still holds.
-    /// </summary>
+    /// <summary>A delete must stay deleted; without a tombstone the other device re-uploads its copy.</summary>
     [Fact]
     public async Task ADeleteOnOneDevicePropagatesAndStaysDeleted()
     {
@@ -93,10 +88,7 @@ public sealed class VaultSyncServiceTests : IDisposable
         Assert.Empty(_fixture.Laptop.HostNames());
     }
 
-    /// <summary>
-    /// An edit made after the other side's delete wins - the record comes back, because
-    /// somebody deliberately touched it more recently than the deletion.
-    /// </summary>
+    /// <summary>An edit made after the other side's delete wins - the record comes back.</summary>
     [Fact]
     public async Task AnEditAfterADeleteWinsOverTheTombstone()
     {
@@ -116,10 +108,7 @@ public sealed class VaultSyncServiceTests : IDisposable
         Assert.Equal("10.0.0.9", _fixture.Laptop.Host("prod-db")?.Address);
     }
 
-    /// <summary>
-    /// Both sides edited the same host between syncs. The higher HLC wins, and the loser is
-    /// kept as a renamed copy - a silently lost host is the one bug users never forgive.
-    /// </summary>
+    /// <summary>Both sides edited between syncs: higher HLC wins, loser kept as a renamed copy.</summary>
     [Fact]
     public async Task BothSidesEditingKeepsTheLoserAsAConflictCopy()
     {
@@ -145,10 +134,8 @@ public sealed class VaultSyncServiceTests : IDisposable
     }
 
     /// <summary>
-    /// Two edits in the SAME millisecond on different devices. Neither "happened first" in
-    /// any meaningful sense, so the winner is decided by the clock's node tiebreak - what
-    /// matters is that it's decided the same way on both devices, and that the losing edit is
-    /// still kept rather than vanishing.
+    /// Two edits in the same millisecond: the node tiebreak decides, identically on both devices,
+    /// and the losing edit is still kept.
     /// </summary>
     [Fact]
     public async Task ATieBetweenTwoDevicesResolvesTheSameWayOnBoth()
@@ -167,17 +154,12 @@ public sealed class VaultSyncServiceTests : IDisposable
         await _fixture.Phone.SyncAsync(collectionId);
         await _fixture.Laptop.SyncAsync(collectionId);
 
-        // Both addresses survive somewhere, and both devices agree on which one kept the name.
         Assert.Equal(_fixture.Laptop.HostNames(), _fixture.Phone.HostNames());
         Assert.Equal(_fixture.Laptop.Host("prod-db")!.Address, _fixture.Phone.Host("prod-db")!.Address);
         Assert.Equal(2, _fixture.Phone.HostNames().Count);
     }
 
-    /// <summary>
-    /// Every "Sync now" must actually run a pass. A completed pass used to be left parked in
-    /// the in-flight table, so the next call awaited a task that had already finished and did
-    /// nothing at all - the collection silently stopped converging, at random, forever.
-    /// </summary>
+    /// <summary>Every "Sync now" must actually run a pass, not await a completed in-flight entry.</summary>
     [Fact]
     public async Task EverySyncActuallyRunsAPass()
     {
@@ -196,10 +178,7 @@ public sealed class VaultSyncServiceTests : IDisposable
         }
     }
 
-    /// <summary>
-    /// A 412 means somebody wrote first. The push has to re-read, re-stamp and retry rather
-    /// than fail the pass - servers disagree about preconditions, so this path runs often.
-    /// </summary>
+    /// <summary>A 412 means somebody wrote first; the push re-reads and retries rather than failing.</summary>
     [Fact]
     public async Task RetriesAWriteThatLostAPreconditionRace()
     {
@@ -213,10 +192,7 @@ public sealed class VaultSyncServiceTests : IDisposable
         Assert.Equal(["prod-db"], _fixture.Phone.HostNames());
     }
 
-    /// <summary>
-    /// Scopes are opt-in per collection. Keychain is off by default precisely because
-    /// turning it on means deliberately handing everyone your private keys.
-    /// </summary>
+    /// <summary>Scopes are opt-in per collection; keychain is off by default for good reason.</summary>
     [Fact]
     public async Task DoesntSyncAScopeTheCollectionDoesntCarry()
     {
@@ -234,10 +210,8 @@ public sealed class VaultSyncServiceTests : IDisposable
     }
 
     /// <summary>
-    /// Two devices in one collection can use DIFFERENT WebDAV accounts against the same
-    /// folder - which is the whole point of leaving access control to the server. Joining
-    /// takes the token's credentials, and swapping in your own account changes nothing about
-    /// the sync.
+    /// Two devices in one collection can use different WebDAV accounts against the same folder;
+    /// swapping in your own changes nothing about the sync.
     /// </summary>
     [Fact]
     public async Task DevicesCanUseTheirOwnWebDavAccounts()
@@ -273,10 +247,7 @@ public sealed class VaultSyncServiceTests : IDisposable
         Assert.Contains("read-only", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>
-    /// Records are AES-GCM under the collection key. The plaintext of a host - its address,
-    /// its name - must never appear in what goes over the wire.
-    /// </summary>
+    /// <summary>Records are AES-GCM under the collection key; host plaintext never reaches the wire.</summary>
     [Fact]
     public async Task NothingReadableLeavesTheDevice()
     {
@@ -292,10 +263,7 @@ public sealed class VaultSyncServiceTests : IDisposable
         Assert.DoesNotContain("hunter2", everything, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// The unchanged-record fast path: a second pass over a settled collection should read
-    /// listings, not download every record again.
-    /// </summary>
+    /// <summary>The unchanged-record fast path: a second pass reads listings, not every record.</summary>
     [Fact]
     public async Task ASecondPassDoesntRefetchUnchangedRecords()
     {
@@ -313,11 +281,8 @@ public sealed class VaultSyncServiceTests : IDisposable
     }
 
     /// <summary>
-    /// Open tabs, logs and the GitHub token have no sync scope AT ALL - not "off by default",
-    /// absent. Open tabs is the one that matters most here: a local-shell tab describes a
-    /// process on this machine, and a laptop's shell reappearing on a phone would be
-    /// meaningless at best. This asserts the absence directly, because the cost of someone
-    /// adding a scope for one of them later is that it silently starts leaving the device.
+    /// Open tabs, logs and the GitHub token have no sync scope at all - asserts the absence
+    /// directly, since adding one later would silently start leaving the device.
     /// </summary>
     [Fact]
     public void DeviceLocalRecordKindsHaveNoSyncScope()
@@ -330,11 +295,7 @@ public sealed class VaultSyncServiceTests : IDisposable
         }
     }
 
-    /// <summary>
-    /// The same guarantee end to end: a local-shell tab is saved, a full sync runs, and
-    /// nothing about it reaches the remote - no record, and no trace of it in any byte the
-    /// server ended up holding.
-    /// </summary>
+    /// <summary>A local-shell tab is saved, a full sync runs, and nothing about it reaches the remote.</summary>
     [Fact]
     public async Task ALocalShellTabNeverReachesTheRemote()
     {
@@ -361,7 +322,6 @@ public sealed class VaultSyncServiceTests : IDisposable
         await _fixture.Laptop.SyncAsync(collectionId);
         await _fixture.Phone.SyncAsync(collectionId);
 
-        // The host went; the tab did not.
         Assert.Equal(["prod-db"], _fixture.Phone.HostNames());
         Assert.Empty(_fixture.Phone.Vault.GetOpenTabs().Tabs);
         Assert.DoesNotContain(_store.Files.Keys, key => key.Contains("open-tabs", StringComparison.Ordinal));

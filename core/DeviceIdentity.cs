@@ -2,20 +2,7 @@ using Slopterm.Server.Vault;
 
 namespace Slopterm.Server;
 
-/// <summary>
-/// A stable, non-secret id for this slopterm install, kept in the vault directory as plain
-/// text (device-id) alongside settings.json rather than as an encrypted record - it has to
-/// be readable with the vault locked, and it identifies a machine, not a person.
-///
-/// It exists for scheduled jobs: once the vault syncs across devices, the same JobRecord
-/// lives on the laptop AND the phone, and both would happily fire it. A job pinned to an
-/// OwnerDeviceId only runs on the install whose id matches, so a nightly backup doesn't run
-/// twice (see JobRecord.OwnerDeviceId).
-///
-/// Deliberately NOT included in an exported backup (ExportBackup only packages vault.json,
-/// settings.json and the record subfolders): restoring a backup onto a second machine must
-/// produce a second identity, or the whole point is lost.
-/// </summary>
+/// <summary>A stable, non-secret id for this install, kept as plain text in the vault directory. Pins scheduled jobs to one install so a synced job doesn't fire on every device (see JobRecord.OwnerDeviceId); deliberately excluded from exported backups.</summary>
 public static class DeviceIdentity
 {
     private static readonly object Lock = new();
@@ -55,10 +42,8 @@ public static class DeviceIdentity
         }
         catch (IOException)
         {
-            // An unwritable vault directory shouldn't take the app down - fall back to an
-            // id that lasts this process. The only cost is that a job pinned to "this
-            // device" stops matching after a restart, which surfaces in the UI as the job
-            // belonging to another device rather than as anything silent.
+            // An unwritable vault directory shouldn't take the app down; fall back to a per-process id.
+            // The only cost is that a job pinned to "this device" stops matching after a restart.
             return Guid.NewGuid().ToString("N");
         }
     }

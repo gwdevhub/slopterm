@@ -13,8 +13,7 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
 }
 
 // Deliberately unreachable: these tests are about the collection lifecycle in the UI - create,
-// invite, join, leave - not about whether WebDAV works. The sync loop's failure to reach this
-// is expected and surfaces as the card's error line, which is itself worth seeing.
+// invite, join, leave - not about whether WebDAV works; the card's error line is expected.
 const UNREACHABLE_WEBDAV = 'https://127.0.0.1:9/dav'
 
 async function removeAllCollections(page: Page) {
@@ -193,9 +192,8 @@ test('lists what a collection actually carries', async ({ page }) => {
   await page.click('button:has-text("New host")')
   await page.fill('#name', 'e2e listed host')
   await page.selectOption('#collection', { label: 'e2e contents' })
-  // Deliberately NOT the real test SSH host: this record is only ever read back as a line of
-  // text, and an address of its own means that if this test ever fails before its cleanup,
-  // the leftover can't collide with the address other specs match on.
+  // Deliberately NOT the real test SSH host: this record is only read back as a line of text,
+  // and an address of its own means a leftover from a pre-cleanup failure can't collide with other specs.
   await page.fill('#host', '10.99.0.1')
   await page.fill('#port', '2222')
   await page.fill('#username', 'e2e-listed')
@@ -207,9 +205,8 @@ test('lists what a collection actually carries', async ({ page }) => {
 
   // The point of the view: the card's count says how many records converge, this says which.
   await gotoSection(page, 'Collections')
-  // Scoped to this collection's own card. Another spec's collection can still be on screen -
-  // removeAllCollections is best-effort - and "the only Contents button" is not something
-  // this test needs to be true.
+  // Scoped to this collection's own card - removeAllCollections is best-effort, so another
+  // spec's collection can still be on screen.
   const card = page.locator('li', { hasText: 'e2e contents' })
   await card.getByRole('button', { name: 'Contents' }).click()
   // Scoped to the modal: "Hosts" and the host's name both also exist behind it, on the page

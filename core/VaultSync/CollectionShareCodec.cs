@@ -5,23 +5,9 @@ using Slopterm.Server.Vault;
 namespace Slopterm.Server.VaultSync;
 
 /// <summary>
-/// The two clipboard formats that move a collection between devices, following
-/// <see cref="HostShareCodec"/>'s conventions rather than inventing a second scheme:
-/// a prefix naming the format and version, then base64url of nonce+ciphertext.
-///
-///   slopterm:collection:v1:…   one collection - the "join my team's hosts" invite
-///   slopterm:sync-config:v1:…  every collection at once - the "set up my new phone" path
-///
-/// Unwrapped, both are encrypted under the app-wide, non-secret
-/// <see cref="VaultCrypto.ShareSeed"/> key, exactly like a host share: that keeps the
-/// collection key off the clipboard as plaintext, and is decodable by any slopterm build,
-/// which is the point. It is NOT confidentiality - possession of the token IS membership,
-/// because it carries the collection key. The UI treats it like a password, and rotating
-/// the key is what invalidates every token issued before it.
-///
-/// Both formats also take a passphrase, deriving the key with Argon2id instead. That is
-/// real confidentiality, for the case the token has to travel through something the user
-/// doesn't fully trust.
+/// The two clipboard formats that move a collection between devices: a versioned prefix then
+/// base64url of nonce+ciphertext. Without a passphrase they're encrypted under the app-wide,
+/// non-secret share key - possession of the token IS membership; a passphrase adds Argon2id.
 /// </summary>
 public static class CollectionShareCodec
 {
@@ -51,10 +37,7 @@ public static class CollectionShareCodec
         }
     }
 
-    /// <summary>
-    /// Decodes either format into a list of collections - a single invite is just a list of
-    /// one, so the join flow has exactly one code path whichever the user pasted.
-    /// </summary>
+    /// <summary>Decodes either format; a single invite is a list of one.</summary>
     public static IReadOnlyList<CollectionInviteToken> Decode(string token, string? passphrase = null)
     {
         var trimmed = token.Trim();

@@ -17,8 +17,7 @@ const faviconHref = (page: import('@playwright/test').Page) =>
   page.locator("link[rel~='icon']").first().getAttribute('href')
 
 // Decodes the current favicon and samples a pixel inside the badge fill but off the white
-// digit (left of centre) so we can tell the neutral count badge from the accent-colored
-// "unseen activity" one by its blue channel. Returns null when no PNG badge is set.
+// digit, so the neutral count badge can be told from the accent "unseen activity" one by blue channel.
 async function badgeFill(page: import('@playwright/test').Page): Promise<number[] | null> {
   return page.evaluate(async () => {
     const href = document.querySelector<HTMLLinkElement>("link[rel~='icon']")?.getAttribute('href') ?? ''
@@ -43,15 +42,8 @@ function terminalText(page: import('@playwright/test').Page) {
   return page.locator('.xterm-rows:visible').innerText()
 }
 
-// Why this spec has to be careful about *when* it leaves a tab: the badge is one global
-// flag - App.tsx turns it accent while ANY background tab holds unseen output, and a tab
-// only clears when it is itself viewed again. So a single stray byte landing in a tab the
-// test has already moved on from pins the badge accent for the rest of the run, and the
-// final "viewing the tab clears it" assertion can never pass. The sshd's banner and first
-// prompt arrive as several chunks, and on a slow machine their tail lands after the test
-// has navigated to Hosts to open the next tab - i.e. while that tab is already in the
-// background. That is what turned this test red on CI (and, being fatal before its own
-// cleanup, took 46 later tests with it).
+// The badge is one global flag: a stray byte landing in a tab the test has already left pins
+// the accent for the rest of the run, which is what turned this test red on CI.
 //
 // Waits until the visible terminal stops changing (two identical samples in a row).
 async function waitForQuietTerminal(page: import('@playwright/test').Page, intervalMs = 500) {
@@ -81,27 +73,21 @@ test('the favicon tab badge counts tabs and turns accent on unseen background ou
   // Off by default: the favicon is still the plain SVG.
   expect(await faviconHref(page)).toBe('/favicon.svg')
 
-  // Enable it in Settings.
   await gotoSection(page, 'Settings')
   await page.getByRole('button', { name: 'Show open-tab count on the app icon' }).click()
 
   // Still no tabs open, so nothing to badge yet.
   expect(await faviconHref(page)).toBe('/favicon.svg')
 
-  // Open a session - the favicon becomes a generated PNG, and with the tab active (its output
-  // is "seen") the badge is the neutral slate, not the accent.
+  // With the tab active (its output is "seen") the badge is the neutral slate, not the accent.
   async function openSsh(marker: string) {
     await gotoSection(page, 'Hosts')
     await page.getByRole('button', { name: 'SSH to badge test host' }).click()
     await expect(async () => {
       expect(await terminalText(page)).toContain('Welcome to OpenSSH Server')
     }).toPass({ timeout: 15_000 })
-    // The banner is not the last thing the shell sends, so don't leave on the strength of
-    // it. Round-trip a marker first: the PTY is one ordered stream, so the marker coming
-    // back proves everything the shell had queued ahead of it has already been delivered -
-    // no guessing at how long a slow runner might stretch the gaps between banner chunks.
-    // Then let the prompt that follows the marker land too, which is a matter of timing
-    // rather than ordering and so is all the quiet-terminal wait is left to cover.
+    // Round-trip a marker first: the PTY is one ordered stream, so its return proves
+    // everything queued ahead was delivered; then wait for the terminal to settle.
     await page.keyboard.type(`echo ${marker}`)
     await page.keyboard.press('Enter')
     await expect(async () => {
@@ -116,15 +102,13 @@ test('the favicon tab badge counts tabs and turns accent on unseen background ou
     expect(px && px[2] < 160).toBeTruthy() // neutral slate: low blue
   }).toPass({ timeout: 5_000 })
 
-  // Open a second tab (now active), queue delayed output in it, then switch back to the first
-  // tab so the second is in the background when its output lands - that must flip the badge to
-  // the accent color (high blue).
+  // Open a second tab (now active), queue delayed output, then switch back so it's in the
+  // background when its output lands - that must flip the badge to accent (high blue).
   await openSsh('BADGE_TAB_TWO_READY')
   await page.keyboard.type('sleep 1 && echo BADGE_LATER')
   await page.keyboard.press('Enter')
-  // Let the echo of the typed line land while this tab is still the active one, so the
-  // badge below can only be reacting to the delayed BADGE_LATER. A short interval keeps
-  // the settle well inside the `sleep 1` window.
+  // Let the echo land while this tab is still active, so the badge can only be reacting to
+  // the delayed BADGE_LATER; a short interval keeps the settle inside the `sleep 1` window.
   await waitForQuietTerminal(page, 150)
   const tabs = page.getByRole('button', { name: `${ctx.sshUsername}@${ctx.sshHost}`, exact: true })
   await tabs.first().click()
@@ -140,7 +124,6 @@ test('the favicon tab badge counts tabs and turns accent on unseen background ou
     expect(px && px[2] < 160).toBeTruthy()
   }).toPass({ timeout: 5_000 })
 
-  // Turning the feature off restores the plain favicon.
   await gotoSection(page, 'Settings')
   await page.getByRole('button', { name: 'Show open-tab count on the app icon' }).click()
   expect(await faviconHref(page)).toBe('/favicon.svg')
@@ -152,11 +135,8 @@ test('the favicon tab badge counts tabs and turns accent on unseen background ou
   await deleteHost(page, 'badge test host')
 })
 
-// The whole suite shares one server and one vault (see vault-helpers.ts), and open tabs are
-// persisted server-side - so anything this spec leaves behind when it fails part-way through
-// is still there for every spec that runs after it, where a spare tab makes `.xterm-rows`
-// ambiguous and a spare host card means "No saved hosts yet." never appears. That turned one
-// failure here into 46. Sweep up defensively so a failure stays this spec's own.
+// The suite shares one server and vault, and open tabs persist server-side, so a mid-test
+// failure leaves tabs/hosts behind for every later spec - sweep up defensively.
 test.afterEach(async ({ page }) => {
   try {
     const closeButtons = page.getByRole('button', { name: /^Close .+@/ })

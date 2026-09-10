@@ -3,17 +3,13 @@ using System.Text;
 namespace Slopterm.Server.Ai;
 
 /// <summary>
-/// Turns raw PTY bytes into readable plain text for the model: a lenient UTF-8 decode, then
-/// remove ANSI escape sequences (CSI, OSC, other ESC-prefixed) and control characters, keeping
-/// only <c>\n</c>/<c>\t</c>. Deliberately lenient - malformed/partial UTF-8 at ring-buffer wrap
-/// boundaries and truncated escape sequences must never throw (a throw here would surface as a
-/// tool error mid-turn).
+/// Turns raw PTY bytes into readable plain text for the model: a lenient UTF-8 decode, then strip
+/// ANSI escapes and control characters, keeping only <c>\n</c>/<c>\t</c>.
 /// </summary>
 public static class AnsiText
 {
     public static string Strip(byte[] bytes)
     {
-        // Lenient decode: invalid byte sequences become U+FFFD instead of throwing.
         var decoded = Encoding.UTF8.GetString(bytes);
         var sb = new StringBuilder(decoded.Length);
 
@@ -27,7 +23,7 @@ public static class AnsiText
                 i++;
                 if (i >= decoded.Length)
                 {
-                    break; // dangling ESC at the tail - drop it
+                    break;
                 }
 
                 var next = decoded[i];
@@ -42,7 +38,7 @@ public static class AnsiText
 
                     if (i < decoded.Length)
                     {
-                        i++; // consume the final byte
+                        i++;
                     }
                 }
                 else if (next == ']')
@@ -68,7 +64,6 @@ public static class AnsiText
                 }
                 else
                 {
-                    // Any other ESC-prefixed escape (charset select, etc.) - skip its one byte.
                     i++;
                 }
 
@@ -77,7 +72,6 @@ public static class AnsiText
 
             if (c == '\r')
             {
-                // Collapse \r\n -> \n; drop a bare \r.
                 if (i + 1 < decoded.Length && decoded[i + 1] == '\n')
                 {
                     sb.Append('\n');
@@ -100,7 +94,7 @@ public static class AnsiText
 
             if (c < ' ' || c == '\x7f')
             {
-                i++; // other control character - drop
+                i++;
                 continue;
             }
 

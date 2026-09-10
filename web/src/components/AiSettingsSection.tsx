@@ -18,8 +18,8 @@ function isLocalEndpoint(url: string) {
   }
 }
 
-// The one line under the heading. Ordered by what the user can act on: no endpoint at all
-// first (the default, and not a problem), then auth and reachability.
+// Ordered by what the user can act on: no endpoint (the default, and not a problem), then
+// auth and reachability.
 function describeStatus(status: AiStatus | null, local: boolean): string {
   if (status == null) return 'Status unknown'
   if (!status.configured) return 'Off - no server URL set, so terminal tabs show no AI agent'
@@ -38,16 +38,7 @@ function describeStatus(status: AiStatus | null, local: boolean): string {
 }
 
 // Settings card for the in-terminal AI agent: an OpenAI-compatible endpoint plus an optional
-// API key for hosted endpoints that want one. The endpoint is empty out of the box, and that
-// is what makes the agent opt-in - a terminal tab shows no AI bar at all until one is entered
-// here.
-//
-// There is deliberately no model field: the endpoint answers /models with what it actually
-// has, and the agent bar turns that into a picker inside a session. A text box here could
-// only ever be a second, unvalidated way to type a name that list already knows.
-//
-// Distinct accessible names ("AI agent" heading, "Save AI settings" button) keep the e2e
-// specs' exact-match lookups for other sections unambiguous.
+// API key. Empty out of the box, which is what makes the agent opt-in.
 export function AiSettingsSection() {
   const [baseUrl, setBaseUrl] = useState('')
   // Write-only: the stored key never comes back from the server, so this box starts empty

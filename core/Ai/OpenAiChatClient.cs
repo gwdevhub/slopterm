@@ -5,35 +5,24 @@ using System.Text.Json.Serialization;
 namespace Slopterm.Server.Ai;
 
 /// <summary>
-/// A minimal OpenAI-compatible chat-completions client (streaming SSE + tool calls), aimed at a
-/// local Ollama server by default but working against anything speaking the /v1/chat/completions
-/// dialect. Hand-rolled over HttpClient on purpose - the whole point of going local-first is not
-/// hauling a vendor SDK along in the self-contained binary (see AGENTS.md's dependency rule).
+/// A minimal OpenAI-compatible chat-completions client (streaming SSE + tool calls). Hand-rolled
+/// over HttpClient so no vendor SDK ships in the self-contained binary.
 /// </summary>
 public static class OpenAiChatClient
 {
-    // Infinite client timeout because responses are open-ended streams; every call takes a
-    // CancellationToken that actually governs its lifetime (the turn's Stop token, or a short
-    // linked timeout for probes).
+    // Infinite client timeout: responses are open-ended streams, so every call's CancellationToken
+    // actually governs its lifetime.
     private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
 
-    // Per-request cap on tokens GENERATED (reasoning + answer). Sent as max_tokens, which
-    // overrides the server's own num_predict - so this number, not the Ollama config, governs
-    // completion length (it's separate from num_ctx, the context window). Reasoning models
-    // spend part - sometimes all - of this budget "thinking" before any visible answer, so
-    // it's deliberately generous: too small and a verbose small model exhausts it mid-thought
-    // and never emits content (finish_reason "length"). Still bounded rather than unlimited so
-    // a runaway small model stays responsive and stoppable; RunTurnAsync surfaces the
-    // budget-exhausted case rather than leaving a silent, empty turn.
+    // Per-request cap on GENERATED tokens (max_tokens overrides the server's num_predict),
+    // deliberately generous because reasoning models spend part of it thinking.
     private const int MaxResponseTokens = 16384;
 
     public sealed record ChatTurnResult(string FinishReason, List<AiToolCall> ToolCalls);
 
     /// <summary>
-    /// Streams one chat-completions request. Text deltas are forwarded to
-    /// <paramref name="onTextDelta"/> as they arrive; accumulated tool calls (if any) come back
-    /// in the result. Throws InvalidOperationException with the server's own error message on a
-    /// non-2xx response (e.g. "model not found", "does not support tools").
+    /// Streams one chat-completions request, forwarding text deltas to <paramref name="onTextDelta"/>
+    /// and returning accumulated tool calls. Throws InvalidOperationException on a non-2xx response.
     /// </summary>
     public static async Task<ChatTurnResult> StreamAsync(
         string baseUrl,
@@ -73,10 +62,8 @@ public static class OpenAiChatClient
         // Tool-call fragments accumulate by index across chunks (id/name arrive first, the
         // arguments JSON may be split over several deltas).
         var toolCalls = new SortedDictionary<int, (string Id, string Name, StringBuilder Args)>();
-        // Some local models don't use the structured reasoning field - they emit their
-        // chain-of-thought inline in content wrapped in <think>...</think> tags. The splitter
-        // pulls those out of the answer stream (routing them to the reasoning callback, or just
-        // dropping them when there's no sink) so raw think text never lands in the answer.
+        // Some local models emit chain-of-thought inline in content wrapped in <think>...</think>;
+        // the splitter routes it to the reasoning callback so it never lands in the answer.
         var thinkSplitter = new ThinkSplitter(onTextDelta, onReasoningDelta);
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -131,11 +118,8 @@ public static class OpenAiChatClient
                     }
                 }
 
-                // Reasoning models stream their chain-of-thought separately from the answer:
-                // Ollama/OpenAI put it in delta.reasoning, DeepSeek/vLLM in reasoning_content,
-                // with delta.content empty until thinking ends. Surface it through the reasoning
-                // callback so the UI can show a "thinking" indicator instead of a dead-looking
-                // turn - it is never mixed into the answer text or the committed history.
+                // Ollama/OpenAI stream chain-of-thought in delta.reasoning, DeepSeek/vLLM in
+                // reasoning_content; surface it via the callback, never into the answer or history.
                 if (onReasoningDelta is not null
                     && (TryGetString(delta, "reasoning", out var reasoning)
                         || TryGetString(delta, "reasoning_content", out reasoning))
@@ -233,13 +217,8 @@ public static class OpenAiChatClient
     }
 
     /// <summary>
-    /// Streams a content channel while pulling out chain-of-thought wrapped in
-    /// <c>&lt;think&gt;...&lt;/think&gt;</c> (or <c>&lt;thinking&gt;</c>) tags that some local models
-    /// emit inline instead of using the structured reasoning field. Text outside the tags goes to
-    /// the answer sink; text inside goes to the reasoning sink (dropped when that's null, e.g. the
-    /// safety gate, which keeps think-text out of the verdict). Stateful across chunks: a tag may
-    /// straddle a delta boundary, so a trailing fragment that could still grow into a tag is held
-    /// back until the next push (or <see cref="FinishAsync"/>).
+    /// Streams a content channel, pulling out inline <c>&lt;think&gt;</c> chain-of-thought tags; stateful
+    /// across chunks so a tag straddling a delta boundary is held back until <see cref="FinishAsync"/>.
     /// </summary>
     private sealed class ThinkSplitter(Func<string, Task> onText, Func<string, Task>? onReasoning)
     {
@@ -326,7 +305,6 @@ public static class OpenAiChatClient
         private static Task EmitAsync(Func<string, Task>? sink, string text)
             => sink is null || text.Length == 0 ? Task.CompletedTask : sink(text);
 
-        // Earliest occurrence of any of the tags (case-insensitive), with the matched length.
         private static (int Index, int Length) IndexOfAnyTag(string haystack, string[] tags)
         {
             var best = -1;
@@ -344,9 +322,8 @@ public static class OpenAiChatClient
             return (best, bestLen);
         }
 
-        // True if `tail` (which begins at a '<') is a prefix of some tag, i.e. it might still
-        // become one once more text arrives ("<", "<thi", "</thin"). A '<' that can't begin any
-        // tag (like a literal "< " or "<x") returns false so it emits immediately.
+        // True if `tail` (beginning at a '<') could still become a tag once more text arrives;
+        // a '<' that can't begin any tag returns false so it emits immediately.
         private static bool CouldStartTag(string tail)
         {
             foreach (var tag in OpenTags)
@@ -381,11 +358,8 @@ public static class OpenAiChatClient
         return false;
     }
 
-    // Hosted OpenAI-compatible endpoints authenticate with "Authorization: Bearer <key>";
-    // a local Ollama ignores it, so the header is simply omitted when no key is configured.
-    // Set per request, not on the shared HttpClient, since the key can change between calls
-    // (and TryAddWithoutValidation so a key with unusual characters can't throw here rather
-    // than failing loudly at the server).
+    // Set per request (the key can change between calls), TryAddWithoutValidation so an unusual
+    // key can't throw here; omitted when no key is configured (local Ollama ignores it).
     private static void AddAuthorization(HttpRequestMessage request, string? apiKey)
     {
         if (!string.IsNullOrWhiteSpace(apiKey))
@@ -424,12 +398,8 @@ public static class OpenAiChatClient
     }
 
     /// <summary>
-    /// A gateway in front of the real provider (Claude Code Router, LiteLLM, OpenRouter, …)
-    /// reports its OWN failure at the top level and buries the provider's reason one or two
-    /// levels down. "All target providers failed." on its own is unactionable, while the
-    /// attempt underneath it says "429 - you've reached your weekly usage limit". Returns a
-    /// short "(upstream 429: …)" suffix for the first attempt that carries either a status or
-    /// a message, or null when the payload has no such shape (plain Ollama/OpenAI errors).
+    /// Extracts a concise "(upstream ...)" suffix for gateway errors (Claude Code Router, LiteLLM,
+    /// OpenRouter) that bury the provider's real reason under attempts[]; null for plain errors.
     /// </summary>
     private static string? UpstreamDetail(JsonElement error)
     {
@@ -449,9 +419,8 @@ public static class OpenAiChatClient
                 ? s.GetInt32()
                 : (int?)null;
 
-            // details.error is the provider's own error body, verbatim - either a string or
-            // the usual { "message": ... }. The attempt's own "message" is the gateway's
-            // wording again ("Upstream request failed."), so it's only the fallback.
+            // details.error is the provider's own body; the attempt's own "message" is the
+            // gateway's wording again, so it's only the fallback.
             string? detail = null;
             if (attempt.TryGetProperty("details", out var details)
                 && details.ValueKind == JsonValueKind.Object

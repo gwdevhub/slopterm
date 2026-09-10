@@ -15,13 +15,8 @@ interface KeyDef {
   wide?: boolean
 }
 
-// The rows the "More keys" button reveals, laid out the way Termius's own key panel groups
-// them: modifiers and navigation/editing first, then the Ctrl-combos worth a dedicated key,
-// then the punctuation phone keyboards bury behind a symbol layer, then function keys for
-// full-screen TUIs. Cursor/editing keys use the normal-mode CSI forms, matching the arrows in
-// the row above (xterm.js sends those same forms unless the remote switches to application
-// mode). Abbreviated labels are the ones physical keycaps use, and each still carries the full
-// word as its accessible name.
+// The rows the "More keys" button reveals: modifiers/navigation first, then Ctrl-combos,
+// buried punctuation, and function keys. Labels abbreviate the physical keycaps.
 const EXTRA_ROWS: KeyDef[][] = [
   [
     { label: 'Shift+Tab', send: '\x1b[Z', wide: true },
@@ -45,10 +40,8 @@ const EXTRA_ROWS: KeyDef[][] = [
     { label: '^K', send: '\x0b', name: 'Ctrl+K' },
     { label: '^W', send: '\x17', name: 'Ctrl+W' },
   ],
-  // A second row of them, weighted towards the ones a full-screen editor puts in its own footer
-  // (nano: ^O write out, ^X exit, ^G help, ^U paste) plus the readline cursor/history keys that
-  // share the same letters. ^S/^Q are deliberately absent: on a terminal that still honors flow
-  // control they freeze the session, which from a key panel looks exactly like a crash.
+  // Weighted towards full-screen editor keys (nano: ^O/^X/^G/^U) plus readline keys. ^S/^Q
+  // are absent: they freeze the session under flow control, looking like a crash.
   [
     { label: '^O', send: '\x0f', name: 'Ctrl+O' },
     { label: '^X', send: '\x18', name: 'Ctrl+X' },
@@ -101,33 +94,15 @@ interface KeyboardToolbarProps {
   onPasteText: (text: string) => void
 }
 
-// Matches the real on-screen keyboard's own feel for a key held down: a short pause so a
-// normal tap never double-fires, then repeat fast enough to be useful for walking the cursor
-// across a line without turning into a machine-gun.
+// Matches a real keyboard's hold-repeat feel: a short pause so a normal tap never
+// double-fires, then a useful repeat rate.
 const HOLD_REPEAT_DELAY_MS = 450
 const HOLD_REPEAT_INTERVAL_MS = 60
 
-// Fires on press instead of on click, and - the important half - keeps the press from moving
-// focus off xterm's hidden textarea.
-//
-// A toolbar button that takes focus makes Android tear the keyboard's input connection down and
-// build it back up on every single tap - that was the half-second lag between tapping a key and
-// the shell reacting. Handling pointerdown rather than click also drops the wait for the tap to
-// complete.
-//
-// finishAndroidComposing() runs first, ahead of everything else: the on-screen keyboard holds
-// the word being typed in a composing region until it's finished normally, and a toolbar press
-// is exactly the kind of "something else happened" that would otherwise tear that composition
-// down mid-word - which is why tapping the left arrow after typing "ls -al" used to wipe out the
-// "-al" instead of moving the cursor. It returns a promise that only resolves once that commit
-// has actually reached the terminal (see androidBridge.ts) - awaiting it before the button's own
-// bytes go out is what keeps the two in the right order; resolving synchronously whenever
-// nothing was composing means this doesn't add any wait to the common case.
-//
-// `repeat` is for keys a real keyboard would auto-repeat while held (arrows, Del, ...) - not
-// for toggles (Ctrl/Alt, the panel switches, a snippet pick), where firing the action twice a
-// second would just be wrong. A hook rather than a plain function since it needs to remember
-// the pending timers across the separate pointerdown/pointerup events on the same button.
+// Fires on pointerdown, not click, and preventDefault keeps focus off xterm's hidden
+// textarea - Android otherwise tears down and rebuilds the input connection per tap.
+// finishAndroidComposing() is awaited first so an in-flight composition commits before the
+// key's bytes go out. `repeat` auto-repeats keys a real keyboard would; toggles leave it off.
 function usePressProps(action: () => void, repeat = false) {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -160,25 +135,22 @@ function usePressProps(action: () => void, repeat = false) {
     onPointerUp: stopRepeat,
     onPointerLeave: stopRepeat,
     onPointerCancel: stopRepeat,
-    // Belt and braces: cancelling pointerdown's default is supposed to suppress the
-    // compatibility mouse events a tap synthesizes, but not every engine honors that, and a
-    // mousedown that gets through would focus the button after all.
+    // Some engines still synthesize a mousedown after a tap; suppressing it stops the
+    // button taking focus anyway.
     onMouseDown: (event: MouseEvent) => event.preventDefault(),
   }
 }
 
-// A key cap. Named keys spell their own name out ("Ctrl", "Tab", "Shift+Tab") rather than
-// wearing an invented glyph - the icons this replaced told the user nothing about what the
-// button did, which is the whole complaint this layout answers.
+// A key cap. Named keys spell their name out ("Ctrl", "Tab") instead of wearing an
+// invented glyph.
 function KeyCap({
   label,
   name,
   armed,
   onClick,
   className = '',
-  // Off for the two sticky-modifier toggles (Ctrl/Alt), which pass this explicitly - holding
-  // one down would just flip it back and forth. On for everything else here: a fixed byte
-  // sequence a real keyboard would happily auto-repeat too.
+  // Off for sticky-modifier toggles (holding one would flip it); on for fixed byte
+  // sequences a real keyboard would auto-repeat.
   repeat = true,
 }: {
   label: string
@@ -237,10 +209,8 @@ function IconKeyCap({
   )
 }
 
-// One entry in the snippet picker. A real component (not an inline button in the .map() below)
-// because it needs its own usePressProps call, and hooks can't be called from inside a loop
-// body - repeat is left off, same as before: pasting a snippet twice a second while held would
-// just be wrong.
+// One entry in the snippet picker - a real component because usePressProps is a hook and
+// can't be called inside a loop body.
 function SnippetButton({ name, command, onPick }: { name: string; command: string; onPick: () => void }) {
   return (
     <button
@@ -254,22 +224,12 @@ function SnippetButton({ name, command, onPick }: { name: string; command: strin
   )
 }
 
-// The keys mobile on-screen keyboards don't expose, sitting below the terminal itself (see
-// TerminalView, which only renders this on isMobileApp()).
+// The keys mobile on-screen keyboards don't expose, below the terminal (rendered only on
+// isMobileApp()). A fixed grid rather than a scrolling row so every cell shrinks to fit; a
+// panel shrinks the terminal rather than overlaying it.
 //
-// Layered rather than crammed into one row: an always-visible row of nine equal-width cells
-// holding only what a shell session reaches for constantly (Esc, Tab, the sticky Ctrl
-// modifier, snippets, the arrows) plus the two panel toggles, and one panel below it - either
-// "More keys" (editing/navigation, one-tap Ctrl-combos, buried punctuation, F1-F12) or the
-// snippet picker, never both. A grid, not a scrolling row: at any phone width every cell
-// shrinks to fit instead of the last key sliding half-under its neighbour.
-//
-// Opening a panel shrinks the terminal rather than overlaying it, so fitAddon stays
-// parent-driven.
-//
-// Presentational apart from fetching the snippet list: every key's bytes are declared here as
-// data, and putting them on the wire (plus the sticky-modifier semantics behind Ctrl/Alt)
-// stays entirely TerminalView's job.
+// Presentational apart from fetching the snippet list; putting bytes on the wire stays
+// TerminalView's job.
 export function KeyboardToolbar({
   ctrlArmed,
   altArmed,
@@ -281,9 +241,8 @@ export function KeyboardToolbar({
   const [panel, setPanel] = useState<'none' | 'keys' | 'snippets'>('none')
   const [snippets, setSnippets] = useState<SavedSnippet[]>([])
 
-  // Fetched when the picker is first opened rather than up front: an unopened picker shouldn't
-  // cost a request per terminal tab. Best-effort like every other vault read - a locked vault
-  // or a failed fetch just means an empty list, never a broken toolbar.
+  // Fetched when the picker is first opened, so an unopened picker costs no request.
+  // Best-effort; a failed read just means an empty list.
   useEffect(() => {
     if (panel !== 'snippets') return
     let cancelled = false
@@ -299,12 +258,9 @@ export function KeyboardToolbar({
     }
   }, [panel])
 
-  // Opening a panel puts the on-screen keyboard away first. A panel shrinks the terminal to
-  // make room for itself (it doesn't overlay), so with the keyboard also up the terminal is
-  // left with a couple of rows between the two - the keys are open precisely because the user
-  // wants something the keyboard doesn't have. Closing a panel deliberately doesn't bring the
-  // keyboard back: tapping the terminal does that, and re-summoning it on every close would
-  // make dipping into the panel for one key a way to lose the screen again.
+  // Opening a panel hides the on-screen keyboard first (both shrinking the terminal would
+  // leave almost no rows); closing deliberately doesn't bring it back - tapping the
+  // terminal does.
   function togglePanel(next: 'keys' | 'snippets') {
     // Read from the rendered value rather than from inside the updater: the hide is a side
     // effect, and an updater can be called more than once for the same tap.

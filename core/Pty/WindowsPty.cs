@@ -5,16 +5,12 @@ using Microsoft.Win32.SafeHandles;
 namespace Slopterm.Server;
 
 /// <summary>
-/// A pseudo-terminal on Windows, via ConPTY (<c>CreatePseudoConsole</c>, Windows 10 1809 and
-/// later). Two anonymous pipes are handed to the console host, which sits between them and the
-/// child process translating the child's console API calls into the VT sequences xterm.js
-/// already speaks - so from this side a Windows shell reads and writes exactly like the
-/// Unix one.
+/// A pseudo-terminal on Windows via ConPTY (<c>CreatePseudoConsole</c>, Windows 10 1809+). Two
+/// anonymous pipes are handed to the console host, which translates the child's console API
+/// calls into the VT sequences xterm.js speaks.
 ///
-/// Handle ownership is the fiddly part and the source of the classic ConPTY hang: the console
-/// host DUPLICATES the two ends it is given, so this process has to close its own copies of
-/// them, or the read end never sees EOF when the shell exits and the terminal tab hangs open
-/// on a dead shell forever.
+/// Handle ownership is the fiddly part: the console host duplicates the ends it is given, so
+/// this process must close its own copies or the read end never sees EOF when the shell exits.
 /// </summary>
 [System.Runtime.Versioning.SupportedOSPlatform("windows")]
 public sealed class WindowsPty : IDisposable
@@ -34,11 +30,8 @@ public sealed class WindowsPty : IDisposable
     }
 
     /// <summary>
-    /// Whether ConPTY is actually here. Resolved by lookup rather than by a Windows version
-    /// check because the version isn't the whole answer: Windows 10 before 1809 doesn't have
-    /// it, and neither does Wine, where the app otherwise runs (see AGENTS.md's Wine testing
-    /// requirement). Without this the missing export surfaces as an EntryPointNotFound thrown
-    /// from inside a connect, instead of a button that was never offered.
+    /// Whether ConPTY is actually here, by symbol lookup rather than version check (Windows
+    /// 10 pre-1809 and Wine both lack it; a missing export would otherwise throw mid-connect).
     /// </summary>
     public static bool IsSupported => HasConPty.Value;
 
@@ -71,9 +64,8 @@ public sealed class WindowsPty : IDisposable
 
         var created = Native.CreatePseudoConsole(size, inRead, outWrite, 0, out var pseudoConsole);
 
-        // The console host has its own duplicates now; these two are the child's ends and
-        // this process must not keep them. Done before the failure check so the pipes are
-        // cleaned up either way.
+        // The console host has its own duplicates now; these are the child's ends and must not
+        // be kept. Done before the failure check so the pipes are cleaned up either way.
         Native.CloseHandle(inRead);
         Native.CloseHandle(outWrite);
 
@@ -139,8 +131,8 @@ public sealed class WindowsPty : IDisposable
                     IntPtr.Zero,
                     IntPtr.Zero,
                     // Inheritance off: the child's stdio comes from the pseudo-console, and
-                    // inheriting this process's handles into a user's shell would hand it
-                    // every socket and file the app has open.
+                    // inheriting this process's handles would hand the shell every socket and
+                    // file the app has open.
                     false,
                     Native.EXTENDED_STARTUPINFO_PRESENT | Native.CREATE_UNICODE_ENVIRONMENT,
                     environment,
@@ -241,8 +233,7 @@ public sealed class WindowsPty : IDisposable
         catch (Exception) { }
 
         // ...and this is the backstop, off-thread so a shell that won't leave can't hold up a
-        // quit. A cmd.exe sitting on a "Terminate batch job (Y/N)?" prompt is the everyday
-        // case: closing the console alone does not end it.
+        // quit (a cmd.exe on a "Terminate batch job (Y/N)?" prompt).
         _ = Task.Run(() =>
         {
             try
@@ -261,8 +252,7 @@ public sealed class WindowsPty : IDisposable
     }
 
     // Standard CommandLineToArgvW quoting, which is what a Windows child uses to split this
-    // back apart. Paths with spaces (C:\Program Files\PowerShell\7\pwsh.exe) make this
-    // mandatory even though the arguments themselves are ours.
+    // back apart; mandatory for paths with spaces.
     private static string BuildCommandLine(LocalShellStartInfo startInfo)
     {
         var parts = new List<string> { startInfo.Executable };

@@ -4,25 +4,12 @@ namespace Slopterm.Server;
 
 /// <summary>
 /// A pseudo-terminal on Linux, macOS and Android: the master side of a <c>/dev/ptmx</c> pair
-/// with a shell running on the slave side, as its session leader and with the slave as its
-/// controlling terminal.
+/// with a shell on the slave, as session leader and controlling terminal.
 ///
-/// The child is started with <c>posix_spawnp</c> rather than <c>forkpty</c>, which is the
-/// version of this every C terminal emulator uses. <c>forkpty</c> forks, and a fork from a
-/// managed process leaves the child holding a runtime whose other threads no longer exist -
-/// any lock one of them happened to be holding (the GC's, the JIT's, malloc's) is locked
-/// forever, so the child can deadlock before it ever reaches <c>exec</c>. <c>posix_spawnp</c>
-/// has no such window: the whole recipe is handed to libc up front and applied between fork
-/// and exec by code that is written to be async-signal-safe. The <c>p</c> matters too - it
-/// searches PATH like <c>execvp</c>, so a shell named without a path still resolves.
-///
-/// The recipe is exactly what <c>login_tty</c> would have done by hand:
-/// <c>POSIX_SPAWN_SETSID</c> makes the child a session leader with no controlling terminal,
-/// and the file action that opens the slave (deliberately WITHOUT <c>O_NOCTTY</c>) then makes
-/// that slave its controlling terminal, because that is what opening a free tty from a
-/// session leader means. Order is guaranteed: POSIX applies spawn attributes before file
-/// actions. Without a controlling terminal there are no job control, no Ctrl+C, no window-size
-/// signals - i.e. not a terminal.
+/// Uses <c>posix_spawnp</c> rather than <c>forkpty</c>: forking a managed process can deadlock
+/// the child (a runtime lock held by another thread stays locked) before it reaches <c>exec</c>.
+/// The recipe mirrors <c>login_tty</c>: <c>POSIX_SPAWN_SETSID</c> plus a file action opening the
+/// slave without <c>O_NOCTTY</c> makes that slave the controlling terminal.
 /// </summary>
 public sealed class UnixPty : IDisposable
 {
@@ -39,9 +26,8 @@ public sealed class UnixPty : IDisposable
     }
 
     /// <summary>
-    /// Whether this OS can do the above. Everything but Android below API 28, which has no
-    /// <c>posix_spawnp</c> at all - the symbol simply isn't in its libc, so this is a lookup
-    /// rather than a version check.
+    /// False on Android below API 28, which has no <c>posix_spawnp</c> symbol at all - a lookup,
+    /// not a version check.
     /// </summary>
     public static bool IsSupported => Native.HasPosixSpawn.Value;
 
@@ -71,9 +57,7 @@ public sealed class UnixPty : IDisposable
                 throw Fail("name the pseudo-terminal");
             }
 
-            // Set before the shell starts, so its very first prompt is drawn at the real
-            // width - a shell that starts at 80x24 and is resized a beat later redraws, and
-            // the redraw is visible.
+            // Set before the shell starts so its first prompt is drawn at the real width.
             SetWindowSize(master, columns, rows);
 
             var pid = Spawn(startInfo, slavePath);
@@ -88,9 +72,8 @@ public sealed class UnixPty : IDisposable
 
     private static int Spawn(LocalShellStartInfo startInfo, string slavePath)
     {
-        // posix_spawn_file_actions_t and posix_spawnattr_t are opaque, and their real size
-        // differs per libc (a pointer on macOS, a few hundred bytes on glibc). Over-allocating
-        // a zeroed block is the portable way to hold one without hard-coding any of that.
+        // The opaque spawn structs differ in size per libc; over-allocating a zeroed block is
+        // the portable way to hold one without hard-coding it.
         var fileActions = Marshal.AllocHGlobal(Native.OpaqueSize);
         var attributes = Marshal.AllocHGlobal(Native.OpaqueSize);
         var argv = IntPtr.Zero;
@@ -117,9 +100,8 @@ public sealed class UnixPty : IDisposable
             Check(Native.posix_spawn_file_actions_adddup2(fileActions, 0, 1), "attach the shell's stdout");
             Check(Native.posix_spawn_file_actions_adddup2(fileActions, 0, 2), "attach the shell's stderr");
 
-            // addchdir_np is a late arrival (glibc 2.29, macOS 10.15, bionic API 34), and it's
-            // only a nicety: without it the shell starts in whatever directory the app itself
-            // was launched from instead of the user's home. Not worth failing a terminal over.
+            // addchdir_np is late-arriving and only a nicety; without it the shell starts in the
+            // app's launch directory instead of the user's home. Not worth failing over.
             if (startInfo.WorkingDirectory is { Length: > 0 } workingDirectory && Native.AddChdir is { } addChdir)
             {
                 addChdir(fileActions, workingDirectory);
@@ -131,9 +113,8 @@ public sealed class UnixPty : IDisposable
             var status = Native.posix_spawnp(out var pid, startInfo.Executable, fileActions, attributes, argv, envp);
             if (status != 0)
             {
-                // posix_spawnp reports through its return value, not errno - including the
-                // child's own failure to exec, which is by far the likeliest one here (a
-                // $SHELL that no longer exists).
+                // posix_spawnp reports through its return value, not errno, including the
+                // child's own exec failure (a $SHELL that no longer exists).
                 throw new IOException($"Could not start {startInfo.Executable}: {Native.DescribeError(status)}");
             }
 
@@ -151,12 +132,9 @@ public sealed class UnixPty : IDisposable
     }
 
     /// <summary>
-    /// Blocking read of whatever the shell has produced. Returns 0 once it never will again.
-    ///
-    /// poll-then-read rather than a plain blocking read so that teardown doesn't depend on
-    /// closing the fd to interrupt it: closing a descriptor another thread is blocked on is
-    /// not guaranteed to wake that thread on Linux, and the read would sit there for the life
-    /// of the process. The timeout is what bounds how long <see cref="Dispose"/> waits.
+    /// Blocking read. Returns 0 once the shell will never produce more. poll-then-read rather
+    /// than a plain blocking read so teardown doesn't rely on closing the fd to interrupt it,
+    /// which is not guaranteed to wake a blocked thread on Linux.
     /// </summary>
     public int Read(byte[] buffer, int offset, int count)
     {
@@ -191,9 +169,7 @@ public sealed class UnixPty : IDisposable
             }
 
             // 0 is EOF on macOS; on Linux the master returns EIO once the last slave fd is
-            // gone, which is the same news. Either way the shell is finished, and anything it
-            // had already written was drained by the reads above - the kernel hands over
-            // buffered output before it reports the hangup.
+            // gone. Either way the shell is finished and buffered output was already drained.
             return 0;
         }
 
@@ -240,9 +216,8 @@ public sealed class UnixPty : IDisposable
             Rows = (ushort)Math.Clamp(rows, 1, ushort.MaxValue),
             Columns = (ushort)Math.Clamp(columns, 1, ushort.MaxValue),
         };
-        // A resize that fails costs the user a badly-wrapped line, not a session, and the one
-        // way it plausibly fails - the shell having just exited - is already handled by the
-        // reader. Nothing here is worth throwing into a resize request over.
+        // A failed resize costs a badly-wrapped line, not a session; the likely cause (shell
+        // just exited) is already handled by the reader.
         Native.ioctl(master, Native.TIOCSWINSZ, ref size);
     }
 
@@ -255,16 +230,12 @@ public sealed class UnixPty : IDisposable
 
         _closed = true;
 
-        // SIGHUP to the whole process group, which is what a terminal emulator does when its
-        // window closes: the shell and anything it left in the foreground all get told the
-        // terminal went away. The negative pid is the group - the child is its own session
-        // leader (POSIX_SPAWN_SETSID), so the group is exactly this session's processes and
-        // nothing else on the machine.
+        // SIGHUP to the whole process group, as a terminal emulator does when its window
+        // closes. The negative pid is the group (the child is its own session leader).
         Native.kill(-_pid, Native.SIGHUP);
 
-        // Reaped off-thread so a shell that ignores SIGHUP can't hold up a quit. Without a
-        // waitpid the child stays a zombie for the life of the app, and a user who opens and
-        // closes local tabs all day would accumulate one per tab.
+        // Reaped off-thread so a shell ignoring SIGHUP can't hold up a quit; without a waitpid
+        // the child stays a zombie for the life of the app.
         _ = Task.Run(async () =>
         {
             for (var attempt = 0; attempt < 20; attempt++)
@@ -372,9 +343,9 @@ public sealed class UnixPty : IDisposable
         internal const int WNOHANG = 1;
         internal const short POLLIN = 0x0001;
 
-        // The two constants that genuinely differ between the BSD and Linux lineages. Getting
-        // either wrong is silent: a wrong TIOCSWINSZ resizes nothing, and a wrong SETSID flag
-        // spawns a shell with no controlling terminal (no Ctrl+C, no job control).
+        // The two constants that genuinely differ between the BSD and Linux lineages; getting
+        // either wrong is silent (a wrong TIOCSWINSZ resizes nothing, a wrong SETSID flag leaves
+        // the shell with no controlling terminal).
         internal static readonly int O_NOCTTY = OperatingSystem.IsMacOS() ? 0x20000 : 0x0100;
         internal static readonly nuint TIOCSWINSZ = OperatingSystem.IsMacOS() ? 0x80087467 : 0x5414;
         internal static readonly short POSIX_SPAWN_SETSID = OperatingSystem.IsMacOS() ? (short)0x0400 : (short)0x0080;
@@ -460,11 +431,9 @@ public sealed class UnixPty : IDisposable
 
         internal delegate int AddChdirDelegate(IntPtr fileActions, string path);
 
-        // Both of these are resolved by hand rather than declared as a DllImport, because
-        // "the symbol isn't there" has to be an answer we can act on instead of an
-        // EntryPointNotFoundException thrown at the worst moment: posix_spawnp is missing on
-        // Android before API 28, and addchdir_np on anything older than glibc 2.29 / macOS
-        // 10.15 / bionic API 34.
+        // Resolved by hand rather than as a DllImport, because a missing symbol must be an
+        // answer we can act on, not an EntryPointNotFoundException at the worst moment
+        // (posix_spawnp below API 28; addchdir_np below glibc 2.29 / macOS 10.15 / bionic API 34).
         private static readonly Lazy<IntPtr> LibC = new(() =>
             NativeLibrary.TryLoad("libc", typeof(UnixPty).Assembly, null, out var handle) ? handle : IntPtr.Zero);
 

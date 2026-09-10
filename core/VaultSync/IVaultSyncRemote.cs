@@ -1,28 +1,20 @@
 namespace Slopterm.Server.VaultSync;
 
 /// <summary>
-/// One entry returned by <see cref="IVaultSyncRemote.ListAsync"/> - a remote path relative
-/// to the collection root, plus whatever the server offered as its version tag. ETag is
-/// null when a server doesn't return one at all (some don't for collections), which the
-/// sync loop treats as "always re-fetch" rather than an error.
+/// One listing entry: a collection-root-relative path plus the server's version tag. ETag null
+/// means the sync loop always re-fetches rather than erroring.
 /// </summary>
 public sealed record RemoteEntry(string Path, string? ETag, bool IsCollection);
 
 /// <summary>
-/// The result of a conditional PUT. Etag is the server's new tag when it bothered to
-/// return one; PreconditionFailed maps HTTP 412 (someone else wrote first), which the
-/// merge loop handles by re-fetching rather than failing the sync.
+/// The result of a conditional PUT. PreconditionFailed maps HTTP 412 (someone else wrote first),
+/// which the merge loop handles by re-fetching.
 /// </summary>
 public sealed record RemoteWriteResult(bool Ok, bool PreconditionFailed, string? ETag);
 
 /// <summary>
-/// The storage side of vault sync, kept deliberately dumb: list/get/put/delete over opaque
-/// bytes at opaque paths, with no idea what a collection, record or key is. WebDAV is the
-/// only implementation today (see <see cref="WebDavRemote"/>); git or S3 can follow without
-/// the merge logic in <see cref="VaultSyncService"/> having to learn anything new.
-///
-/// Paths are always relative to the collection root the remote was constructed with, use
-/// forward slashes, and never start with one - e.g. "records/host/01J….json".
+/// The storage side of vault sync: list/get/put/delete over opaque bytes at opaque paths, with no
+/// idea what a collection or key is. Paths are collection-root-relative and never start with "/".
 /// </summary>
 public interface IVaultSyncRemote
 {
@@ -33,10 +25,8 @@ public interface IVaultSyncRemote
     Task<byte[]?> GetAsync(string path, CancellationToken ct);
 
     /// <summary>
-    /// ifMatch is the caller's last known ETag ("create only" when
-    /// <paramref name="ifNoneMatchStar"/> is set instead). Both are best-effort: servers
-    /// disagree about precondition support, so a caller must still handle two writers
-    /// racing without one - see VaultSyncService's HLC fallback.
+    /// ifMatch is the caller's last known ETag ("create only" when <paramref name="ifNoneMatchStar"/>
+    /// is set). Best-effort: callers must still handle racing writers - see the HLC fallback.
     /// </summary>
     Task<RemoteWriteResult> PutAsync(string path, byte[] content, string? ifMatch, bool ifNoneMatchStar, CancellationToken ct);
 

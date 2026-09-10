@@ -15,37 +15,20 @@ public sealed class ConnectRequest
     public int Columns { get; set; } = 80;
     public int Rows { get; set; } = 24;
 
-    /// <summary>
-    /// The saved host's id, when this connection is to one (null for Quick Connect / Recent).
-    /// Lets the connect endpoint bring that host's port forwards up automatically - see
-    /// ForwardingService.
-    /// </summary>
+    /// <summary>The saved host's id, when connecting to one (null for Quick Connect / Recent); lets the connect endpoint auto-start its port forwards.</summary>
     public string? HostId { get; set; }
 
-    /// <summary>
-    /// Which of the host's credentials to use, when it has more than one. Only meaningful
-    /// alongside HostId, and only when the request carries no secret of its own - the
-    /// backend then resolves it (see CredentialResolver), which is what lets the frontend
-    /// hold no host secrets at all.
-    /// </summary>
+    /// <summary>Which of the host's credentials to use when it has more than one; only meaningful with HostId and when the request carries no secret, which the backend resolves instead.</summary>
     public string? CredentialId { get; set; }
 
-    /// <summary>
-    /// Names a Keychain entry to connect with, for a request that isn't tied to a saved host
-    /// (Quick Connect's "use a saved key"). Resolved by NAME through the same
-    /// CredentialResolver a synced host uses, so the frontend never has to hold the key -
-    /// which is what lets the Keychain listing mask it.
-    /// </summary>
+    /// <summary>Names a Keychain entry to connect with for a request not tied to a saved host (Quick Connect's "use a saved key"); resolved by name so the frontend never holds the key.</summary>
     public string? KeychainName { get; set; }
 }
 
 /// <summary>Open a shell on the machine slopterm itself is running on.</summary>
 public sealed class LocalShellRequest
 {
-    /// <summary>
-    /// Which shell to run. Null or empty means the OS default - see LocalShell.Resolve, which
-    /// is also where $SHELL and the SLOPTERM_LOCAL_SHELL override are honoured.
-    /// </summary>
+    /// <summary>Which shell to run; null or empty means the OS default (see LocalShell.Resolve, which honours $SHELL and SLOPTERM_LOCAL_SHELL).</summary>
     public string? Shell { get; set; }
 
     public int Columns { get; set; } = 80;
@@ -84,11 +67,7 @@ public sealed class ImportHostShareRequest
     public required string Token { get; set; }
 }
 
-/// <summary>
-/// Create/update a collection. Every field except Name is nullable on update and means
-/// "leave it alone" - which is what lets the edit form show a password field it never
-/// fills in, and still save the rest of the form without wiping the stored password.
-/// </summary>
+/// <summary>Create/update a collection. Every field except Name means "leave it alone" when null, so the edit form can save without wiping a stored password.</summary>
 public sealed class CollectionRequest
 {
     public string? Name { get; set; }
@@ -118,12 +97,7 @@ public sealed class MoveRecordRequest
     public required string CollectionId { get; set; }
 }
 
-/// <summary>
-/// The schedule half of a job the user is still editing, for /api/jobs/schedule-preview. A
-/// separate type from JobRecord rather than reusing it: the form asks for this while the
-/// command, host and name may all still be empty, and none of them affect the answer.
-/// Defaults mirror JobRecord's so an omitted field previews what saving would actually do.
-/// </summary>
+/// <summary>The schedule half of a job still being edited, for /api/jobs/schedule-preview; defaults mirror JobRecord's so an omitted field previews what saving would do.</summary>
 public sealed class SchedulePreviewRequest
 {
     public string ScheduleKind { get; set; } = "interval";
@@ -143,9 +117,7 @@ public sealed class SetAiSettingsRequest
     // Null/empty turns the AI agent off.
     public string? BaseUrl { get; set; }
 
-    // The endpoint's optional bearer token, which - unlike the URL - is a secret and is
-    // never read back out, so "leave it as it is" needs its own value: null (or an absent
-    // field) keeps whatever is stored, "" clears it, anything else replaces it.
+    // The optional bearer token is a secret, never read back: null/absent keeps it, "" clears it, anything else replaces it.
     public string? ApiKey { get; set; }
 }
 

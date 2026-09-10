@@ -20,10 +20,8 @@ using Slopterm.Server.VaultSync;
 
 namespace Slopterm.Server;
 
-// What a UI head needs to point a webview at a running slopterm backend. The desktop
-// head (Program.cs) wraps this with a Photino window + tray; a future Android head would
-// wrap it with a WebView. Everything below the app/endpoints lives here, host-agnostic;
-// only the window/tray shell stays in the head.
+// What a UI head needs to point a webview at a running slopterm backend; host-agnostic, with
+// only the window/tray shell kept in the head.
 public sealed record SloptermHostContext(
     WebApplication App,
     string LaunchUrl,
@@ -35,27 +33,22 @@ public sealed record SloptermHostContext(
     SchedulerService Scheduler,
     VaultSyncService VaultSync);
 
-// Builds, configures and starts the Kestrel web app + every endpoint, then returns the
-// running app and the loopback launch URL. Free of any desktop-window/tray coupling so a
-// non-desktop head (Android WebView) can host the exact same backend.
+// Builds, configures and starts the Kestrel web app + every endpoint, returning the running
+// app and the loopback launch URL; free of desktop-window/tray coupling so a non-desktop head can host it.
 public static class SloptermHost
 {
     public static SloptermHostContext Start(string[] args)
     {
-// Static asset paths that don't need the auth cookie/token - none of them are sensitive
-// (no secrets, just "an app called slopterm exists"), and installing as a PWA relies on
-// the browser fetching the manifest/service worker/icons in ways that aren't guaranteed
-// to carry credentials the same way an authenticated page's own fetches do.
+// Static asset paths that don't need the auth cookie/token - they're non-sensitive, and PWA
+// install relies on the browser fetching manifest/sw/icons in ways not guaranteed to carry credentials.
 var publicPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
     "/manifest.webmanifest", "/sw.js", "/favicon.svg",
     "/icon-192.png", "/icon-192-maskable.png", "/icon-512.png", "/icon-512-maskable.png",
 };
 
-// A fixed, stable port so an installed PWA shortcut (origin-scoped, port included) keeps
-// working across app restarts - falls back to an OS-assigned port if it's ever occupied.
-// This isn't a security regression: the actual auth boundary is the per-launch token
-// below, not port secrecy.
+// A fixed, stable port so an installed PWA shortcut (origin-scoped) keeps working across
+// restarts; falls back to an OS-assigned port if occupied. Not a security boundary - the per-launch token is.
 const int PreferredPort = 51823;
 var port = PreferredPort;
 try
@@ -74,25 +67,19 @@ var builder = WebApplication.CreateBuilder(args);
 // Loopback-only: never reachable from other machines by default.
 builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, port));
 
-// Quit must never sit behind live terminal/agent WebSockets - their handlers only return
-// when the session ends, and the host's graceful stop waits for in-flight requests, so the
-// default timeout reads as "the app won't close while an SSH session is open". Quit tears
-// sessions down explicitly (see Quit below) and links ApplicationStopping into the WS
-// handlers' tokens; this short timeout is only the backstop that force-aborts stragglers.
+// Quit must never sit behind live terminal/agent WebSockets (their handlers only return when the
+// session ends), so this short timeout only force-aborts stragglers; Quit tears sessions down explicitly.
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(2));
 
 var app = builder.Build();
 
-// Persisted rather than freshly random every launch (see LaunchTokenStore's doc comment)
-// so a browser tab that's still open across a self-update-triggered restart keeps working
-// with the same cookie instead of getting a 401 from the new process.
+// Persisted rather than freshly random each launch (see LaunchTokenStore) so an open browser
+// tab survives a self-update-triggered restart with the same cookie instead of getting a 401.
 var launchToken = LaunchTokenStore.LoadOrCreate(() => Convert.ToHexString(RandomNumberGenerator.GetBytes(24)));
 var sessions = new SessionStore<TerminalSession>();
 var sftpSessions = new SessionStore<SftpSession>();
-// Session ids whose shell is genuinely over, kept for a while after the session itself is
-// gone. A terminal that was detached when its shell ended (the app was in the background)
-// comes back to an id that no longer resolves, and without this it cannot tell "finished"
-// from "expired" - see the /api/ssh/session/{id}/state endpoint. Pruned on the reaper's tick.
+// Session ids whose shell is genuinely over, kept briefly so a detached terminal can tell
+// "finished" from "expired" (see /api/ssh/session/{id}/state). Pruned on the reaper's tick.
 var endedSessions = new ConcurrentDictionary<string, DateTimeOffset>();
 var vault = new VaultService();
 // If settings (persisted from a previous run) say a master password isn't required, this
@@ -105,9 +92,8 @@ var scheduler = new SchedulerService(vault);
 var vaultSync = new VaultSyncService(vault);
 var collections = new CollectionService(vault, vaultSync);
 
-// Best-effort cleanup of a previous update's backup - see UpdateService.ApplyAsync. Not
-// fatal if this fails (e.g. the old process briefly still holds it on Windows); it'll just
-// be retried on the next startup.
+// Best-effort cleanup of a previous update's backup (see UpdateService.ApplyAsync); retried
+// on the next startup if it fails (e.g. the old process briefly holds it on Windows).
 try
 {
     var previousExeBackup = Environment.ProcessPath + ".old";
@@ -122,9 +108,8 @@ var updateService = new UpdateService();
 UpdateProgress updateProgress = new("idle", 0);
 var updateProgressLock = new object();
 
-// The SSH-tab upload endpoint carries its ConnectRequest as a multipart form field rather
-// than a JSON body, so it has to deserialize that field by hand - match the camelCase
-// convention the minimal-API pipeline uses for every other endpoint's JSON body.
+// The SSH-tab upload endpoint receives its ConnectRequest as a multipart form field,
+// deserialized by hand; match the camelCase convention the minimal-API pipeline uses elsewhere.
 var jsonWebOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
 // Everything below is loopback/token/origin gated - this app has no other auth layer.
@@ -193,14 +178,8 @@ app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = webAssets });
 app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = webAssets,
-    // Never let a client keep these. The embedded assets carry Last-Modified, so without an
-    // explicit header a browser (and Android's WebView especially) is free to heuristically
-    // cache them - including index.html, which is what pins the whole app to an old build:
-    // the cached HTML keeps asking for the hashed bundle it was built against, the cache
-    // serves that too, and an updated app quietly runs its previous UI. That cost a real
-    // debugging round - a bug hunted in code the device wasn't actually running. There is also
-    // nothing to gain here: the server is on loopback, so re-fetching costs no network at all.
-    // Same reasoning as the service worker's deliberate no-caching (see web/public/sw.js).
+    // Never let a client keep these: a heuristically-cached index.html pins the app to an old
+    // hashed bundle, and on loopback re-fetching costs no network. Same as sw.js's no-caching.
     OnPrepareResponse = context =>
     {
         var headers = context.Context.Response.Headers;
@@ -229,7 +208,6 @@ app.MapPost("/api/ssh/connect", (ConnectRequest request) =>
             Port = request.Port,
             Username = request.Username,
         });
-        // Bring up this host's port forwards automatically now that we're connected to it.
         if (!string.IsNullOrEmpty(request.HostId))
         {
             forwarding.StartRulesForHost(request.HostId);
@@ -318,12 +296,8 @@ app.MapPost("/api/sftp/{sessionId}/upload", async (string sessionId, SftpUploadR
     }
 });
 
-// Writes raw uploaded bytes to a remote directory over a fresh, one-shot SFTP connection.
-// Unlike /api/sftp/{sessionId}/upload, this has no existing sftp session to key off - an
-// SSH tab (see TerminalView) only holds an interactive shell, not an SFTP channel - so it
-// carries its own ConnectRequest and opens/closes a short-lived SftpSession just for this
-// write. Backs the SSH tab's paste-to-upload and drag-from-OS flows. multipart/form-data
-// (not JSON) so the file bytes travel as-is rather than base64-inflated.
+// Writes raw uploaded bytes to a remote directory over a fresh, one-shot SFTP connection;
+// an SSH tab holds only a shell, so it carries its own ConnectRequest. Raw multipart, not base64.
 app.MapPost("/api/ssh/upload", async (HttpRequest request, CancellationToken ct) =>
 {
     if (!request.HasFormContentType)
@@ -355,9 +329,8 @@ app.MapPost("/api/ssh/upload", async (HttpRequest request, CancellationToken ct)
         return Results.BadRequest(new { error = "Invalid connect payload." });
     }
 
-    // The tab's request carries no credential for a saved host - the frontend never received
-    // one - so it's resolved here, exactly as the connect endpoints do. Without this, a
-    // one-shot upload from an SSH tab would try to authenticate with nothing at all.
+    // The tab's request carries no credential for a saved host (the frontend never had one),
+    // so it's resolved here exactly as the connect endpoints do.
     if (ResolveConnectCredential(vault, connect) is { } uploadCredentialError)
     {
         return Results.BadRequest(new { error = uploadCredentialError });
@@ -397,11 +370,8 @@ app.MapPost("/api/sftp/{sessionId}/download", async (string sessionId, SftpDownl
     }
 });
 
-// Upload from raw bytes rather than a server-side path: an OS file dragged from the file
-// manager (Explorer/Finder/Nautilus) onto a pane only exists in the browser as bytes, with
-// no path on this machine's disk that the path-based /upload endpoint above could open. The
-// file name and target remote directory ride along as query params; the body is the raw
-// file bytes, same as /api/vault/import.
+// Upload from raw bytes, not a server-side path: an OS file dragged onto a pane exists only as
+// browser bytes. Name and remote dir ride as query params; the body is the raw file bytes.
 app.MapPost("/api/sftp/{sessionId}/upload-bytes", async (string sessionId, string name, string remoteDir, HttpRequest request, CancellationToken ct) =>
 {
     var session = sftpSessions.Get(sessionId);
@@ -529,9 +499,8 @@ app.MapPost("/api/local/mkdir", (LocalMakeDirectoryRequest request) =>
     }
 });
 
-// Whether this machine can open a local terminal at all, and what it would open. The frontend
-// asks once so it can hide the entry point rather than offer a button that always fails - the
-// one platform that says no is Android before API 28 (see UnixPty).
+// Whether this machine can open a local terminal at all; the frontend asks once to hide the
+// entry point. The one platform that says no is Android before API 28 (see UnixPty).
 app.MapGet("/api/local/shell", () =>
 {
     if (!LocalShell.IsSupported)
@@ -548,15 +517,8 @@ app.MapGet("/api/local/shell", () =>
     });
 });
 
-// Opens a shell on the machine slopterm is running on - the desktop's own PC, or the phone -
-// and hands back a session id the terminal WebSocket attaches to exactly like an SSH one.
-// There is deliberately no separate WS/resize/disconnect/state route for local sessions: they
-// go in the same store as SSH sessions and every route past the connect is already shared.
-//
-// This does mean the loopback API can start a process on the user's machine. That is the same
-// boundary /api/local/list already sits on (it reads, renames and deletes the user's files),
-// held by the same per-launch token and Origin/Host checks in the middleware above - and the
-// app it is exposed to is a terminal client, whose entire purpose is running commands.
+// Opens a local shell and returns a session id the terminal WS attaches to like an SSH one;
+// every route past connect is shared. Guarded by the same token/Origin boundary as /api/local/list.
 app.MapPost("/api/local/shell/connect", (LocalShellRequest request) =>
 {
     try
@@ -665,21 +627,16 @@ app.MapPost("/api/settings/show-ssh-config-hosts", (SetShowSshConfigHostsRequest
     return Results.Ok(vault.GetSettings());
 });
 
-// Read by the Android head rather than by anything in here - the keep-alive service picks
-// its notification channel from it (see MainActivity.RefreshSessionNotificationBadge). It
-// lives in settings.json with the rest so it survives reinstalls via the vault backup and is
-// editable from the same Settings page.
+// Read by the Android head (see MainActivity.RefreshSessionNotificationBadge), not by
+// anything here. Lives in settings.json so it survives reinstalls via the vault backup.
 app.MapPost("/api/settings/session-notification-badge", (SetSessionNotificationBadgeRequest request) =>
 {
     vault.SetSessionNotificationBadge(request.Enabled);
     return Results.Ok(vault.GetSettings());
 });
 
-// Read-only, sourced live from ~/.ssh/config on every call - no vault unlock needed (same
-// posture as /api/local/list: this app already has full local filesystem access, and
-// nothing here is ever written back to the file). The frontend only surfaces this behind
-// the ShowSshConfigHosts toggle, but the endpoint itself isn't gated on it - a missing/
-// unparseable config file already degrades to an empty list with no error either way.
+// Read-only, sourced live from ~/.ssh/config on every call - no vault unlock needed, nothing is
+// ever written back, and a missing/unparseable file degrades to an empty list.
 app.MapGet("/api/ssh-config/hosts", () => Results.Ok(SshConfigService.ListHosts()));
 
 app.MapGet("/api/settings/github-token", () => Results.Ok(new { hasToken = !string.IsNullOrEmpty(vault.GetGithubToken()) }));
@@ -697,9 +654,8 @@ app.MapPost("/api/settings/github-token", (SetGithubTokenRequest request) =>
     }
 });
 
-// The in-terminal AI agent's endpoint config. The optional API key a hosted endpoint needs IS
-// a secret, so it lives in the vault and only its presence is ever reported back. Models are
-// never settings: the agent panel chooses only from the endpoint's live /models response.
+// The in-terminal AI agent's endpoint config. The optional API key is a secret and lives in
+// the vault (only its presence is reported); models are never settings, only read from /models.
 app.MapGet("/api/settings/ai", () =>
 {
     var settings = vault.GetSettings();
@@ -708,15 +664,13 @@ app.MapGet("/api/settings/ai", () =>
 
 app.MapPost("/api/settings/ai", (SetAiSettingsRequest request) =>
 {
-    // An empty URL is a real setting, not a missing one: it turns the agent off, which is
-    // also the out-of-the-box state. A pasted URL gets its trailing slash normalized away so
-    // "{base}/chat/completions" concatenation stays clean.
+    // An empty URL is a real setting (turns the agent off, the default); a pasted URL gets its
+    // trailing slash normalized so "{base}/chat/completions" concatenation stays clean.
     var baseUrl = (request.BaseUrl ?? string.Empty).Trim().TrimEnd('/');
     vault.SetAiSettings(baseUrl);
 
-    // Only touch the key when the caller actually sent the field (null = keep as is), so a
-    // saving the URL can't clear it. Writing it needs an unlocked vault - the URL is already
-    // saved by then, which is the useful partial outcome.
+    // Only touch the key when the caller sent the field (null = keep as is), so saving the URL
+    // can't clear it. Writing it needs an unlocked vault.
     if (request.ApiKey is not null)
     {
         try
@@ -769,9 +723,8 @@ app.MapGet("/api/ai/status", async () =>
     }
     catch (Exception ex)
     {
-        // A 401/403 is a different problem from "nothing is listening" - the endpoint is up
-        // and the key is missing, wrong, or unreadable because the vault is locked - so the UI
-        // can point at the key instead of telling the user to start Ollama.
+        // A 401/403 differs from "nothing is listening" - the endpoint is up but the key is
+        // missing/wrong/unreadable - so the UI can point at the key.
         var unauthorized = ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden };
         return Results.Ok(new
         {
@@ -813,14 +766,8 @@ app.MapPost("/api/update/apply", (UpdateApplyRequest request) =>
 
     var githubToken = vault.GetGithubToken();
 
-    // Captured before ApplyAsync runs, not re-read afterwards: ApplyAsync renames this
-    // process's own running executable out from under it (old -> ".old", new binary into
-    // the vacated path), and on Linux Environment.ProcessPath is backed by /proc/self/exe,
-    // which follows that rename for the rest of this process's life - verified directly
-    // (renamed a running process's own exe file, then placed a new file at the original
-    // path; /proc/<pid>/exe kept reporting the renamed-away ".old" path, never the new
-    // file). Re-reading Environment.ProcessPath after the swap would relaunch the old,
-    // backed-up binary instead of the freshly installed one.
+    // Captured before ApplyAsync runs: it renames this process's own exe, and on Linux
+    // Environment.ProcessPath follows /proc/self/exe, so re-reading it would relaunch the old binary.
     var exePathForRestart = Environment.ProcessPath!;
 
     _ = Task.Run(async () =>
@@ -869,11 +816,8 @@ app.MapPost("/api/update/apply", (UpdateApplyRequest request) =>
                 updateProgress = new UpdateProgress("restarting", 100);
             }
 
-            // Gives a client polling /api/update/progress a real chance to observe the
-            // "restarting" phase at least once before the connection drops - verified
-            // against the real repo/API that without this, the install+shutdown sequence
-            // is fast enough that a poller can go straight from "verifying" to the
-            // connection being refused, never seeing "installing"/"restarting" at all.
+            // Gives a poller a chance to observe "restarting" before the connection drops -
+            // without this the sequence can jump straight from "verifying" to connection refused.
             await Task.Delay(500);
 
             // Stops Kestrel (releasing the fixed port) before spawning the replacement
@@ -882,17 +826,8 @@ app.MapPost("/api/update/apply", (UpdateApplyRequest request) =>
 
             Process.Start(new ProcessStartInfo(exePathForRestart) { UseShellExecute = false });
 
-            // Deliberately NOT relying on this background task's completion unblocking
-            // Program.cs's own `await app.WaitForShutdownAsync()` and falling through
-            // naturally from there - verified directly (published single-file exe, real
-            // repo/API) that the two race: `app.StopAsync()` unblocks that awaited call on
-            // its own continuation, Main() can then fall off the end and the whole process
-            // (including this background task's thread pool) can be torn down *before*
-            // Process.Start above ever got to run, silently dropping the respawn entirely -
-            // the new process just never appeared. Process.Start is synchronous - by the
-            // time it returns here the replacement OS process already exists independently
-            // of this one - so exiting immediately and explicitly right after it, rather
-            // than leaving shutdown ordering to chance, is what actually closes that race.
+            // Not relying on this task unblocking Main's WaitForShutdownAsync: the two race and the
+            // process can be torn down before Process.Start runs, dropping the respawn. Process.Start is synchronous.
             Environment.Exit(0);
         }
         catch (Exception ex)
@@ -942,10 +877,8 @@ app.MapPost("/api/vault/reset", () =>
 });
 
 // --- Collections ------------------------------------------------------------------------
-// A collection is the unit of sync and sharing: a set of records that converge with one
-// WebDAV URL, end-to-end encrypted under a key the server never sees (see
-// core/VaultSync/). The implicit `local` collection isn't listed here - it has no remote
-// and never leaves the device, so there is nothing about it to configure.
+// A collection is the unit of sync and sharing: records that converge with one WebDAV URL,
+// end-to-end encrypted under a key the server never sees. `local` has no remote and isn't listed.
 
 // The scope catalog, so the UI doesn't hard-code the list (or its warnings) a second time.
 app.MapGet("/api/collections/scopes", () => Results.Ok(SyncScopes.All.Select(scope => new
@@ -1019,8 +952,7 @@ app.MapDelete("/api/vault/collections/{id}", (string id, bool? keepRecordsLocall
 });
 
 // What a collection actually carries, grouped by scope - "which of my hosts does the team
-// see?", which the record count on the card can't answer. Labels only; the same rule as the
-// listing endpoints applies, so no secret is in the response.
+// see?"; labels only, no secrets in the response.
 app.MapGet("/api/collections/{id}/contents", (string id) =>
 {
     try
@@ -1050,9 +982,8 @@ app.MapPost("/api/collections/{id}/sync", async (string id, CancellationToken ct
     }
 });
 
-// The token carries the collection key AND the WebDAV credentials, so the frontend reveals it
-// on demand and warns against pasting it into a chat. Access itself is the server's business:
-// the receiving device can keep these credentials or swap in its own account.
+// The token carries the collection key AND the WebDAV credentials; the frontend reveals it
+// on demand and warns against pasting it into a chat.
 app.MapGet("/api/collections/{id}/token", (string id, string? passphrase) =>
 {
     try
@@ -1114,12 +1045,8 @@ app.MapPost("/api/vault/records/{folder}/{id}/collection", (string folder, strin
     }
 });
 
-// Credential material never leaves the backend in a listing: a saved secret is something
-// the app uses, not something it shows back to you. What the UI gets instead is whether a
-// secret exists, and where the credential RESOLVED on this device (see CredentialResolver),
-// so a card can say "your key: prod-deploy" or "no key on this device" without ever
-// handling the key itself. Connecting no longer needs the secret client-side either - see
-// the connect endpoints, which resolve from hostId.
+// Credential material never leaves the backend: the UI gets whether a secret exists and where it
+// resolved (see CredentialResolver), never the key. Connecting resolves from hostId.
 app.MapGet("/api/vault/hosts", () =>
 {
     try
@@ -1145,9 +1072,8 @@ app.MapPost("/api/vault/hosts", (HostRecord request, string? collectionId) =>
     }
 });
 
-// Replace-don't-reveal: the edit form never received the stored secrets, so a credential
-// that comes back with no secret means "unchanged", not "cleared". Anything the user
-// actually typed arrives populated and replaces what was there.
+// Replace-don't-reveal: a credential arriving with no secret means "unchanged", not
+// "cleared", because the edit form never received the stored secrets.
 app.MapPut("/api/vault/hosts/{id}", (string id, HostRecord request) =>
 {
     try
@@ -1179,9 +1105,8 @@ app.MapDelete("/api/vault/hosts/{id}", (string id) =>
     }
 });
 
-// Encodes a saved host (address/port/credentials) into a portable, encrypted token the
-// "Copy" right-click action puts on the clipboard - see HostShareCodec for the format and
-// its (deliberately non-secret) encryption.
+// Encodes a saved host into a portable, encrypted token for the "Copy" action - see
+// HostShareCodec for the format and its (deliberately non-secret) encryption.
 app.MapGet("/api/vault/hosts/{id}/share", (string id) =>
 {
     try
@@ -1193,8 +1118,6 @@ app.MapGet("/api/vault/hosts/{id}/share", (string id) =>
         }
 
         // A host whose key resolves by name exports as exactly that - a name, no secret.
-        // Sharing the inventory without shipping anyone's private key is the whole point of
-        // the keychain credential kind.
         return Results.Ok(new { token = HostShareCodec.Encode(match.Record) });
     }
     catch (InvalidOperationException ex)
@@ -1203,10 +1126,8 @@ app.MapGet("/api/vault/hosts/{id}/share", (string id) =>
     }
 });
 
-// Duplicating has to happen server-side now that credential material never reaches the
-// frontend: a copy built from what the UI holds would arrive with no password or key at all.
-// The name suffix is applied here for the same reason - it's the only place that can see the
-// whole record.
+// Duplicating happens server-side now that credential material never reaches the frontend;
+// the name suffix is applied here too, the only place that can see the whole record.
 app.MapPost("/api/vault/hosts/{id}/duplicate", (string id) =>
 {
     try
@@ -1560,8 +1481,7 @@ app.MapPost("/api/sync/rules/{id}/stop", (string id) =>
 });
 
 // --- Scheduled jobs: the job records (persisted config) plus live status/run history. ---
-// Every mutation pokes the scheduler so it reconciles immediately rather than on its next
-// poll; it re-reads the records itself, so there's no separate "apply this change" call.
+// Every mutation pokes the scheduler to reconcile immediately; it re-reads the records itself.
 
 app.MapGet("/api/vault/jobs", () =>
 {
@@ -1674,11 +1594,8 @@ app.MapPost("/api/jobs/{id}/cancel", (string id) =>
     return Results.NoContent();
 });
 
-// "When would this actually run?" for the job form, answered before anything is saved - the
-// only practical way to tell whether a cron expression says what you meant. Takes the schedule
-// fields of an unsaved job (nothing else about it is needed) and returns real instants from the
-// same code the loop uses, so the preview can't promise a schedule the scheduler won't keep.
-// Needs no vault access, hence no unlock/404 path here.
+// "When would this actually run?" for the job form, answered before saving from the same code the
+// scheduler loop uses, so the preview can't promise a schedule it won't keep. Needs no vault access.
 app.MapPost("/api/jobs/schedule-preview", (SchedulePreviewRequest request) =>
 {
     if (request.ScheduleKind == "cron" && SchedulerService.ValidateCronExpression(request.CronExpression) is { } error)
@@ -1747,9 +1664,8 @@ app.MapPost("/api/vault/recent-connections", (RecentConnectionRecord request) =>
     return Results.NoContent();
 });
 
-// Both best-effort like /api/vault/logs - GetOpenTabs returns an empty snapshot rather
-// than 401 if the vault happens to be locked (a brand-new app window shouldn't error out
-// just because it hasn't unlocked yet), and the POST silently no-ops the same way.
+// Both best-effort like /api/vault/logs: GET returns an empty snapshot rather than 401 when
+// locked (a brand-new window shouldn't error before unlocking), and the POST silently no-ops.
 app.MapGet("/api/vault/open-tabs", () => Results.Ok(vault.GetOpenTabs()));
 
 app.MapPost("/api/vault/open-tabs", (OpenTabsRecord request) =>
@@ -1758,11 +1674,8 @@ app.MapPost("/api/vault/open-tabs", (OpenTabsRecord request) =>
     return Results.NoContent();
 });
 
-// Appearance (theme colors + fonts) lives in the vault so it syncs across a user's devices
-// like their hosts/snippets. Best-effort exactly like open-tabs above: GET returns null when
-// locked or unset (the client keeps its own localStorage cache for instant, pre-unlock
-// theming), and the POST no-ops while locked. The body is stored opaquely so the theme schema
-// stays a purely client-side concern.
+// Appearance lives in the vault so it syncs across devices. Best-effort like open-tabs: GET
+// returns null when locked/unset (client caches locally), the POST no-ops, and the body is opaque.
 app.MapGet("/api/vault/appearance", () => Results.Ok(vault.GetAppearance()));
 
 app.MapPost("/api/vault/appearance", (JsonElement request) =>
@@ -1773,11 +1686,8 @@ app.MapPost("/api/vault/appearance", (JsonElement request) =>
 
 app.MapDelete("/api/ssh/session/{sessionId}", (string sessionId) =>
 {
-    // Recorded as ended, not merely absent, so the terminal's own socket closing a beat later
-    // reads as "this session is finished" rather than "it vanished, dial a new one" - which
-    // would reconnect the very session the user just disconnected. Written before the removal
-    // because the removal disposes inline and takes a moment, and a probe landing in between
-    // would find neither the session nor the marker.
+    // Recorded as ended, not merely absent, so the terminal's own socket closing a beat later reads
+    // as "finished" rather than "vanished". Written before the removal, which disposes inline.
     if (sessions.Get(sessionId) is not null)
     {
         endedSessions[sessionId] = DateTimeOffset.UtcNow;
@@ -1792,16 +1702,8 @@ app.MapDelete("/api/ssh/session/{sessionId}", (string sessionId) =>
     return Results.NoContent();
 });
 
-// Which SSH sessions are still connected. A reloaded page uses this to find the sessions its
-// restored tabs were on and reattach to them instead of dialing fresh connections.
-// Host/port/username only: no secrets, and all three are already in the open-tabs record and
-// the connection log.
-// Ended sessions are filtered out even though they're briefly still in the store (the reaper
-// collects them on its next tick): reattaching to a shell that has already exited would mount
-// a whole terminal onto it just to watch it close again.
-// `kind` distinguishes the local-shell sessions that now share this store, so a restored
-// local tab reattaches to a local session rather than to whichever session happened to keep
-// its id.
+// Which SSH sessions are still connected, so a reloaded page reattaches its tabs. Host/port/user
+// only. Ended sessions are filtered out, and `kind` distinguishes local-shell sessions.
 app.MapGet("/api/ssh/sessions", () => Results.Ok(
     sessions.Snapshot().Where(entry => !entry.Value.Ended).Select(entry => new
     {
@@ -1813,14 +1715,8 @@ app.MapGet("/api/ssh/sessions", () => Results.Ok(
         attached = entry.Value.IsAttached,
     })));
 
-// The same for SFTP, so a reloaded page reattaches its file-browser tabs rather than opening
-// a second connection per tab and orphaning the first (an orphan nothing ever cleans up -
-// unlike terminals, SFTP sessions hold no socket to lose and so are never reaped).
-//
-// Disconnected ones are dropped from the store as they're found, which is the only thing that
-// ever collects them. That matters here more than it looks: an SFTP session whose SSH link
-// died while the app was backgrounded is unusable, and offering it for reattach would give
-// the user a file browser that fails on every click with no way back.
+// The same for SFTP, so a reload reattaches file-browser tabs instead of orphaning the first.
+// Disconnected ones are dropped as found - SFTP sessions hold no socket and are never reaped.
 app.MapGet("/api/sftp/sessions", () =>
 {
     var connected = new List<KeyValuePair<string, SftpSession>>();
@@ -1846,17 +1742,8 @@ app.MapGet("/api/sftp/sessions", () =>
     }));
 });
 
-// Why a terminal's socket died, from the session's point of view. The browser can't tell a
-// rejected upgrade from a dead network - both arrive as an anonymous close - so a reconnecting
-// terminal asks here and gets one of three answers:
-//   live    - the session is being held for you; reattach.
-//   ended   - the shell finished on its own (`exit`), or the user disconnected it, while you
-//             were away; close the tab instead of silently dialing a whole new login.
-//   unknown - never heard of it, or it aged out, or its transport died. All three mean the
-//             same thing to the client: the tab is still wanted, so dial again.
-// `ended` is why endedSessions exists at all: without it, a shell that exits while the app is
-// backgrounded is indistinguishable from one that timed out, and coming back would hand the
-// user a brand-new authenticated session they never asked for.
+// Why a terminal's socket died: "live" (reattach), "ended" (shell finished or user disconnected
+// while away), or "unknown" (dial again). endedSessions distinguishes ended from timed out.
 app.MapGet("/api/ssh/session/{sessionId}/state", (string sessionId) =>
 {
     if (sessions.Get(sessionId) is { Ended: false })
@@ -1874,10 +1761,8 @@ app.MapGet("/api/ssh/session/{sessionId}/state", (string sessionId) =>
     return Results.Ok(new { state = endedSessions.ContainsKey(sessionId) ? "ended" : "unknown" });
 });
 
-// The browser terminal fits itself to its container, then posts the resulting size here so
-// the remote PTY matches - see TerminalSession.Resize. Separate from the I/O WebSocket on
-// purpose: that channel is a raw byte pump straight into the shell, so a control message
-// would have to be escaped out of the user's own keystrokes; a plain REST call sidesteps that.
+// The browser terminal posts its fitted size here so the remote PTY matches (see
+// TerminalSession.Resize): a REST call, not a control frame in the raw byte-pump WS.
 app.MapPost("/api/ssh/{sessionId}/resize", (string sessionId, TerminalResizeRequest request) =>
 {
     var session = sessions.Get(sessionId);
@@ -1897,16 +1782,8 @@ app.MapPost("/api/ssh/{sessionId}/resize", (string sessionId, TerminalResizeRequ
     }
 });
 
-// The terminal's byte pump. Losing this socket does NOT end the SSH session: the session
-// keeps running detached (draining into its scrollback) until it's either reattached or
-// aged out by the reaper below. That distinction is the whole fix for "switching apps on
-// Android kills every connection" - a WebView that gets suspended, reclaimed or reloaded
-// drops this socket for reasons that have nothing to do with the user being done with the
-// shell, and this handler used to read every one of them as `exit`.
-//
-// `?since=` is the client's byte offset into the session's total output, so a reattach
-// replays exactly what it missed instead of the screen jumping to a fresh prompt. Omitted
-// by a client with nothing on screen (a reloaded page), which gets the retained tail.
+// The terminal's byte pump. Losing this socket does NOT end the session: it runs detached until
+// reattached or reaped. `?since=` replays exactly the bytes a reconnect missed.
 app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId) =>
 {
     if (!context.WebSockets.IsWebSocketRequest)
@@ -1935,16 +1812,12 @@ app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId
     // reason it sends has to go out while its own send pump is quiesced, which only it knows.
     var result = await session.AttachAsync(socket, since, cts.Token);
 
-    // The shell finished, or the SSH transport under it died - either way there is nothing
-    // left to reattach to, so the session goes now rather than idling out the grace period.
-    // Every other way out of AttachAsync leaves it connected and detached for the reaper to
-    // age out if nobody comes back.
+    // Shell ended or transport died: nothing left to reattach to, so remove it now rather than
+    // idle out the grace period. Every other exit leaves it detached for the reaper.
     if (result is AttachResult.ShellEnded or AttachResult.TransportLost)
     {
-        // Marked before it's removed, not after: a client whose socket died without a close
-        // frame - which is the whole reason this record exists - probes for the session's
-        // fate, and the other order leaves a window where it finds neither the session nor
-        // the marker and dials a fresh login to a host whose shell just exited.
+        // Marked before removal: a client whose socket died without a close frame probes for the
+        // session's fate, and the other order leaves a window where it finds neither marker nor session.
         if (result is AttachResult.ShellEnded)
         {
             endedSessions[sessionId] = DateTimeOffset.UtcNow;
@@ -1958,10 +1831,8 @@ app.Map("/ws/terminal/{sessionId}", async (HttpContext context, string sessionId
     }
 });
 
-// The in-terminal AI agent's single full-duplex streaming channel. Text frames, one JSON object
-// per frame, camelCase via AgentJson.Web. Same loopback/token/origin gating as every other route
-// (the global middleware above). Unlike the PTY WS, closing this does NOT remove the SSH session -
-// the conversation lives on the still-alive TerminalSession and replays via `history` on reconnect.
+// The in-terminal AI agent's full-duplex streaming channel: one camelCase JSON object per frame.
+// Closing it does NOT remove the session - the conversation replays via `history` on reconnect.
 app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =>
 {
     if (!context.WebSockets.IsWebSocketRequest)
@@ -1977,10 +1848,8 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
         return;
     }
 
-    // Deliberately NOT `using` - socket/cts are disposed manually in the finally, AFTER the
-    // in-flight turn task has completed, so a still-running turn never emits onto a disposed socket.
-    // ApplicationStopping is linked in for the same reason as the terminal WS: a quit must
-    // unblock the receive loop immediately rather than the graceful stop waiting on it.
+    // Deliberately not `using`: socket/cts are disposed in the finally AFTER the in-flight turn
+    // completes, so a running turn never emits onto a disposed socket. ApplicationStopping is linked in.
     var socket = await context.WebSockets.AcceptWebSocketAsync();
     var cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, app.Lifetime.ApplicationStopping);
     var sendLock = new SemaphoreSlim(1, 1);
@@ -1988,9 +1857,8 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
     // place turns are started, draining this in order. Stop/clear empty it.
     var queue = new ConcurrentQueue<(string Mode, string Model, string Text)>();
     var signal = new SemaphoreSlim(0);
-    // Cancels only the "waiting for the user's Enter" watch - a new user message, stop, or
-    // clear must all end it (deliberately never disposed mid-flight: the receive loop may
-    // race a Cancel against the pump replacing it, and an undisposed CTS is just GC work).
+    // Cancels only the "waiting for Enter" watch - a new message, stop, or clear all end it.
+    // Never disposed mid-flight: the receive loop may race a Cancel against the pump replacing it.
     CancellationTokenSource? watchCts = null;
 
     // Tolerates a closing/closed/disposed socket - never throws upward, so a stray late emit from
@@ -2022,13 +1890,8 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
         }
     }
 
-    // True once the terminal shows the user's Enter after the typed suggestion. The suggestion's
-    // final line is typed WITHOUT a newline, but a multi-line one (a heredoc) already sent its
-    // interior line breaks as carriage returns, which the shell echoes back - so the user's
-    // Enter is the first newline PAST those injectedNewlines (0 for a plain single-line
-    // suggestion, where the very first newline is the user's). It may equally be them running
-    // something else; either way the model then reads what actually happened. Then waits briefly
-    // for the output to settle. False on cancel or a 15-minute timeout.
+    // True once the terminal shows the user's Enter after the typed suggestion (the first newline
+    // past injectedNewlines), then waits for output to settle. False on cancel or 15-min timeout.
     async Task<bool> WaitForUserRunAsync(TerminalSession target, long offset, int injectedNewlines, CancellationToken token)
     {
         var deadline = Environment.TickCount64 + 15 * 60_000;
@@ -2063,12 +1926,8 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
         return false;
     }
 
-    // The pump: the single consumer that starts every turn. Each wake drains, in order:
-    // queued user messages first (a new message always wins over waiting on a suggestion),
-    // then - if the last turn typed a suggestion - watches for the user's Enter and runs an
-    // automatic continuation turn. Repeats until there is nothing left to do, then sleeps
-    // until the next signal. Serializing everything here is what makes message queueing,
-    // the continuation loop, and stop/clear compose without races.
+    // The pump: the single consumer that starts every turn, draining queued messages then watching
+    // for the user's Enter. Serializing here makes queueing, continuation, and stop/clear race-free.
     var lastMode = "chat";
     var lastModel = "";
     var pumpTask = Task.Run(async () =>
@@ -2134,13 +1993,12 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
                         continue;
                     }
 
-                    break; // nothing queued, nothing pending - sleep until the next signal
+                    break;
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            // connection closing
         }
     });
 
@@ -2198,23 +2056,16 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
                         break;
                     }
 
-                    // Sending while the saved-chats list is open starts a fresh conversation for
-                    // this one message - the "New chat then send" flow the user expects - instead
-                    // of appending it to the now-hidden current chat, where it would look like the
-                    // message just vanished. Doing it here as part of the send (rather than the
-                    // client firing a separate new_chat frame) is deliberate: the new_chat handler
-                    // emits an empty history frame, which would wipe the user bubble the client
-                    // already rendered optimistically. NewChat() keeps the outgoing chat in the
-                    // saved list and supersedes anything in flight (it bumps the generation).
+                    // Sending with saved chats open starts a fresh conversation for this message -
+                    // done here rather than via new_chat, whose empty history frame would wipe the bubble.
                     if (msg.NewChat)
                     {
                         queue.Clear();
                         session.Agent.NewChat();
                     }
 
-                    // Never rejected: messages queue in order and the pump drains them one
-                    // turn at a time. A new message also supersedes any watch still waiting
-                    // on a previous suggestion's Enter.
+                    // Never rejected: messages queue in order and the pump drains them one turn
+                    // at a time. A new message also supersedes any watch waiting on a suggestion's Enter.
                     queue.Enqueue((msg.Mode ?? "chat", msg.Model, msg.Text ?? ""));
                     watchCts?.Cancel();
                     signal.Release();
@@ -2274,10 +2125,8 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
     catch (WebSocketException) { }
     finally
     {
-        // Wind the pump down, WAIT for it, THEN dispose socket/cts - the turn's CTS is
-        // standalone (not linked to this connection), so a dropped socket doesn't auto-cancel
-        // it; CancelCurrent does, and awaiting the pump guarantees no emit races the disposal
-        // below.
+        // Wind the pump down, WAIT for it, THEN dispose socket/cts - a dropped socket doesn't
+        // auto-cancel the standalone turn, and awaiting the pump guarantees no emit races disposal.
         cts.Cancel();
         session.Agent.CancelCurrent();
         try
@@ -2286,7 +2135,6 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
         }
         catch
         {
-            // observed
         }
 
         if (socket.State == WebSocketState.Open)
@@ -2297,7 +2145,6 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
             }
             catch
             {
-                // best-effort close
             }
         }
 
@@ -2309,19 +2156,8 @@ app.Map("/ws/agent/{sessionId}", async (HttpContext context, string sessionId) =
     }
 });
 
-// Detached sessions don't live forever. Once a terminal's WebSocket has been gone for the
-// whole grace window with nothing reattaching, the SSH connection is torn down and logged
-// exactly as an ended session always was - so the old "close the socket, kill the session"
-// behavior still happens, just minutes later instead of instantly.
-//
-// The window is what "keep connections open for a few minutes in the background" means in
-// practice: long enough to cover switching to another app and back, short enough that a tab
-// the user really is finished with doesn't hold a remote shell open all day. It applies on
-// every platform, so a page reload or a webview crash on the desktop is survivable too.
-//
-// SFTP sessions are deliberately not reaped: they hold no WebSocket, so there's no transport
-// to lose and nothing here would ever be able to tell an idle file browser from an abandoned
-// one. They keep their existing "live until explicitly disconnected" lifetime.
+// Detached sessions don't live forever: once a terminal's WS has been gone the whole grace window,
+// the connection is torn down. SFTP sessions are deliberately never reaped (no WebSocket to lose).
 var detachGrace = TimeSpan.FromMinutes(5);
 var endedSessionMemory = TimeSpan.FromMinutes(30);
 _ = Task.Run(async () =>
@@ -2340,10 +2176,8 @@ _ = Task.Run(async () =>
                     continue;
                 }
 
-                // Each teardown is best-effort and isolated: disposing a session whose TCP
-                // link is by definition suspect can throw out of SSH.NET, and appending to
-                // the log touches disk. One failure must cost that session only - if it
-                // escaped, this loop would end and nothing would ever be reaped again.
+                // Each teardown is best-effort and isolated: disposing a suspect TCP link can throw
+                // out of SSH.NET, and one failure must cost only that session - or the loop would end.
                 try
                 {
                     if (session.ShellEnded)
@@ -2351,9 +2185,8 @@ _ = Task.Run(async () =>
                         endedSessions[id] = DateTimeOffset.UtcNow;
                     }
 
-                    // Remove returns null when something else got there first (a Disconnect
-                    // click landing on this same tick), and that caller already logged - the
-                    // return value is how this stays one log entry per session, not two.
+                    // Remove returns null when something else got there first (a Disconnect click
+                    // on this same tick) and already logged - this keeps it one log entry per session.
                     if (sessions.Remove(id) is { } removed)
                     {
                         vault.AppendLog(new LogEntryRecord
@@ -2410,9 +2243,8 @@ CrashLogger.LogPhase("auto sync rules started");
 scheduler.Start();
 CrashLogger.LogPhase("job scheduler started");
 
-// Converges every collection with its WebDAV remote. Like the two above it's a no-op with
-// a locked vault - the unlock endpoint re-triggers it, since that's the moment a
-// password-protected vault first has collections to read at all.
+// Converges every collection with its WebDAV remote. Like the two above it's a no-op with a
+// locked vault - the unlock endpoint re-triggers it, since that's when collections first exist.
 vaultSync.Start();
 vaultSync.RequestSyncAll();
 CrashLogger.LogPhase("vault sync started");
@@ -2423,12 +2255,7 @@ var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
         return new SloptermHostContext(app, launchUrl, vault, sessions, sftpSessions, forwarding, sync, scheduler, vaultSync);
     }
 
-    /// <summary>
-    /// A saved host as the UI is allowed to see it: no secrets, but everything needed to
-    /// decide whether the card connects and what to say about its credential. `canConnect`
-    /// is computed by the same resolver the connect endpoints use, so the button state and
-    /// what actually happens on click can never disagree.
-    /// </summary>
+    /// <summary>A saved host as the UI is allowed to see it: no secrets, but everything needed to decide whether the card connects. `canConnect` comes from the same resolver the connect endpoints use.</summary>
     private static object MaskHost(VaultService vault, string id, string collectionId, DateTimeOffset updatedAt, HostRecord host) => new
     {
         id,
@@ -2455,12 +2282,7 @@ var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
         },
     };
 
-    /// <summary>
-    /// Carries stored secrets forward across an edit. The form never received them, so a
-    /// credential arriving with an empty secret means "leave it alone"; one arriving with a
-    /// value is a deliberate replacement. Matching is by credential id - a credential the
-    /// user removed simply isn't in the incoming list and so isn't carried over.
-    /// </summary>
+    /// <summary>Carries stored secrets forward across an edit: an incoming credential with an empty secret means "leave it alone", matched by credential id.</summary>
     private static void MergeCredentials(List<CredentialRecord> existing, List<CredentialRecord> incoming)
     {
         foreach (var credential in incoming)
@@ -2476,11 +2298,7 @@ var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
         }
     }
 
-    /// <summary>
-    /// Keychain names are the join key for name-resolved host credentials, so two entries
-    /// sharing one inside a collection would make which key a host connects with a coin
-    /// flip. Returns the error message, or null when the name is free.
-    /// </summary>
+    /// <summary>Keychain names are the join key for name-resolved credentials, so two entries sharing one inside a collection would make which key a host connects with a coin flip. Returns the error, or null when free.</summary>
     private static string? DuplicateKeychainName(VaultService vault, string name, string? excludeId, string? collectionId)
     {
         var target = collectionId ?? CollectionStore.LocalCollectionId;
@@ -2494,13 +2312,7 @@ var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
             : null;
     }
 
-    /// <summary>
-    /// Fills in a connect request's credential from the vault when the client didn't send
-    /// one. The frontend deliberately never holds host secrets any more, so a connect to a
-    /// saved host arrives as hostId (+ optionally credentialId) and nothing else - this is
-    /// where "use a key named prod-deploy" becomes an actual private key, resolved against
-    /// what THIS device holds.
-    /// </summary>
+    /// <summary>Fills in a connect request's credential from the vault when the client didn't send one - where "use a key named prod-deploy" becomes an actual private key resolved against what THIS device holds.</summary>
     private static string? ResolveConnectCredential(VaultService vault, ConnectRequest request)
     {
         if (!string.IsNullOrEmpty(request.Password) || !string.IsNullOrEmpty(request.PrivateKey))
@@ -2559,10 +2371,7 @@ var launchUrl = $"http://127.0.0.1:{boundPort}/?token={launchToken}";
         return null;
     }
 
-    /// <summary>
-    /// Rejects a job the scheduler couldn't act on sensibly, at save time rather than as a
-    /// mystery failed run hours later. Returns null when the job is fine.
-    /// </summary>
+    /// <summary>Rejects a job the scheduler couldn't act on sensibly, at save time rather than as a mystery failed run hours later. Returns null when the job is fine.</summary>
     private static string? ValidateJob(JobRecord job)
     {
         if (string.IsNullOrWhiteSpace(job.Command) && string.IsNullOrWhiteSpace(job.SnippetId))

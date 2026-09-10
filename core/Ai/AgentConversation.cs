@@ -6,60 +6,40 @@ using Slopterm.Server.Vault;
 namespace Slopterm.Server.Ai;
 
 /// <summary>
-/// Per-SSH-session AI conversation state and the agentic loop, backed by a local
-/// OpenAI-compatible server (Ollama by default - see AppSettings.AiBaseUrl).
-/// Constructed with (and owned by) the <see cref="TerminalSession"/>. The transcript is
-/// persisted vault-encrypted per host (user@host:port), so reconnecting to the same host -
-/// even after an app restart - resumes the conversation. One <c>_stateLock</c> guards ALL of
-/// <c>_history</c>, <c>_transcript</c>, <c>_busy</c>, <c>_generation</c>, <c>_loaded</c> and
-/// <c>_currentCts</c>.
-///
-/// Three permission modes:
-///  - "chat": answers only; no tools at all (recent terminal output is inlined into the
-///    prompt instead, so it also works with models lacking tool support).
-///  - "suggest": may TYPE a command into the terminal (no newline) for the user to confirm
-///    with Enter; never executes anything itself.
-///  - "auto": may execute - but every command/keystroke first passes a safety check (a
-///    second model call that sees the recent terminal context); anything flagged unsafe is
-///    only typed as a suggestion, like "suggest" mode. Fails closed if the check errors.
+/// Per-SSH-session AI conversation state and agentic loop, backed by a local OpenAI-compatible
+/// server. Modes: chat (answer only), suggest (type for the user to confirm), auto (execute with a safety check).
 /// </summary>
 public sealed class AgentConversation : IDisposable
 {
     // Transcripts are capped when persisted so a long-lived host chat can't grow unbounded.
     private const int MaxPersistedMessages = 200;
 
-    // How much command output a single tool result may carry back to the model. Capped here
-    // rather than left to whatever the scrollback ring happens to hold: the ring is sized for
-    // the terminal WebSocket's replay needs, and a tool result goes into the transcript and is
-    // re-sent on every subsequent round of the turn, so one `cat` of a big file would
-    // otherwise sit in the context window for the rest of the conversation.
+    // How much command output a single tool result may carry back to the model - capped because a
+    // tool result is persisted and re-sent on every subsequent round of the turn.
     private const int MaxToolOutputBytes = 256 * 1024;
 
     private readonly TerminalSession _session;
     private readonly string _hostKey;         // "user@host:port", lowercase - groups saved chats per host
     private readonly string _legacyRecordId;  // pre-multi-chat record id (hash of _hostKey) - adopted if present
-    private string _currentChatId;            // the vault record the active conversation persists to
+    private string _currentChatId;
     private readonly object _stateLock = new();
     private readonly List<AiChatMessage> _history = []; // model turns (always ends with an assistant msg or empty)
-    private readonly List<ChatMessage> _transcript = []; // display turns
-    private bool _loaded;                                // persisted transcript pulled in yet?
+    private readonly List<ChatMessage> _transcript = [];
+    private bool _loaded;
     private bool _busy;
     private int _generation;                             // bumped by Clear() so an in-flight turn skips its commit
     private CancellationTokenSource? _currentCts;        // per-turn, standalone (not linked to the connection)
-    // A command typed into the terminal but not executed (suggest mode, or an auto-mode
-    // safety flag), with the scrollback offset it was typed at and how many line breaks we
-    // injected (a multi-line heredoc echoes those back before the user acts). The WS handler
-    // watches from that offset for the FIRST newline past the injected ones - the user's Enter -
-    // and then starts a continuation turn automatically.
+    // A command typed but not executed (suggest mode, or an auto-mode safety flag), with the
+    // scrollback offset it was typed at and how many line breaks were injected; the WS handler
+    // watches from that offset for the user's first Enter.
     private (long Offset, string Command, int InjectedNewlines)? _pendingSuggestion;
 
     public AgentConversation(TerminalSession session)
     {
         _session = session;
         _hostKey = $"{session.Username}@{session.Host}:{session.Port}".ToLowerInvariant();
-        // Records written before multi-chat existed used this deterministic per-host id
-        // (hashed so the vault filename stays path-safe) - still recognized so old chats
-        // survive the upgrade.
+        // Records written before multi-chat used this deterministic per-host id (hashed so the vault
+        // filename stays path-safe) - still recognized so old chats survive the upgrade.
         _legacyRecordId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(_hostKey)))[..32].ToLowerInvariant();
         _currentChatId = NewChatId();
     }
@@ -71,12 +51,8 @@ public sealed class AgentConversation : IDisposable
         => record.HostKey == _hostKey || (record.HostKey is null && id == _legacyRecordId);
 
     /// <summary>
-    /// Pulls the MOST RECENT persisted conversation for this host into memory (once) -
-    /// older ones stay listable/reopenable via <see cref="ListChats"/>/<see cref="OpenChat"/>.
-    /// Model history is rebuilt from the transcript's plain text turns - tool-call plumbing
-    /// isn't persisted; the conversational content is what "continue where we left off"
-    /// needs. Best-effort: a locked vault just means nothing loads now; not marking
-    /// <c>_loaded</c> lets a later call (post-unlock reconnect) retry.
+    /// Pulls the most recent persisted conversation for this host into memory (once); older ones stay
+    /// reopenable. Best-effort: a locked vault loads nothing and leaves <c>_loaded</c> false to retry.
     /// </summary>
     public void EnsureLoaded(VaultService vault)
     {
@@ -154,9 +130,8 @@ public sealed class AgentConversation : IDisposable
     }
 
     /// <summary>
-    /// Switches the active conversation to a saved one. Cancels any in-flight turn the same
-    /// way Clear does (generation bump - it skips its commit and emits no turn_done). The
-    /// outgoing conversation was already persisted after its last turn, so nothing is lost.
+    /// Switches the active conversation to a saved one, cancelling any in-flight turn the same way
+    /// <see cref="Clear"/> does (generation bump).
     /// </summary>
     public bool OpenChat(VaultService vault, string id)
     {
@@ -185,10 +160,7 @@ public sealed class AgentConversation : IDisposable
         return true;
     }
 
-    /// <summary>
-    /// Starts a fresh conversation WITHOUT deleting the current one (that's Clear) - the
-    /// outgoing chat stays in the saved list.
-    /// </summary>
+    /// <summary>Starts a fresh conversation without deleting the current one (that's <see cref="Clear"/>).</summary>
     public void NewChat()
     {
         lock (_stateLock)
@@ -210,8 +182,7 @@ public sealed class AgentConversation : IDisposable
     }
 
     /// <summary>
-    /// Deletes a saved conversation. Returns true when it was the ACTIVE one - the caller
-    /// then treats it like a clear (this also resets in-memory state to a fresh chat).
+    /// Deletes a saved conversation; true when it was the active one, which the caller then treats like a clear.
     /// </summary>
     public bool DeleteChat(VaultService vault, string id)
     {
@@ -231,8 +202,7 @@ public sealed class AgentConversation : IDisposable
     }
 
     /// <summary>
-    /// Shallow copy is safe: an assistant message is only added to <c>_transcript</c> AFTER it
-    /// stops mutating (in RunTurnAsync's finally), and user messages are immutable once created.
+    /// Shallow copy is safe: an assistant message is added to <c>_transcript</c> only after it stops mutating.
     /// </summary>
     public IReadOnlyList<ChatMessage> Snapshot()
     {
@@ -284,10 +254,8 @@ public sealed class AgentConversation : IDisposable
     }
 
     /// <summary>
-    /// Wipes both transcript and model history (in memory AND the persisted record) and
-    /// cancels any in-flight turn. Bumping the generation first makes the running turn skip
-    /// its commit and emit no turn_done (the empty history frame the caller sends already
-    /// reset the client).
+    /// Wipes both transcript and model history (memory and persisted) and cancels any in-flight turn;
+    /// bumping the generation first makes the running turn skip its commit.
     /// </summary>
     public void Clear(VaultService vault)
     {
@@ -316,8 +284,7 @@ public sealed class AgentConversation : IDisposable
     public void Dispose() => CancelCurrent();
 
     /// <summary>
-    /// The typed-but-not-run suggestion from the last turn, if any - read-and-clear, so each
-    /// suggestion is watched exactly once.
+    /// The typed-but-not-run suggestion from the last turn, if any - read-and-clear, so each is watched once.
     /// </summary>
     public bool TryTakePendingSuggestion(out long offset, out string command, out int injectedNewlines)
     {
@@ -340,17 +307,15 @@ public sealed class AgentConversation : IDisposable
     }
 
     /// <summary>
-    /// <paramref name="isContinuation"/> marks an automatic follow-up turn (the user ran a
-    /// suggested command): the synthetic prompt goes to the model but not into the visible
-    /// transcript - the user never typed it.
+    /// <paramref name="isContinuation"/> marks an automatic follow-up turn (the user ran a suggested
+    /// command): the synthetic prompt goes to the model but not into the visible transcript.
     /// </summary>
     public async Task RunTurnAsync(VaultService vault, string mode, string model, string userText, Func<object, Task> emit, CancellationToken ct, bool isContinuation = false)
     {
         EnsureLoaded(vault);
         var settings = vault.GetSettings();
-        // Read once per turn (not per request): the endpoint's optional bearer token lives in
-        // the vault, so it's null for a keyless local Ollama - and also whenever the vault is
-        // locked, which surfaces as the endpoint's own 401 rather than a special case.
+        // Read once per turn: the endpoint's optional bearer token is null for a keyless local Ollama,
+        // and whenever the vault is locked (which surfaces as the endpoint's own 401).
         var apiKey = vault.GetAiApiKey();
         var assistantId = Guid.NewGuid().ToString("N");
         var assistant = new ChatMessage { Id = assistantId, Role = "assistant", Mode = mode };
@@ -385,15 +350,8 @@ public sealed class AgentConversation : IDisposable
         // turn_start -> turn_done(error) pair the frontend expects.
         await emit(new { type = "turn_start", id = assistantId, mode });
 
-        // Reasoning models emit their chain-of-thought before (or instead of) an answer; stream
-        // it to the UI as a distinct thinking channel so a long think reads as progress, not a
-        // hang. It never enters assistant.Text (so it isn't persisted or fed back into history).
-        // But the chain-of-thought is often exactly where such a model expresses the command it
-        // means to propose, and that text no longer lands in assistant.Text - so remember whether
-        // a code span appeared here. The suggest-mode rescue nudge below keys off a code span to
-        // catch a model that proposed a command but forgot to call suggest_command; before the
-        // reasoning split that backtick lived in assistant.Text, so without this the nudge would
-        // silently stop firing for reasoning models and nothing would get typed at all.
+        // Stream chain-of-thought as a separate "thinking" channel (never into assistant.Text or
+        // history); track whether it held a code span for the suggest-mode rescue nudge below.
         var reasoningHadCodeSpan = false;
         Func<string, Task> onReasoning = text =>
         {
@@ -412,9 +370,8 @@ public sealed class AgentConversation : IDisposable
         var lastFinishReason = "stop";
         try
         {
-            // Chat mode sends no tools at all (works with models that lack tool support) and
-            // instead inlines the recent terminal output into the system prompt fresh each
-            // request - it never enters the committed history.
+            // Chat mode sends no tools and instead inlines recent terminal output into the system
+            // prompt fresh each request; it never enters the committed history.
             var tools = mode switch
             {
                 "suggest" => SuggestTools,
@@ -424,12 +381,8 @@ public sealed class AgentConversation : IDisposable
 
             var suggestNudged = false;
             var bufferNextRound = false;
-            // The text the FINAL round contributed to assistant.Text, and whether that round made
-            // tool calls. Used after the loop to tell a complete answer from one that ended
-            // mid-thought (a dangling "Let me summarize:" lead-in, or a token-cap truncation), and
-            // to feed just that trailing text back for a clean continuation - a natural-break
-            // round's text isn't in localHistory yet, so re-adding all of assistant.Text would
-            // duplicate what the tool-call rounds already put there.
+            // The text the final round contributed to assistant.Text and whether that round made
+            // tool calls - used to tell a complete answer from one that ended mid-thought.
             var lastRoundText = "";
             var lastRoundHadToolCalls = false;
 
@@ -445,11 +398,8 @@ public sealed class AgentConversation : IDisposable
 
                 var textLenBefore = assistant.Text.Length;
 
-                // The nudged round is buffered instead of streamed live, so a bare "DONE"
-                // (nothing to type) can be discarded without ever reaching the UI. roundText
-                // tracks THIS round's text either way - the tool-call echo below must carry
-                // only the current round, or the model sees its accumulated earlier sentences
-                // in history and restates them (observed as a doubled final answer).
+                // The nudged round is buffered so a bare "DONE" can be discarded before reaching
+                // the UI. roundText tracks only this round - the tool-call echo must not accumulate.
                 var bufferThisRound = bufferNextRound;
                 bufferNextRound = false;
                 var roundText = new StringBuilder();
@@ -490,15 +440,8 @@ public sealed class AgentConversation : IDisposable
 
                 if (result.ToolCalls.Count == 0)
                 {
-                    // Small models sometimes narrate the command in chat instead of calling
-                    // suggest_command - but the point of suggest mode is the command landing
-                    // in the terminal. One deterministic retry: if the answer OR the model's
-                    // chain-of-thought contains a code span and nothing was typed yet, tell the
-                    // model to call the tool (or say DONE, which the buffering above swallows).
-                    // Checking reasoning too is load-bearing for reasoning models, which routinely
-                    // express the command only inside <think> - that text is split out of
-                    // assistant.Text, so without the reasoningHadCodeSpan arm this nudge never
-                    // fires for them and the suggestion is never typed.
+                    // Small models sometimes narrate the command instead of calling suggest_command.
+                    // One retry, if the answer or reasoning has a code span and nothing was typed.
                     if (mode == "suggest" && !suggestNudged
                         && !assistant.Activities.Any(a => a.Tool == "suggest_command")
                         && (assistant.Text.Contains('`') || reasoningHadCodeSpan))
@@ -523,9 +466,8 @@ public sealed class AgentConversation : IDisposable
                     break;
                 }
 
-                // Echo the assistant's tool-call turn, execute each call, and append the
-                // matching tool results - the OpenAI dialect requires one role:"tool" message
-                // per tool_call id, directly after the assistant message that made the calls.
+                // Echo the assistant's tool-call turn, execute each call, and append matching tool
+                // results (the OpenAI dialect requires one role:"tool" message per tool_call id).
                 var echoText = roundText.ToString().Trim();
                 localHistory.Add(new AiChatMessage
                 {
@@ -543,29 +485,16 @@ public sealed class AgentConversation : IDisposable
                     localHistory.Add(new AiChatMessage { Role = "tool", ToolCallId = call.Id, Content = output });
                 }
 
-                // A suggestion just got typed at the prompt and is now awaiting the user's Enter.
-                // Everything typeable is blocked for the rest of the turn to protect that pending
-                // line, so another tool-calling round can accomplish nothing - a small model would
-                // only spend rounds hitting "one already pending". Worse, staying in this loop keeps
-                // RunTurnAsync from returning, and the pump only watches for the user's Enter (the
-                // event that clears the pending and fires the continuation turn) AFTER the turn ends -
-                // so looping here is exactly what makes a pending suggestion look like it "never
-                // clears". End the tool loop now; the forced-summary round below still lets the model
-                // explain in chat what it proposed before the turn concludes and the watch begins.
+                // A suggestion is now typed and awaiting the user's Enter, so further tool rounds can
+                // only hit "one already pending"; end the tool loop now.
                 if (HasPendingSuggestion())
                 {
                     break;
                 }
             }
 
-            // After doing tool work, small local models routinely end a turn mid-thought: they go
-            // silent right after the tool calls, or stream a lead-in ("Great news! ... Let me
-            // summarize what we accomplished:") and just stop, or get truncated by the token cap.
-            // In every case the work already happened but the user is left with a dangling,
-            // incomplete answer. Guarantee a complete one: one final no-tools request. If a partial
-            // answer exists, feed it back and ask the model to CONTINUE it (not restart, which
-            // doubles the opening); otherwise ask for a fresh summary. Request-local - never
-            // committed to history. Only when there was real tool activity to report.
+            // Small local models often end a turn mid-thought after tool work; guarantee a complete
+            // answer with one final no-tools request. Request-local, never committed to history.
             var partial = assistant.Text.TrimEnd();
             var endedMidThought = partial.Length == 0
                 || lastFinishReason == "length"
@@ -607,12 +536,8 @@ public sealed class AgentConversation : IDisposable
                 lastFinishReason = conclusion.FinishReason;
             }
 
-            // A reasoning model can spend its whole token budget thinking (finish_reason
-            // "length") and never produce a visible answer - or a model can just return empty
-            // content, even after the forced conclusion above. Either way, surface a note instead
-            // of leaving the user staring at a silent, blank turn (the exact "runs forever, sends
-            // nothing" symptom) - and when tool work DID happen, say so, so the empty chat doesn't
-            // read as "nothing occurred" when the terminal actually changed.
+            // A reasoning model can spend its whole token budget thinking and produce no visible
+            // answer; surface a note instead of leaving the user staring at a silent, blank turn.
             if (string.IsNullOrWhiteSpace(assistant.Text))
             {
                 var note = lastFinishReason == "length"
@@ -631,10 +556,8 @@ public sealed class AgentConversation : IDisposable
         }
         catch (InvalidOperationException) when (string.IsNullOrWhiteSpace(settings.AiBaseUrl))
         {
-            // Defensive: with no endpoint configured the UI shows no agent bar to type into,
-            // so this is only reachable by a direct WebSocket call. An empty base URL makes
-            // the request URI relative, which HttpClient rejects - say what's actually missing
-            // instead of passing that on.
+            // Defensive: with no endpoint configured the UI shows no agent bar, so this is only
+            // reachable by a direct WebSocket call; an empty base URL makes the URI relative.
             stopReason = "error";
             error = "No AI endpoint is configured. Add one in Settings under \"AI agent\" to use the agent.";
         }
@@ -664,8 +587,7 @@ public sealed class AgentConversation : IDisposable
                     if (stopReason == "end_turn")
                     {
                         // Clean, well-formed conversation: the final assistant text isn't in
-                        // localHistory yet (only tool-call turns are appended mid-loop), and
-                        // nudge plumbing is request-only - stripped so it never persists.
+                        // localHistory yet, and nudge plumbing is request-only - stripped so it never persists.
                         commit = localHistory.Where(m => !nudgePlumbing.Contains(m)).ToList();
                         if (!string.IsNullOrEmpty(assistant.Text))
                         {
@@ -692,7 +614,7 @@ public sealed class AgentConversation : IDisposable
 
                     _history.Clear();
                     _history.AddRange(commit);
-                    _transcript.Add(assistant); // show the (possibly partial) answer
+                    _transcript.Add(assistant);
                 }
             }
 
@@ -786,11 +708,8 @@ public sealed class AgentConversation : IDisposable
 
                 if (!TypeSuggestion(command))
                 {
-                    // The write to the PTY failed, so nothing is sitting at the prompt and the
-                    // pending guard was deliberately left disarmed (see TypeSuggestion). Report
-                    // it plainly rather than arming pending on a command that never landed -
-                    // that would block every later typing tool this turn with "one already
-                    // pending" while there is no typed line for the user to Enter and clear.
+                    // The write failed, so nothing is pending and the guard was left disarmed
+                    // (see TypeSuggestion); arming it would block every later typing tool.
                     return ("suggest_command failed to type",
                         "Error: the command could not be typed into the terminal (the shell may have disconnected). "
                         + "Nothing is pending - tell the user; they can retry once the session is back.");
@@ -811,9 +730,8 @@ public sealed class AgentConversation : IDisposable
 
                 if (HasPendingSuggestion())
                 {
-                    // Critical guard, not just tidiness: running now would send Enter onto
-                    // the prompt line where the pending suggestion sits - executing the
-                    // suggestion concatenated with this command.
+                    // Critical guard: running now would send Enter onto the pending suggestion's
+                    // prompt line, executing it concatenated with this command.
                     return ("blocked run_command (suggestion pending)", PendingBlockMessage);
                 }
 
@@ -826,9 +744,8 @@ public sealed class AgentConversation : IDisposable
                 var (safe, reason) = await VerifyActionSafeAsync(settings, apiKey, model, command, ct);
                 if (!safe)
                 {
-                    // Type it VERBATIM - multi-line and all - so the user confirms exactly what
-                    // would run; a heredoc must NOT be flattened onto one line here. No trailing
-                    // Enter: TypeSuggestion leaves the final line awaiting the user's confirm.
+                    // Type it verbatim, multi-line and all, so the user confirms exactly what would
+                    // run; no trailing Enter, so TypeSuggestion leaves the final line awaiting confirm.
                     if (!TypeSuggestion(command))
                     {
                         return ("run_command failed to type",
@@ -865,10 +782,8 @@ public sealed class AgentConversation : IDisposable
                 }
 
                 var keys = GetString(input, "keys") ?? "";
-                // Hard guard against the observed misuse: small models reach for the raw
-                // keystroke tool to send whole shell commands, which then just sit unexecuted
-                // (no Enter) while the model wonders why nothing happened. Anything that
-                // looks like a command gets redirected to run_command, which does press Enter.
+                // Guard against the observed misuse: models send whole shell commands here, which
+                // sit unexecuted (no Enter); anything command-like is redirected to run_command.
                 if (keys.Contains(' ') || keys.Length > 8)
                 {
                     return ("blocked press_keys (looks like a command)",
@@ -920,10 +835,8 @@ public sealed class AgentConversation : IDisposable
             }
 
             default:
-                // A small model can hallucinate a tool - sometimes with a whole sentence as the
-                // "name" (seen when its malformed output gets parsed into a tool call). Truncate
-                // it in the activity chip, and hand back the real, mode-appropriate tool list so
-                // the model can correct itself instead of repeating the bad call.
+                // A model can hallucinate a tool (sometimes a whole sentence as the "name");
+                // truncate it in the chip and hand back the real tool list so it can correct itself.
                 var available = mode == "auto"
                     ? "read_terminal, run_command, press_keys, wait"
                     : "read_terminal, suggest_command, wait";
@@ -934,10 +847,8 @@ public sealed class AgentConversation : IDisposable
     }
 
     /// <summary>
-    /// The "auto" mode gate: a second model call (same local model) judges whether the input
-    /// may be sent to the shell without user confirmation. It sees the recent terminal tail so
-    /// context-dependent keystrokes (like answering a visible prompt) can be judged sensibly.
-    /// Fails CLOSED: any error, or an answer that doesn't clearly start with SAFE, means unsafe.
+    /// The auto-mode gate: a second model call judges whether the input may be sent to the shell
+    /// unconfirmed; fails closed (any error or non-SAFE answer means unsafe).
     /// </summary>
     private async Task<(bool Safe, string Reason)> VerifyActionSafeAsync(AppSettings settings, string? apiKey, string model, string action, CancellationToken ct)
     {
@@ -1002,11 +913,8 @@ public sealed class AgentConversation : IDisposable
     }
 
     /// <summary>
-    /// Tolerant verdict parse: models wrap the requested one-word verdict in markdown or
-    /// preamble ("**SAFE**", "Verdict: SAFE"), and a strict prefix match fail-closed every
-    /// one of those to unsafe (observed with gemma flagging a plain uname). The first
-    /// decisive word wins; "not safe" phrasing counts as unsafe; no decisive word at all
-    /// stays fail-closed.
+    /// Tolerant verdict parse (models wrap the word in markdown or preamble): first decisive word
+    /// wins; "not safe" counts as unsafe; no decisive word stays fail-closed.
     /// </summary>
     private static bool IsSafeVerdict(string answer)
     {
@@ -1048,10 +956,8 @@ public sealed class AgentConversation : IDisposable
     }
 
     /// <summary>
-    /// Best-effort "command finished" signal against a raw PTY with no exit-code channel: poll the
-    /// byte counter every 250ms, stop once it has been quiet for ~750ms, hard-capped at ~15s (and
-    /// honoring <paramref name="ct"/>). Long-running/interactive commands return partial output;
-    /// the model can call read_terminal / wait again.
+    /// Best-effort "command finished" signal against a raw PTY: poll the byte counter every 250ms,
+    /// stop after ~750ms quiet, hard-capped at ~15s.
     /// </summary>
     private async Task ReadUntilIdleAsync(CancellationToken ct)
     {
@@ -1090,21 +996,14 @@ public sealed class AgentConversation : IDisposable
         => input.TryGetValue(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     /// <summary>
-    /// Cleans a model-proposed command into something that can actually be typed at a shell
-    /// prompt, or rejects it with a corrective error for the model. Strips the markdown fences
-    /// and "$ "/prompt artifacts small models paste around a command. A SINGLE line also has a
-    /// bare "# comment" / lone prompt sigil rejected. A MULTI-line command (e.g. a heredoc) is
-    /// intentionally passed through VERBATIM: a heredoc body legitimately contains blank lines,
-    /// leading indentation, and '#' characters that are content - not comments to strip - so the
-    /// whole block is kept and sent as one unit (its line breaks become carriage returns at
-    /// write time, in <see cref="ToPtyInput"/>).
+    /// Cleans a model-proposed command into something typeable at a shell prompt (strips markdown
+    /// fences and "$ " sigils), or rejects it. Multi-line heredocs pass through verbatim.
     /// </summary>
     private static string? SanitizeCommand(string raw, out string error)
     {
         error = "";
         var text = raw.Trim();
 
-        // Wrapping markdown fence (``` or ```sh ... ```).
         if (text.StartsWith("```", StringComparison.Ordinal))
         {
             var firstNewline = text.IndexOf('\n');
@@ -1129,15 +1028,13 @@ public sealed class AgentConversation : IDisposable
             return null;
         }
 
-        // Multi-line (a heredoc, or a block the model means to send as one unit): keep every
-        // line EXACTLY as given. Trimming indentation or dropping "# ..." lines would corrupt a
-        // heredoc body - the whole block is written line by line, then run, as one command.
+        // Multi-line (a heredoc): keep every line exactly as given - trimming indentation or
+        // dropping "# ..." would corrupt the body.
         if (text.Contains('\n'))
         {
             return text;
         }
 
-        // Single line: salvage a pasted "$ " prompt sigil, reject a bare comment / empty.
         if (text.StartsWith("$ ", StringComparison.Ordinal))
         {
             text = text[2..].Trim();
@@ -1153,36 +1050,23 @@ public sealed class AgentConversation : IDisposable
     }
 
     /// <summary>
-    /// Converts a possibly multi-line command into the bytes a shell expects as keyboard input:
-    /// every line break becomes a carriage return - the same character the Enter key sends - so
-    /// a heredoc's body and its closing terminator are each submitted in turn. A single-line
-    /// command is returned unchanged. Callers append a trailing "\r" when the final line should
-    /// execute too (run_command), or omit it to leave that last line typed-but-unrun for the
-    /// user to confirm (suggestions).
+    /// Converts a multi-line command into shell keyboard input: every line break becomes a carriage
+    /// return (the Enter key). Callers append a trailing "\r" only when the final line should run.
     /// </summary>
     private static string ToPtyInput(string command)
         => command.Replace("\r\n", "\n").Replace('\r', '\n').Replace('\n', '\r');
 
     /// <summary>
-    /// Types a proposed command/keystrokes into the PTY and, ONLY if the write actually reached
-    /// the shell, arms the single-pending-suggestion guard for it. The ordering is the whole
-    /// point of the method: that guard blocks every further typing tool for the rest of the turn
-    /// to protect the real, unexecuted line sitting at the prompt, so it must never be armed for
-    /// input that never got typed. Arming it after a failed write would wedge the turn on
-    /// "one already pending" with NO line for the user to Enter and clear - a permanent deadlock.
-    /// Returns false (guard left disarmed) when the write throws, so the caller reports the
-    /// failure instead of pretending something is pending. Callers only reach here with an
-    /// already-sanitized, non-empty string, so a successful write always leaves a real pending
-    /// line - never an empty one that could deadlock the guard silently.
+    /// Types a proposed command into the PTY and, only if the write reached the shell, arms the
+    /// single-pending guard; a failed write returns false with the guard left disarmed.
     /// </summary>
     private bool TypeSuggestion(string text)
     {
         // Capture the offset BEFORE writing: the continuation watch counts newlines past this
         // point, so it has to predate the typed characters.
         var typedAt = _session.Scrollback.TotalWritten;
-        // No trailing "\r": the final line is left typed-but-unrun for the user's confirming
-        // Enter. A multi-line command's interior line breaks DO go out as carriage returns, so
-        // a heredoc's body and terminator are entered and only the last line awaits confirm.
+        // No trailing "\r": the final line is left typed-but-unrun for the user's Enter. A multi-line
+        // command's interior line breaks do go out as carriage returns.
         var pty = ToPtyInput(text);
         try
         {
@@ -1195,9 +1079,8 @@ public sealed class AgentConversation : IDisposable
 
         lock (_stateLock)
         {
-            // Each injected "\r" echoes back as a newline before the user acts; the confirming
-            // Enter is the one AFTER those. For a single-line suggestion this count is 0, so the
-            // very first newline is the user's - exactly the original behavior.
+            // Each injected "\r" echoes back as a newline before the user acts, so the confirming
+            // Enter is the one after those (0 for a single-line suggestion).
             _pendingSuggestion = (typedAt, text, pty.Count(c => c == '\r'));
         }
 
@@ -1249,9 +1132,8 @@ public sealed class AgentConversation : IDisposable
             You are the AI model "{model}", running locally on this machine via an OpenAI-compatible server (Ollama), embedded as the AI agent of the slopterm SSH client. You are attached to a live SSH terminal session connected to {_session.Username}@{_session.Host}:{_session.Port}. If asked what model you are, say "{model}" - do not claim to be any other AI product.
             """;
 
-        // Small local models tend to act and then go silent - every mode hammers on "always
-        // answer in chat" (and RunTurnAsync additionally forces a summary if a turn ends with
-        // tool activity but no text).
+        // Small local models act and then go silent, so every mode hammers on "always answer in
+        // chat" (and RunTurnAsync forces a summary if a turn ends with tool activity but no text).
         const string answerRule =
             "ALWAYS finish your turn by answering the user in the chat. After any tool use, state what happened and "
             + "answer their question in plain language. Never end a turn without a chat reply. Never invent command "
@@ -1296,9 +1178,8 @@ public sealed class AgentConversation : IDisposable
         }
     }
 
-    // OpenAI-dialect function definitions. Chat mode sends none (works with models whose
-    // Ollama template lacks tool support); suggest gets read/wait/suggest; auto adds
-    // execution (safety-gated in ExecuteToolAsync).
+    // OpenAI-dialect function definitions: chat mode sends none, suggest gets read/wait/suggest,
+    // auto adds execution (safety-gated in ExecuteToolAsync).
     private static readonly object ReadTerminalTool = new
     {
         type = "function",
@@ -1394,9 +1275,7 @@ public sealed class AgentConversation : IDisposable
 
     private static readonly object SuggestTools = new[] { ReadTerminalTool, WaitTool, SuggestCommandTool };
 
-    // No suggest_command in auto mode on purpose: run_command's safety gate already turns
-    // unsafe commands into typed suggestions, and offering the suggest tool too makes small
-    // models take the timid path for everything (observed with gemma: it suggested even a
-    // plain uname instead of running it).
+    // No suggest_command in auto mode on purpose: run_command's safety gate already types unsafe
+    // commands, and offering both makes small models take the timid path for everything.
     private static readonly object AutoTools = new[] { ReadTerminalTool, WaitTool, RunCommandTool, PressKeysTool };
 }

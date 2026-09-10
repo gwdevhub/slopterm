@@ -8,25 +8,11 @@ namespace Slopterm.Server.VaultSync;
 public sealed record StoredRecord(string CollectionId, string Id, DateTimeOffset UpdatedAt, string Hlc, string Json);
 
 /// <summary>
-/// Every record in the vault belongs to exactly one collection, and this owns where that
-/// lands on disk.
-///
-/// The <c>local</c> collection is implicit, always exists, and has no remote - and crucially
-/// its records stay exactly where they have always been (<c>hosts/{id}.json</c>,
-/// <c>snippets/{id}.json</c>, …). No migration, no file moves, and an older build can still
-/// read the vault it left behind. Every other collection mirrors that layout one level down,
-/// under <c>collections/{collectionId}/</c>.
-///
-/// Everything here - including a collection's own remote password and collection key - is
-/// encrypted at rest with the VAULT key, exactly like today's records. The collection key
-/// only ever encrypts what goes over the wire (see <see cref="CollectionCrypto"/>).
+/// Owns where every record lands on disk. The implicit <c>local</c> collection keeps records at
+/// their historical paths; others mirror the layout under <c>collections/{collectionId}/</c>.
+/// All of it is vault-key encrypted at rest; the collection key only encrypts wire data.
 /// </summary>
-/// <param name="clock">
-/// This device's hybrid logical clock. Injected rather than reached for as a singleton so a
-/// test can run two genuinely independent "devices" in one process - with a shared static
-/// clock the two can never tie, which is exactly the case the tiebreak exists for, and their
-/// stamps become coupled in a way no real pair of devices ever is.
-/// </param>
+/// <param name="clock">This device's HLC. Injected so tests can run two independent "devices" in one process.</param>
 public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, HybridLogicalClock? clock = null)
 {
     private readonly HybridLogicalClock _clock = clock ?? HybridLogicalClock.Shared;
@@ -102,8 +88,8 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, 
     }
 
     /// <summary>
-    /// Removes the collection and every record it held from this device. Deliberately local
-    /// only - "leave" must never delete the shared content everyone else is still using.
+    /// Removes the collection and its records from this device only - "leave" must never delete
+    /// the shared content everyone else uses.
     /// </summary>
     public void DeleteCollection(string collectionId)
     {
@@ -116,11 +102,7 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, 
 
     // --- records -------------------------------------------------------------------------
 
-    /// <summary>
-    /// Every record of one kind across every collection this device holds, each tagged with
-    /// where it came from. That's what lets the Hosts screen show one list with collection
-    /// badges rather than making the user pick a collection before they can see anything.
-    /// </summary>
+    /// <summary>Every record of one kind across all collections, each tagged with its origin.</summary>
     public IReadOnlyList<StoredRecord> ListAll(string folder)
     {
         var results = new List<StoredRecord>(ListRecords(LocalCollectionId, folder));
@@ -173,9 +155,8 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, 
     }
 
     /// <summary>
-    /// Writes a record, stamping a fresh HLC unless the caller supplies one (a merge does,
-    /// so a pulled record keeps the clock reading its author gave it rather than looking
-    /// like a local edit and bouncing straight back out on the next push).
+    /// Writes a record, stamping a fresh HLC unless the caller supplies one (a merge does, so a
+    /// pulled record keeps its author's clock reading).
     /// </summary>
     public string SaveRecord(string collectionId, string folder, string? id, string json, string? hlc = null)
     {
@@ -203,9 +184,8 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, 
     }
 
     /// <summary>
-    /// Deletes a record and, in a synced collection, leaves a tombstone so devices that were
-    /// offline learn it is gone instead of dutifully re-uploading their stale copy. The
-    /// local collection never syncs, so it gets no tombstone.
+    /// Deletes a record, leaving a tombstone in synced collections so offline devices don't
+    /// re-upload it. The local collection never syncs, so it gets none.
     /// </summary>
     public bool DeleteRecord(string collectionId, string folder, string id, string recordType)
     {
@@ -231,9 +211,8 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, 
     }
 
     /// <summary>
-    /// Moves a record between collections - the "share this host with the team" action.
-    /// Written to the destination first, so a crash in between duplicates a host rather
-    /// than losing one.
+    /// Moves a record between collections; written to the destination first, so a crash
+    /// duplicates rather than loses it.
     /// </summary>
     public void MoveRecord(string fromCollectionId, string toCollectionId, string folder, string id, string recordType)
     {
@@ -288,9 +267,8 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, 
     }
 
     /// <summary>
-    /// Drops tombstones older than <paramref name="maxAge"/>. That window has to comfortably
-    /// exceed "the laptop was in a drawer for a month", because a device that syncs after its
-    /// tombstone is gone re-uploads the record it still holds.
+    /// Drops tombstones older than <paramref name="maxAge"/>; the window must exceed how long a
+    /// device can stay offline holding the record.
     /// </summary>
     public int GcTombstones(string collectionId, TimeSpan maxAge)
     {
@@ -307,11 +285,7 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, 
 
     // --- re-keying -----------------------------------------------------------------------
 
-    /// <summary>
-    /// Every file this store owns, for VaultService's master-key change - collection
-    /// metadata, identities, cached member lists and tombstones are all vault-encrypted and
-    /// have to be re-keyed alongside the records themselves.
-    /// </summary>
+    /// <summary>Every encrypted file this store owns, for VaultService's master-key change.</summary>
     public IEnumerable<string> EnumerateEncryptedFiles()
     {
         foreach (var collectionId in ListCollectionIds())
@@ -326,9 +300,7 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, 
 
     // --- helpers -------------------------------------------------------------------------
 
-    // Ids reach here from pasted tokens and from remote listings, so anything that could
-    // escape the record folder is rejected outright rather than sanitized into something
-    // surprising.
+    // Ids arrive from pasted tokens and remote listings, so path-escaping ones are rejected.
     private static string SafeId(string id)
     {
         if (string.IsNullOrWhiteSpace(id) || id.Length > 128 ||
@@ -401,16 +373,11 @@ public sealed class CollectionStore(string vaultDir, Func<byte[]?> keyAccessor, 
         WriteAtomic(path, JsonSerializer.Serialize(envelope));
     }
 
-    /// <summary>
-    /// Temp file then move, because a half-written record is a corrupt vault - and the sync
-    /// loop writes records while the user is actively editing them, so "the app was killed
-    /// mid-write" stops being hypothetical.
-    /// </summary>
+    /// <summary>Temp file then move, because a half-written record is a corrupt vault.</summary>
     internal static void WriteAtomic(string path, string contents)
     {
-        // The temp name deliberately doesn't end in ".json": every enumeration in this app
-        // globs "*.json", and Windows' 8.3 short-name matching makes that glob match
-        // "record.json.tmp" too - a half-written file would then show up as a record.
+        // The temp name deliberately avoids a ".json" ending: Windows 8.3 short-name matching
+        // makes the "*.json" globs match "record.json.tmp" too.
         var temporary = Path.Combine(
             Path.GetDirectoryName(path)!, $"~{Guid.NewGuid():N}.tmp");
         File.WriteAllText(temporary, contents);

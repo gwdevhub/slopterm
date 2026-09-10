@@ -3,9 +3,8 @@ using Slopterm.Server.Vault;
 namespace Slopterm.Server.VaultSync;
 
 /// <summary>
-/// What a host's credential actually resolves to on this device. Source is one of
-/// "inline", "keychain-local", "keychain-collection", "keychain-other", "ssh-default" or
-/// "none"; Detail names the entry/file so the card can show it.
+/// What a host's credential resolves to on this device. Source is one of "inline",
+/// "keychain-local", "keychain-collection", "keychain-other", "ssh-default" or "none".
 /// </summary>
 public sealed record ResolvedCredential(
     string Source,
@@ -19,20 +18,9 @@ public sealed record ResolvedCredential(
 }
 
 /// <summary>
-/// Turns a host's credential into something connectable, resolving <c>keychain</c>-kind
-/// credentials by NAME.
-///
-/// Precedence, and why it's in this order:
-///   1. the local collection - your own key always wins, on your own machine;
-///   2. the same collection as the host - a deliberately shared team key;
-///   3. any other collection this device holds - a fallback, not a design;
-///   4. ~/.ssh's default identity - so "my normal SSH key" needs no keychain entry at all;
-///   5. nothing - the card shows "no key on this device" and SSH/SFTP are disabled, exactly
-///      how a ~/.ssh/config alias with no resolvable identity already behaves.
-///
-/// The resolution is always reported back to the UI (see <see cref="Describe"/>), because a
-/// host that quietly connects with a different key than its card claims is worse than one
-/// that refuses to connect.
+/// Resolves <c>keychain</c>-kind credentials by NAME. Precedence: local collection, then the
+/// host's collection, then any other, then ~/.ssh's default identity, then nothing. The result is
+/// always reported so the card never claims a different key than the connect uses.
 /// </summary>
 public static class CredentialResolver
 {
@@ -90,9 +78,8 @@ public static class CredentialResolver
     }
 
     /// <summary>
-    /// The first credential on a host that this device can actually connect with. Mirrors
-    /// the frontend's "first usable credential" rule so the two never disagree about whether
-    /// a card should be enabled.
+    /// The first credential this device can connect with; mirrors the frontend's rule so the two
+    /// never disagree about a card being enabled.
     /// </summary>
     public static ResolvedCredential? ResolveForHost(VaultService vault, string hostCollectionId, HostRecord host, string? credentialId = null)
     {
@@ -116,10 +103,7 @@ public static class CredentialResolver
             .FirstOrDefault(r => r is not null);
     }
 
-    /// <summary>
-    /// The same lookup, without the secret - what the hosts listing returns so a card can
-    /// show "resolved from your keychain: prod-deploy" or "no key on this device".
-    /// </summary>
+    /// <summary>The same lookup without the secret, for the hosts listing's card display.</summary>
     public static CredentialResolution Describe(VaultService vault, string hostCollectionId, CredentialRecord credential)
     {
         var resolved = Resolve(vault, hostCollectionId, credential);

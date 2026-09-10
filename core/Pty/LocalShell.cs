@@ -5,9 +5,8 @@ namespace Slopterm.Server;
 /// <summary>What to actually launch on this machine, and in what world.</summary>
 /// <param name="Executable">Absolute path (or a PATH-resolvable name on Windows) of the shell.</param>
 /// <param name="Argv0">
-/// What the shell sees as its own name. A leading dash is the historical signal for "you are a
-/// login shell", which is what makes it read the user's profile and so end up with the PATH,
-/// aliases and prompt they'd get from a real terminal. Windows shells ignore this.
+/// What the shell sees as its own name; a leading dash means "login shell", which makes it
+/// read the user's profile. Windows shells ignore this.
 /// </param>
 /// <param name="Arguments">Arguments after argv[0].</param>
 /// <param name="WorkingDirectory">Where the shell starts. Null means "inherit ours".</param>
@@ -20,22 +19,20 @@ public sealed record LocalShellStartInfo(
     IReadOnlyDictionary<string, string> Environment);
 
 /// <summary>
-/// Picks the shell a "local terminal" tab runs, and builds the environment it runs in. Kept
-/// apart from the PTY plumbing because every part of it is a product decision (which shell,
-/// login or not, which directory) rather than an OS mechanism.
+/// Picks the shell a "local terminal" tab runs and builds its environment. Kept apart from the
+/// PTY plumbing because every part of it is a product decision rather than an OS mechanism.
 /// </summary>
 public static class LocalShell
 {
     /// <summary>
-    /// Escape hatch for a user whose preferred shell isn't the OS default and who doesn't
-    /// want to change $SHELL - and the hook the e2e tests use to run something predictable.
+    /// Escape hatch for a non-default shell, and the hook the e2e tests use to run something
+    /// predictable.
     /// </summary>
     private const string ShellOverrideVariable = "SLOPTERM_LOCAL_SHELL";
 
     /// <summary>
-    /// True where a local terminal can actually be opened. Both halves of this are a symbol
-    /// lookup rather than a version check - see WindowsPty.IsSupported (ConPTY) and
-    /// UnixPty.IsSupported (posix_spawn).
+    /// True where a local terminal can be opened. Both halves are a symbol lookup, not a
+    /// version check.
     /// </summary>
     public static bool IsSupported => OperatingSystem.IsWindows() ? WindowsPty.IsSupported : UnixPty.IsSupported;
 
@@ -83,12 +80,8 @@ public static class LocalShell
         Path.GetFileNameWithoutExtension(shell).Equals("powershell", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// The first candidate that actually exists. Every candidate is checked, including bare
-    /// names, which are resolved against PATH here rather than left for the OS: the fallback
-    /// chains below only mean anything if an uninstalled shell FALLS THROUGH to the next one.
-    /// Accepting "pwsh.exe" unchecked is what made a Windows machine without PowerShell 7
-    /// fail outright instead of quietly using powershell.exe - found running the win-x64
-    /// build under Wine, which has neither.
+    /// The first candidate that actually exists, resolving bare names against PATH so an
+    /// uninstalled shell falls through to the next one.
     /// </summary>
     private static string? FirstUsable(params string?[] candidates)
     {
@@ -164,16 +157,14 @@ public static class LocalShell
                 ?? Path.Combine(system32, "cmd.exe");
         }
 
-        // /system/bin/sh is the only shell an Android device is guaranteed to have, and it is
-        // outside the app sandbox, which is the point: nothing under the app's own data
-        // directory is executable there.
+        // /system/bin/sh is the only shell Android guarantees, and it sits outside the app
+        // sandbox (nothing under the app's data directory is executable there).
         return FirstUsable("/bin/bash", "/bin/zsh", "/bin/sh", "/system/bin/sh") ?? "/bin/sh";
     }
 
     /// <summary>
-    /// Where the shell starts, and what it will call $HOME. On Android there is no user home
-    /// at all, so the app makes one inside its own data directory - without it the shell
-    /// starts in "/", every history file write fails, and `cd ~` goes nowhere useful.
+    /// Where the shell starts and what it will call $HOME. Android has no user home, so the app
+    /// makes one inside its own data directory.
     /// </summary>
     private static string HomeDirectory()
     {
@@ -211,16 +202,12 @@ public static class LocalShell
             }
         }
 
-        // Inherited from whatever launched the app, and stale the moment the terminal is
-        // resized. Programs prefer them over the PTY's real size, so leaving them in produces
-        // output wrapped to the wrong width in a terminal that knows perfectly well how wide
-        // it is.
+        // Inherited and stale the moment the terminal is resized; programs prefer them over
+        // the PTY's real size, producing wrongly-wrapped output.
         environment.Remove("COLUMNS");
         environment.Remove("LINES");
 
-        // Never inherited into a user's shell: they exist to point *this process* at test
-        // fixtures, and a shell that quietly picks them up would be operating on a different
-        // vault than the app it was launched from.
+        // Never inherited into a user's shell: they point *this process* at test fixtures.
         environment.Remove("SLOPTERM_VAULT_DIR");
         environment.Remove(ShellOverrideVariable);
 
@@ -251,10 +238,7 @@ public static class LocalShell
     /// <summary>A short label for the tab and the connection log, e.g. "bash on this-host".</summary>
     public static string DescribeShell(string executable) => Path.GetFileNameWithoutExtension(executable);
 
-    /// <summary>
-    /// The platform name shown next to a local tab. Deliberately coarse - the frontend uses it
-    /// as a label, never as a capability check.
-    /// </summary>
+    /// <summary>The label shown next to a local tab. Deliberately coarse - never a capability check.</summary>
     public static string PlatformName()
     {
         if (OperatingSystem.IsAndroid()) return "Android";

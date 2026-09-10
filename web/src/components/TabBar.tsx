@@ -4,20 +4,16 @@ import { ContextMenu } from './ContextMenu'
 import { CloseIcon, LocalTerminalTabIcon, SftpTabIcon, TerminalTabIcon } from './icons'
 
 export interface SessionTab {
-  // Stable client-generated key for the tab's whole lifetime - independent of the backend
-  // session id, which doesn't exist yet while a restored tab is still reconnecting (see
-  // App.tsx's attemptConnectTab/reconnectAllTabs).
+  // Stable client-generated key for the tab's whole lifetime, independent of the backend
+  // session id (which doesn't exist while a restored tab is reconnecting).
   id: string
   sessionId: string | null
   label: string
   kind: 'ssh' | 'sftp' | 'local'
   // Only set for 'sftp' tabs - the remote pane's starting directory (see SftpView).
   homeDirectory?: string
-  // Kept alongside the tab so it can be persisted (see App.tsx's saveOpenTabs effect) and
-  // retried without the user re-entering anything - restoring tabs across restarts is the
-  // whole reason a tab needs to remember its own ConnectRequest at all.
-  // Undefined for a 'local' tab, which has no destination to dial and nothing to retry -
-  // opening another one is always just "start a shell here".
+  // Kept alongside the tab so it can be persisted and retried without re-entry. Undefined
+  // for a 'local' tab, which has no destination to dial.
   request?: ConnectRequest
   status: 'connecting' | 'connected' | 'error'
   errorMessage?: string
@@ -36,16 +32,9 @@ interface TabBarProps {
   onRename: (id: string, label: string) => void
 }
 
-// One tab per open SSH/SFTP session (issue #9) - switching tabs must not kill the
-// underlying WebSocket/SFTP connection of the inactive ones (App.tsx keeps every
-// TerminalView/SftpView mounted, just hidden). New sessions are started from the
-// sidebar's Hosts screen now (SSH/SFTP buttons on each host card), not from this bar -
-// see Sidebar.tsx - so there's no "+" button here anymore.
-//
-// A tab can be renamed (double-click it, or right-click -> Rename) - the label is just a
-// display string, so an inline <input> swaps in for the label button while editing and the
-// committed name persists/restores for free (App.tsx already snapshots label). Mirrors the
-// host-card gesture set: double-click for the common action, right-click for a menu.
+// One tab per open SSH/SFTP session (issue #9). Switching tabs must not kill the underlying
+// connection, so every view stays mounted and hidden. A tab can be renamed via double-click
+// or right-click.
 export function TabBar({ tabs, activeId, onSelect, onClose, onRename }: TabBarProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')

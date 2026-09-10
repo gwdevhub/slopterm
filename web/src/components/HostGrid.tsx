@@ -10,9 +10,8 @@ interface HostGridProps {
   onNewHost: () => void
   onQuickConnect: () => void
   onLocalShell: () => void
-  // What a local shell would open here ("bash" on "Linux"), or null where this device
-  // can't open one at all - in which case the button isn't rendered rather than rendered
-  // and disabled, since there is nothing the user could do about it.
+  // What a local shell would open here, or null where this device can't open one - the button
+  // is omitted rather than disabled since there's nothing the user could do about it.
   localShell: { platform: string; shell: string } | null
   onImport: () => void
   onSsh: (host: SavedHost) => void
@@ -56,10 +55,8 @@ function compareHosts(a: SavedHost, b: SavedHost): number {
   return a.host.address.localeCompare(b.host.address, undefined, options)
 }
 
-// The searchable card grid from the Termius reference (issue #10). Single column on
-// narrow screens, more columns as space allows - full mobile spec is issue #11. Hosts
-// sharing the same HostRecord.ParentGroupId collapse into a single GroupCard (issue #14)
-// instead of a card each - clicking it drills into just that group's members.
+// The searchable card grid from the Termius reference (issue #10). Hosts sharing a
+// ParentGroupId collapse into a single GroupCard (issue #14).
 export function HostGrid({
   hosts,
   onNewHost,
@@ -88,10 +85,8 @@ export function HostGrid({
 
   const q = query.trim().toLowerCase()
 
-  // Searching flattens every group into individual results - a group is purely an
-  // organizational aid for *browsing*, not something worth navigating through once the
-  // user already knows what they're looking for. Clearing the search resumes whichever
-  // group was expanded (expandedGroup itself is left untouched while searching).
+  // Searching flattens groups into individual results - a group is a browsing aid, not
+  // something to navigate once you already know what you're looking for.
   const { groups, individualHosts } = useMemo(() => {
     const sortedHosts = hosts.toSorted(compareHosts)
 
@@ -112,10 +107,8 @@ export function HostGrid({
       else byGroup.set(groupName, [h])
     }
 
-    // A "group" of exactly one host isn't worth folding into a folder card - it just
-    // renders as a normal individual card, same as an ungrouped host (its Group field is
-    // still visible/editable in the details panel, it just doesn't collapse anything on
-    // the grid until a second host actually joins it).
+    // A "group" of exactly one host just renders as a normal individual card - its Group
+    // field stays editable, it just doesn't collapse anything until a second host joins.
     const realGroups: { name: string; members: SavedHost[] }[] = []
     const ungrouped: SavedHost[] = []
     for (const h of sortedHosts) {
@@ -277,8 +270,7 @@ export function HostGrid({
               : `${username}@${saved.host.address}:${saved.host.port}`
             : saved.host.address
           // For a host that names its key, say which key actually resolved on THIS device -
-          // a host must never silently connect with something other than what its card
-          // claims, and "no key on this device" is a state worth showing rather than hiding.
+          // "no key on this device" is a state worth showing rather than hiding.
           const authLabel =
             describeCredentialResolution(saved) ??
             (credential?.kind === 'privateKey' ? 'Private key' : credential?.kind === 'password' ? 'Password' : null)

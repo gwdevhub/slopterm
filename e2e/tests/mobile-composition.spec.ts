@@ -13,9 +13,8 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
   sshPassword: string
 }
 
-// Same scoping rationale as keyboard-toolbar.spec.ts's terminalText: the shared server keeps
-// every tab this whole run has ever opened mounted, so this has to stay pinned to whichever
-// one is actually focused right now.
+// Same scoping as keyboard-toolbar's terminalText: the shared server keeps every tab ever
+// opened mounted, so stay pinned to whichever one is focused right now.
 function terminalText(page: import('@playwright/test').Page) {
   return page.locator('.xterm-rows.xterm-focus').innerText()
 }
@@ -42,15 +41,11 @@ async function connectHost(page: import('@playwright/test').Page, name: string) 
   }).toPass({ timeout: 15_000 })
 }
 
-// Playwright has no real IME to drive, so these dispatch the same compositionstart/update/end
-// events a mobile on-screen keyboard would - the actual behavior under test (TerminalView's
-// .composition-echo snapshot, androidBridge.ts's finishAndroidComposing ordering) is standard
-// DOM composition handling underneath, not anything Android-bridge-specific for the freeze
-// half, and the bridge half is exercised via a mocked window.SloptermAndroid below.
+// Playwright has no real IME, so these dispatch the composition events a mobile keyboard would;
+// the bridge half is exercised via a mocked window.SloptermAndroid below.
 //
-// Two overlays share the .composition-view class: xterm's own live preview and TerminalView's
-// .composition-echo snapshot of it, which is the one that has to survive the commit - hence the
-// :not() on every locator meaning "xterm's".
+// Two overlays share .composition-view: xterm's own live preview and TerminalView's
+// .composition-echo snapshot (the one that must survive the commit), hence the :not() on liveness.
 const LIVE_PREVIEW = '.composition-view:not(.composition-echo)'
 const FROZEN_PREVIEW = '.composition-echo'
 test.describe('with touch emulation', () => {
@@ -74,12 +69,8 @@ test.describe('with touch emulation', () => {
     await expect(compositionView).toHaveClass(/active/)
     await expect(compositionView).toHaveText('hello')
 
-    // A trailing space (or here, directly ending composition) is the real-world trigger:
-    // xterm's own compositionend handling hides this overlay synchronously and only actually
-    // sends "hello" to the shell on its own later tick - well before any real network round
-    // trip could complete. Asserting the overlay state in the SAME evaluate() call as the
-    // dispatch (no round trip to the test process in between) is what makes this deterministic
-    // regardless of how fast the real echo happens to come back.
+    // xterm hides the live overlay synchronously on compositionend and sends the text on a
+    // later tick; asserting in the SAME evaluate() call makes this deterministic regardless of echo speed.
     const immediatelyAfterEnd = await page.evaluate(() => {
       const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
       ta.dispatchEvent(new CompositionEvent('compositionend', { data: 'hello' }))
@@ -116,14 +107,8 @@ test.describe('with touch emulation', () => {
     await expect(compositionView).toHaveClass(/active/)
     await expect(compositionView).toHaveText('hello')
 
-    // Enter mid-composition doesn't go through a compositionend event at all - xterm's
-    // CompositionHelper.keydown finalizes the composition right there, synchronously, so the
-    // composed word reaches the shell before Enter runs the command (see
-    // CompositionHelper._finalizeComposition's non-waitForPropagation branch). That hides the
-    // composition-view with no compositionend event to hang a freeze off of, which is exactly
-    // what let this regress even after the Space case (PR #103) was fixed. Same
-    // same-evaluate-call rationale as the compositionend assertion above: nothing here should
-    // depend on how fast the real echo comes back.
+    // Enter mid-composition doesn't fire compositionend - xterm finalizes synchronously in
+    // CompositionHelper.keydown, which is what let this regress even after the Space fix (PR #103).
     const immediatelyAfterEnter = await page.evaluate(() => {
       const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
       ta.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 13, bubbles: true, cancelable: true }))
@@ -147,12 +132,8 @@ test.describe('with touch emulation', () => {
 
     const frozenPreview = page.locator(FROZEN_PREVIEW)
 
-    // Commit "hello", then let the IME open a fresh composition right away - what an Android
-    // keyboard does the moment Enter starts a new line, and (before this was a snapshot of its
-    // own) what silently emptied the frozen word: CompositionHelper.compositionstart blanks
-    // .composition-view's textContent, so re-activating that same element left an empty box on
-    // screen until the echo arrived. Everything asserted inside one evaluate() so the result
-    // can't depend on how fast the real echo comes back.
+    // Commit "hello", then let the IME open a fresh composition right away - CompositionHelper
+    // .compositionstart blanks .composition-view, which is why the snapshot exists.
     const afterRestart = await page.evaluate(() => {
       const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
       ta.value = ''
@@ -168,14 +149,12 @@ test.describe('with touch emulation', () => {
         liveText: live.textContent,
       }
     })
-    // liveText pins down the old failure mode rather than any behavior of ours: xterm's own
-    // overlay really is blank-but-active at this point, so the previous fix's re-activation of
-    // it showed an empty box where the word had been.
+    // liveText pins down the old failure mode: xterm's own overlay really is blank-but-active
+    // here, so re-activating it showed an empty box.
     expect(afterRestart).toEqual({ frozen: { active: true, text: 'hello' }, liveText: '' })
 
-    // It does have to yield to the next word actually being previewed, though - both overlays
-    // sit on the same cursor cell until the echo moves it, so leaving the old one up would
-    // draw the two on top of each other.
+    // It must yield to the next word being previewed, though - both overlays sit on the same
+    // cursor cell, so leaving the old one up would draw the two on top of each other.
     const afterNextWordPreviewed = await page.evaluate(() => {
       const ta = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
       // Appended, not replaced: the textarea accumulates across compositions, and xterm reads
@@ -200,11 +179,8 @@ test.describe('with touch emulation', () => {
   })
 
   test('a toolbar button waits for a delayed native composition commit before acting', async ({ page }) => {
-    // Stands in for MainActivity's real SloptermAndroid.finishComposing() - which, in the real
-    // bug, posts the commit into the WebView and returns well before the page has actually
-    // processed it. Firing the real compositionend on a delay (not synchronously) reproduces
-    // that gap: a fix that only awaited the bridge call returning, rather than the actual
-    // commit landing, would still send the button's bytes first.
+    // Stands in for SloptermAndroid.finishComposing(), which posts the commit into the WebView
+    // and returns before the page processes it; firing compositionend on a delay reproduces that gap.
     await page.addInitScript(() => {
       ;(window as unknown as { SloptermAndroid: unknown }).SloptermAndroid = {
         saveFile: () => {},
@@ -218,11 +194,8 @@ test.describe('with touch emulation', () => {
     await connectHost(page, 'toolbar composition race test host')
 
     await page.keyboard.type('echo ls -')
-    // Opened ahead of time (composing is still false here, so this click resolves with no
-    // wait) so the marker action below is a second toolbar button, not a real keystroke - a
-    // real keydown while xterm still considers itself composing self-finalizes the composition
-    // on its own via CompositionHelper.keydown(), which would mask whether this fix's own
-    // explicit wait is doing anything.
+    // Opened ahead of time so the marker action is a second toolbar button, not a real keystroke
+    // (a real keydown would self-finalize the composition and mask whether this fix's wait does anything).
     await page.getByRole('button', { name: 'More keys' }).click()
 
     // Compose "al" the way a real word gets composed, left deliberately uncommitted.
@@ -234,17 +207,13 @@ test.describe('with touch emulation', () => {
     })
     await expect(page.locator(LIVE_PREVIEW)).toHaveText('al')
 
-    // Left arrow, with nothing committed yet - correct behavior waits for the (artificially
-    // delayed) native commit to actually land before the arrow's own bytes go out. Pipe right
-    // after (still within the fake 50ms native delay) queues onto the very same wait rather
-    // than displacing it - two toolbar taps landing close together while a commit is still
-    // pending is exactly the scenario the resolver queue in androidBridge.ts exists for.
+    // Correct behavior waits for the (artificially delayed) native commit before the arrow's
+    // bytes; a second tap within the 50ms window queues onto the same wait (the resolver queue).
     await page.getByRole('button', { name: 'Left' }).click()
     await page.getByRole('button', { name: 'Pipe', exact: true }).click()
 
-    // Correct order - "-al" commits, the cursor then steps left one, and "|" lands right
-    // before the trailing "l": "echo ls -a|l". Racing ahead (the bug) moves the cursor before
-    // "-al" exists at all, landing "|" somewhere that doesn't reflect it.
+    // Correct order - "-al" commits, the cursor steps left, "|" lands before the trailing "l":
+    // "echo ls -a|l". Racing ahead (the bug) moves the cursor before "-al" exists at all.
     await expect(async () => {
       expect(await terminalText(page)).toContain('echo ls -a|l')
     }).toPass({ timeout: 10_000 })
@@ -268,9 +237,8 @@ test.describe('with touch emulation', () => {
 
     await connectHost(page, 'double tap completion test host')
 
-    // Two files sharing a prefix, so the completion's answer says which text the shell had when
-    // Tab reached it: with the composed half committed first the prefix is unique and completes,
-    // without it the prefix is ambiguous and completes to nothing at all.
+    // Two files sharing a prefix, so the completion's answer says which text the shell had:
+    // committed first the prefix is unique and completes, otherwise it's ambiguous and completes to nothing.
     const stamp = Date.now()
     await page.keyboard.type(`touch /tmp/tabA${stamp}.log /tmp/tabB${stamp}.log && clear`)
     await page.keyboard.press('Enter')
@@ -306,11 +274,8 @@ test.describe('with touch emulation', () => {
   })
 
   test('an armed Ctrl applies to a character the IME is still composing', async ({ page }) => {
-    // Same stand-in for MainActivity's SloptermAndroid.finishComposing() as the test above:
-    // it commits whatever the IME is holding, which the page then sees as a real
-    // compositionend. Without one of these the composed character never reaches the terminal
-    // as its own single character at all - which is the bug: Ctrl+O in nano sat in the
-    // composing region, so nano got nothing and the toolbar's Ctrl stayed armed.
+    // Same finishComposing stand-in as above: it commits what the IME holds. Without it the
+    // composed character never reaches the terminal - Ctrl+O in nano sat in the composing region.
     await page.addInitScript(() => {
       ;(window as unknown as { SloptermAndroid: unknown }).SloptermAndroid = {
         saveFile: () => {},

@@ -52,17 +52,12 @@ test('reopening the app restores open tabs and reconnects them, keeping the prev
     expect(await terminalText(page)).toContain(marker)
   }).toPass({ timeout: 10_000 })
 
-  // A page reload while the backend is still running is NOT a relaunch, and no longer
-  // behaves like one: the SSH sessions outlive the socket that was carrying them, so the
-  // tabs reattach to the shells they were already on and get their scrollback replayed.
-  // This is the path an Android WebView takes when its renderer is reclaimed in the
-  // background and the page reloads on the way back - the user's shells have to survive it,
-  // which is the whole reason sessions are no longer torn down with their WebSocket.
+  // A reload is not a relaunch: SSH sessions outlive the socket, so tabs reattach with
+  // scrollback replayed - the path an Android WebView takes when its renderer is reclaimed.
   await page.goto(ctx.baseUrl)
 
-  // Both tabs should reappear on their own (client-generated ids, so matched by label).
-  // Exact match matters: a substring match also catches each tab's neighboring "Close ..."
-  // button, whose aria-label contains the same text.
+  // Both tabs reappear on their own (client-generated ids, matched by label). Exact match,
+  // else a substring also catches each neighboring "Close ..." button.
   const tabButtons = page.getByRole('button', { name: `${ctx.sshUsername}@${ctx.sshHost}`, exact: true })
   await expect(tabButtons).toHaveCount(2, { timeout: 10_000 })
 
@@ -72,11 +67,8 @@ test('reopening the app restores open tabs and reconnects them, keeping the prev
     expect(await terminalText(page)).toContain(marker)
   }).toPass({ timeout: 20_000 })
 
-  // Now the relaunch proper. Session ids are per-process, so after a real restart nothing in
-  // the restored record matches anything live and every tab has to dial again from the
-  // credential it remembered. Simulated by disconnecting the sessions out from under the
-  // tabs - done from about:blank so the running app doesn't see its own sockets close and
-  // helpfully close the tabs before they can be restored.
+  // The relaunch proper: session ids are per-process, so every tab must redial from the
+  // remembered credential; simulated by deleting the sessions from about:blank.
   const origin = new URL(ctx.baseUrl).origin
   await page.goto('about:blank')
   const live = (await (await page.request.get(`${origin}/api/ssh/sessions`)).json()) as { sessionId: string }[]
@@ -87,17 +79,15 @@ test('reopening the app restores open tabs and reconnects them, keeping the prev
   await page.goto(ctx.baseUrl)
   await expect(tabButtons).toHaveCount(2, { timeout: 10_000 })
 
-  // Reconnected rather than reattached this time: the welcome banner proves the retry loop
-  // dialed the host with the retained credential, and the marker being gone proves it is a
-  // genuinely new shell rather than the old one's scrollback.
+  // Reconnected, not reattached: the banner proves the retry dialed with the retained
+  // credential, and the missing marker proves it's a new shell.
   await expect(async () => {
     expect(await terminalText(page)).toContain('Welcome to OpenSSH Server')
   }).toPass({ timeout: 20_000 })
   await expect(page.locator('.xterm-rows:visible')).not.toContainText(marker)
 
-  // Switch to the first (background) tab and confirm it reconnected too, not just the one
-  // that happened to be active - closeTab below expects a live "close session?" confirm,
-  // which only appears once a tab is actually connected.
+  // The background tab must reconnect too - closeTab expects a live "close session?" confirm,
+  // which only appears once a tab is connected.
   await tabButtons.first().click()
   await expect(async () => {
     expect(await terminalText(page)).toContain('Welcome to OpenSSH Server')

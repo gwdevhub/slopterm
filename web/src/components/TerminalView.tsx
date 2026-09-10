@@ -12,40 +12,30 @@ interface TerminalViewProps {
   sessionId: string
   isActive: boolean
   onSessionClosed: () => void
-  // The session this view was attached to is gone from the backend (it aged out of its
-  // detached grace period, or was disconnected elsewhere) but the tab itself should live on
-  // and get a fresh connection. Distinct from onSessionClosed, which means the *shell*
-  // ended - `exit` - and the tab is genuinely finished.
+  // The session this view was attached to is gone from the backend but the tab should live on
+  // and reconnect. Distinct from onSessionClosed, which means the shell itself ended.
   onSessionLost: () => void
-  // Fired the first time output arrives while this tab is in the background (inactive), so
-  // App.tsx can flag it as having unseen activity (see the favicon tab badge). Fires at most
-  // once per background stretch - it re-arms when the tab is next viewed.
+  // Fired the first time output arrives while this tab is in the background, at most once per
+  // background stretch (re-armed when the tab is next viewed).
   onActivity?: () => void
-  // The tab's own connect info - an SSH tab holds only an interactive shell server-side,
-  // not an SFTP channel, so paste/drag-to-upload (below) opens a fresh one-shot SFTP
-  // connection from this same request rather than reusing the shell. Undefined for a local
-  // tab, where there is no remote side to upload to and dropping a file is just a paste.
+  // The tab's own connect info; paste/drag-to-upload opens a one-shot SFTP connection from it.
+  // Undefined for a local tab, where dropping a file is just a paste.
   request?: ConnectRequest
-  // Sent to the shell, in order, right after the socket opens (see the host's attached
-  // snippets in HostModal/ConnectionForm) - only meaningful the first time a given
+  // Sent to the shell right after the socket opens; only meaningful the first time a given
   // session id is seen, same as everything else keyed on [sessionId] below.
   startupCommands?: string[]
 }
 
-// Turns a Blob/File dropped or pasted into the terminal into a remote file name: keeps a
-// real dropped file's own name, and generates a timestamped one for a pasted image (which
-// the clipboard exposes with no meaningful name of its own).
+// Turns a dropped/pasted Blob into a remote file name: a real file's own name, or a
+// timestamped one for a pasted image (which has no meaningful name of its own).
 function uploadFileName(item: File): string {
   if (item.name) return item.name
   const ext = item.type.split('/')[1] || 'bin'
   return `pasted-${Date.now()}.${ext}`
 }
 
-// Applies the toolbar's armed Ctrl/Alt to a single character: Ctrl+a..z are the C0 control
-// codes real terminals expect (0x01-0x1A), Ctrl+Space is NUL, and Alt is the "meta sends
-// escape" convention readline/bash want (M-x == ESC x), including on top of a control code for
-// Ctrl+Alt. A combination with no terminal meaning (Ctrl+7, say) is left as the plain
-// character rather than invented.
+// Applies the toolbar's armed Ctrl/Alt to one character (C0 control code / meta-escape);
+// a combination with no terminal meaning is left as the plain character.
 function applyStickyModifiers(char: string, armed: { ctrl: boolean; alt: boolean }): string {
   let bytes = char
   if (armed.ctrl) {
@@ -56,17 +46,15 @@ function applyStickyModifiers(char: string, armed: { ctrl: boolean; alt: boolean
   return armed.alt ? `\x1b${bytes}` : bytes
 }
 
-// Renders only the terminal itself - the tab strip (App.tsx/TabBar.tsx) owns the
-// session label and close/disconnect action now that multiple sessions can be open at
-// once (issue #9), so a second "Session xxx / Disconnect" header here would be redundant.
+// Renders only the terminal; the tab strip (App.tsx/TabBar.tsx) owns the session label and
+// close/disconnect action now that multiple sessions can be open at once (issue #9).
 export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLost, onActivity, request, startupCommands }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const onSessionClosedRef = useRef(onSessionClosed)
   const onSessionLostRef = useRef(onSessionLost)
-  // The live socket, owned by its own effect below rather than by the terminal's - the
-  // terminal outlives any individual connection to it now, so everything that writes to the
-  // backend goes through this ref instead of closing over one particular socket.
+  // The live socket, owned by its own effect below: the terminal outlives any individual
+  // connection to it, so writers go through this ref instead of closing over one socket.
   const socketRef = useRef<WebSocket | null>(null)
   // How many bytes of this session's output we've rendered. Sent as `?since=` on reattach so
   // the backend replays exactly the gap, and updated from the attach header + every frame.
@@ -77,72 +65,44 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
   const [reconnecting, setReconnecting] = useState(false)
   // Another window took this session over - see the 'session-superseded' close reason.
   const [superseded, setSuperseded] = useState(false)
-  // isActive/onActivity read from refs inside the [sessionId]-keyed socket effect below,
-  // which captures its closure once; activityNotifiedRef debounces the callback to one fire
-  // per background stretch (re-armed when the tab becomes active again).
+  // isActive/onActivity read from refs inside the [sessionId]-keyed socket effect below;
+  // activityNotifiedRef debounces the callback to one fire per background stretch.
   const isActiveRef = useRef(isActive)
   const onActivityRef = useRef(onActivity)
   const activityNotifiedRef = useRef(false)
-  // Best-effort remote cwd, tracked from OSC 7 (see below) - null until the shell reports
-  // one (it never will if it isn't configured to emit OSC 7), which is the signal to fall
-  // back to prompting for a destination on upload.
+  // Best-effort remote cwd, tracked from OSC 7 (see below) - null until the shell reports one,
+  // which is the signal to prompt for a destination on upload.
   const remoteCwdRef = useRef<string | null>(null)
   const requestRef = useRef(request)
   const [uploadStatus, setUploadStatus] = useState<{ message: string; error?: boolean } | null>(null)
   const uploadIdRef = useRef(0)
-  // The floating "Copy" bubble over a touch selection, positioned by the gesture handler (see
-  // terminalTouch.ts) and null whenever there's nothing selected. A phone has no Ctrl+C and no
-  // right-click, so this is the only way selected text gets to the clipboard there.
+  // The floating "Copy" bubble over a touch selection, positioned by the gesture handler;
+  // null when nothing is selected. A phone has no Ctrl+C and no right-click.
   const [touchSelection, setTouchSelection] = useState<TouchSelection | null>(null)
-  // Lets KeyboardToolbar (rendered outside the [sessionId] effect below, which owns the
-  // actual live WebSocket) push raw bytes into the same connection term.onData writes to -
-  // set once the socket exists, reset to a no-op on cleanup so a stale tap after teardown
-  // can't throw on a closed socket.
+  // Lets KeyboardToolbar push raw bytes into the same connection term.onData writes to - set
+  // once the socket exists, reset to a no-op on cleanup so a stale tap can't throw.
   const sendRawRef = useRef<(data: string) => void>(() => {})
-  // Drags one end of the touch selection (see terminalTouch.ts). Same cross-effect-ref pattern
-  // as sendRawRef: the handles are rendered down in the JSX, the gesture state they move lives
-  // in the [sessionId] effect.
+  // Drags one end of the touch selection. Same cross-effect-ref pattern as sendRawRef.
   const moveSelectionHandleRef = useRef<(which: 'start' | 'end', clientX: number, clientY: number) => void>(() => {})
-  // Clears the frozen composition preview (see the .composition-echo handling in the terminal
-  // effect below) once real output has actually been drawn - set from that effect, called from
-  // the socket effect's message handler, same cross-effect-ref pattern as sendRawRef.
+  // Clears the frozen composition preview (see the terminal effect below) once real output has
+  // been drawn - same cross-effect-ref pattern as sendRawRef.
   const unfreezeCompositionRef = useRef<() => void>(() => {})
-  // Ctrl/Alt are "sticky" one-shot modifiers for the toolbar (mobile keyboards have no
-  // physical Ctrl/Alt to hold): tapping arms one, then the *next* single character the
-  // terminal produces is remapped into the equivalent control code / ESC-prefixed meta byte
-  // instead of being typed literally, and the modifier disarms itself either way. Applied
-  // where xterm hands input over (term.onData, below) rather than on the keydown, because an
-  // Android soft keyboard doesn't deliver a usable keydown at all - Chromium reports
-  // key="Unidentified"/keyCode=229 and the real character only arrives as IME input - which is
-  // exactly the case that made an armed Ctrl type a plain "c". onData is the one path both a
-  // physical keystroke and an IME commit go through. modifiersRef mirrors the state into that
-  // handler's closure (created once per [sessionId], so it reads live values through the ref
-  // rather than a stale one captured at effect-run time); the state itself only exists so
-  // the toolbar can render which modifier is currently armed. There's no sticky Shift - a
-  // real/on-screen keyboard already produces shifted characters on its own, and the one
-  // combination it was there for is a literal "Shift+Tab" key in the toolbar now.
+  // Ctrl/Alt are "sticky" one-shot modifiers for the toolbar; applied in term.onData rather
+  // than keydown (Android soft keyboards report keyCode=229 and the real char arrives as IME).
   const [modifiers, setModifiers] = useState({ ctrl: false, alt: false })
   const modifiersRef = useRef(modifiers)
 
   function toggleModifier(key: 'ctrl' | 'alt') {
-    // The ref is the source of truth for the input handler and is updated synchronously here,
-    // not from an effect watching the state. React runs passive effects *after* paint and will
-    // happily defer them while the main thread is busy - and tapping a modifier on Android is
-    // exactly when it is busy - so a keystroke arriving in that window would have read an
-    // un-armed ref and typed the character literally, which is the "Ctrl is lit but c still
-    // types a c" report. The state is only what re-renders the toolbar's armed styling.
+    // Ref updated synchronously (not via effect) because a deferred effect could let a keystroke
+    // read an un-armed ref; state only drives the toolbar styling.
     const next = { ...modifiersRef.current, [key]: !modifiersRef.current[key] }
     modifiersRef.current = next
     setModifiers(next)
     refocusTerminal()
   }
 
-  // Puts focus back on xterm's hidden textarea, but only when it isn't already there.
-  //
-  // A redundant focus() is not free on Android: it can make the platform restart the keyboard's
-  // input connection, which is the delay between tapping a key and the shell reacting. The
-  // toolbar's buttons already cancel their own press default so focus never moves (see
-  // pressProps in KeyboardToolbar) - this is the recovery path for when something else took it.
+  // Puts focus back on xterm's hidden textarea, but only when it isn't already there - a
+  // redundant focus() makes Android restart the keyboard's input connection (a visible lag).
   function refocusTerminal() {
     const term = termRef.current
     if (!term) return
@@ -151,25 +111,20 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     term.focus()
   }
 
-  // Sends a fixed key/escape sequence from a toolbar button press.
   function sendKey(data: string) {
     sendRawRef.current(data)
     refocusTerminal()
   }
 
   // Inserts text the way a real paste does (xterm wraps it in bracketed-paste markers when the
-  // remote asked for them), so a multi-line snippet lands as one paste instead of a burst of
-  // keystrokes the shell would start executing line by line.
+  // remote asked), so a multi-line snippet lands as one paste instead of a burst of keystrokes.
   function pasteText(text: string) {
     termRef.current?.paste(text)
     refocusTerminal()
   }
 
-  // The touch selection's only exit that isn't "throw it away": copy it, drop the selection, and
-  // hand focus back to the terminal so typing carries straight on. Driven from pointerdown with
-  // its default cancelled (the same trick the key toolbar uses) so the press never moves focus off
-  // xterm's textarea - Android tears the keyboard's input connection down and rebuilds it when it
-  // does, and a press is a user gesture as far as the clipboard is concerned either way.
+  // Copy the touch selection, drop it, and hand focus back to the terminal. Driven from
+  // pointerdown with default cancelled so the press never moves focus off xterm's textarea.
   function copyTouchSelection() {
     const text = touchSelection?.text
     if (text) void navigator.clipboard.writeText(text)
@@ -198,14 +153,12 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     requestRef.current = request
   }, [request])
 
-  // Uploads dropped/pasted files into the shell's current directory (tracked via OSC 7),
-  // or a directory the user is prompted for when that's unknown. Deliberately does NOT feed
-  // the bytes into the terminal as input - that's the whole point of intercepting them.
+  // Uploads dropped/pasted files into the shell's current directory (tracked via OSC 7), or a
+  // prompted-for directory when that's unknown. Deliberately does NOT feed the bytes to the shell.
   async function uploadFiles(files: File[]) {
     if (files.length === 0) return
 
-    // A local shell already has the file - there is nowhere to send it, and the SFTP upload
-    // this would otherwise open has no destination to open against.
+    // A local shell already has the file - there is nowhere to send it.
     const uploadRequest = requestRef.current
     if (!uploadRequest) {
       setUploadStatus({ message: 'This shell is on this machine - the file is already here.' })
@@ -215,8 +168,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
 
     let remoteDir = remoteCwdRef.current
     if (!remoteDir) {
-      // The shell isn't reporting its cwd (no OSC 7 shell integration) - ask rather than
-      // guess, matching the SFTP flow's "upload into a known directory" contract.
+      // No OSC 7 shell integration - ask rather than guess.
       remoteDir = window.prompt(
         "This shell isn't reporting its current directory. Enter a remote directory to upload into:",
         '.',
@@ -239,7 +191,6 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       }
     }
 
-    // Only clears the banner if no other upload started in the meantime.
     setTimeout(() => {
       if (uploadIdRef.current === thisUploadId) setUploadStatus(null)
     }, 4000)
@@ -249,9 +200,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     const container = containerRef.current
     if (!container) return
 
-    // The terminal font is user-configurable on the Appearance screen. xterm measures glyphs
-    // itself and doesn't read CSS, so its metrics come straight from the appearance settings
-    // here (initial values) and via subscribeAppearance below (live updates).
+    // xterm measures glyphs itself and doesn't read CSS, so font metrics come from the
+    // appearance settings here (initial values) and via subscribeAppearance below (updates).
     const initialFont = getAppearance().terminalFont
     const term = new Terminal({
       cursorBlink: true,
@@ -267,28 +217,13 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     fitAddon.fit()
     termRef.current = term
 
-    // Fit xterm to its container, then push the resulting size to the backend so the remote
-    // PTY (and anything reading COLUMNS/LINES - `systemctl status`, pagers, editors) matches
-    // the real window width instead of the 80x24 the initial ConnectRequest hard-codes.
-    // Deduped so an observer firing with an unchanged size doesn't spam resize requests.
+    // Fit xterm to its container and push the size to the backend so the remote PTY matches the
+    // real window (not the 80x24 ConnectRequest hard-codes); deduped to avoid resize spam.
     let lastCols = 0
     let lastRows = 0
     function fitAndSyncSize() {
-      // Nothing to fit to while this tab is hidden. Every open tab stays mounted and the
-      // inactive ones are display:none (see App.tsx), which measures 0x0 - and a
-      // ResizeObserver reports exactly that the moment a tab is switched away from. Fitting
-      // against it doesn't no-op: FitAddon floors its proposal at a couple of cells, so the
-      // background tab's PTY was being resized down to a sliver and back up again on every
-      // switch. The remote notices - readline redraws its prompt on SIGWINCH, a full-screen
-      // app relays out entirely - so a tab the user only switched away from produced output,
-      // which the unseen-activity tracking above then reported as background activity that
-      // was never cleared (the favicon badge sat on its accent color from then on). Coming
-      // back to the tab restores a real size and fires the observer again, which is what
-      // re-fits it.
-      //
-      // Read back off the ref rather than the narrowed `container` above: this is a hoisted
-      // function declaration, so TypeScript gives it the ref's declared (nullable) type
-      // regardless of the early return the effect opens with.
+      // Skip while hidden: an inactive tab is display:none and measures 0x0, and FitAddon floors
+      // its proposal, so fitting would resize the background PTY to a sliver on every switch.
       const box = containerRef.current
       if (!box || box.clientWidth === 0 || box.clientHeight === 0) return
       fitAddon.fit()
@@ -313,12 +248,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       fitAndSyncSize()
     })
 
-    // OSC 7 (ESC ]7;file://host/path BEL) is the de-facto shell-integration escape a shell
-    // emits on each prompt to report its working directory. Parsing it lets paste/drag
-    // uploads target the shell's *actual* cwd, following the user's `cd`s invisibly instead
-    // of guessing. Best-effort: many shells don't emit it unless configured to, so a null
-    // cwd just means we prompt for a destination instead (see uploadFiles). Returning true
-    // marks the sequence handled. The payload is file://<host>/<path>; we only want the path.
+    // OSC 7 (the de-facto shell-integration escape reporting cwd) lets paste/drag uploads
+    // target the shell's actual cwd instead of guessing. Best-effort; payload is file://<host>/<path>.
     term.parser.registerOscHandler(7, (data) => {
       try {
         const url = new URL(data)
@@ -329,15 +260,12 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       return true
     })
 
-    // Guards against a double paste: while our Ctrl+V handler is reading the clipboard
-    // itself, the native `paste` listener (below) must not ALSO process the same clipboard
-    // in engines where preventDefault() on the keydown doesn't cancel the native paste.
+    // Guards against a double paste: while our Ctrl+V handler reads the clipboard itself, the
+    // native `paste` listener (below) must not also process it.
     let manualPasteActive = false
 
-    // The desktop webview (Photino) doesn't deliver a native `paste` event to xterm's hidden
-    // textarea for Ctrl+V, so plain-text paste silently did nothing there. Read the clipboard
-    // ourselves and feed it in: a file/image uploads into the cwd (same as the native paste
-    // and drag-drop paths), any text is written as terminal input via term.paste().
+    // Photino's webview doesn't deliver a native `paste` event for Ctrl+V, so read the clipboard
+    // ourselves: a file/image uploads (like the native paste/drag paths), text goes to term.paste().
     async function pasteFromClipboard() {
       try {
         if (navigator.clipboard.read) {
@@ -360,8 +288,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
           return
         }
       } catch {
-        // read() is unavailable or rejected (permissions, or a non-text item some engines
-        // won't hand over) - fall back to the text-only path below.
+        // read() unavailable or rejected - fall back to the text-only path below.
       }
       try {
         const text = await navigator.clipboard.readText()
@@ -371,26 +298,18 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       }
     }
 
-    // Ctrl+C is overloaded in every terminal: with a selection active it should copy
-    // (and clear the selection, matching what most terminal emulators do), with nothing
-    // selected it's the interrupt signal and must reach the remote process as usual.
-    // Ctrl+Shift+C always copies without touching the selection. attachCustomKeyEventHandler
-    // runs before xterm's own key handling; returning false suppresses it (so xterm never
-    // turns the keydown into onData for the copy cases), returning true lets the keydown
-    // fall through to xterm's default handling, which is what actually sends \x03.
+    // Ctrl+C copies when a selection is active (clearing it), else sends \x03; Ctrl+Shift+C
+    // always copies. attachCustomKeyEventHandler returning false suppresses xterm's own handling.
     term.attachCustomKeyEventHandler((event) => {
-      // Ctrl+T is the app's "duplicate this tab" shortcut (issue #51, handled at the
-      // window level in App.tsx). Swallow it here so a focused terminal doesn't also send
-      // the literal \x14 (DC4) control byte to the remote shell.
+      // Ctrl+T duplicates the tab (handled window-level in App.tsx); swallow it here so a
+      // focused terminal doesn't also send the literal \x14 (DC4) to the remote shell.
       if (event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === 'KeyT') {
         return false
       }
 
-      // Ctrl+V (and the traditional Ctrl+Shift+V) pastes the clipboard into the terminal.
-      // xterm normally relies on the browser firing a native `paste` event into its
-      // textarea, which the desktop webview doesn't do for Ctrl+V - so we read the clipboard
-      // ourselves. preventDefault + return false stops xterm's own key handling and any
-      // native paste that would fire elsewhere, so it can't double up with pasteFromClipboard.
+      // Ctrl+V (and Ctrl+Shift+V) paste the clipboard; the desktop webview doesn't fire the
+      // native `paste` xterm relies on, so read it ourselves. preventDefault + return false
+      // stops xterm's own handling and any native paste doubling up with pasteFromClipboard.
       if (event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'KeyV') {
         event.preventDefault()
         manualPasteActive = true
@@ -421,11 +340,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       return true
     })
 
-    // Paste of a non-text clipboard item (e.g. an image from a screenshot tool) uploads it
-    // as a file into the shell's cwd instead of feeding it as literal terminal input. Plain
-    // text paste is left entirely to xterm (we only preventDefault when there's a file), so
-    // it keeps working exactly as before. The listener is on the textarea xterm creates for
-    // input, which is where the browser fires the paste.
+    // Paste of a non-text item (e.g. a screenshot) uploads it as a file into the shell's cwd
+    // rather than feeding it as terminal input; plain text is left entirely to xterm.
     const onPaste = (event: ClipboardEvent) => {
       // Our Ctrl+V handler above is already reading this same clipboard - suppress the
       // native paste so the text/file isn't applied twice.
@@ -434,7 +350,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         return
       }
       const files = event.clipboardData ? Array.from(event.clipboardData.files) : []
-      if (files.length === 0) return // plain text - let xterm handle it as usual
+      if (files.length === 0) return
       event.preventDefault()
       event.stopPropagation()
       void uploadFiles(files)
@@ -442,42 +358,24 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     const textarea = container.querySelector('textarea')
     textarea?.addEventListener('paste', onPaste)
 
-    // Lets the Android keyboard toolbar (see KeyboardToolbar.tsx) commit an in-progress IME
-    // composition before a button's own bytes go out, without racing xterm's own handling of
-    // the same commit. No-op off Android.
+    // Lets the Android keyboard toolbar commit an in-progress IME composition before its own
+    // bytes go out, without racing xterm's handling of the same commit. No-op off Android.
     const disposeCompositionBridge = textarea ? registerCompositionBridge(textarea) : undefined
 
-    // Bridges the exact gap between the IME ending composition (e.g. the trailing space after
-    // a word - see CompositionHelper.compositionend in xterm) and that same word's characters
-    // reappearing once the remote shell's echo has round-tripped back. xterm hides its own
-    // composition preview (the .composition-view overlay showing the in-progress word at the
-    // cursor) the instant compositionend fires, but doesn't actually send the committed text
-    // until its own deferred setTimeout(0) runs, and the remote then has to receive and echo
-    // it back before anything real is drawn - on a real network that gap is what read as the
-    // just-typed word vanishing for a moment. Copying that already-positioned element into an
-    // overlay of our own closes the gap without us tracking cursor/cell geometry ourselves -
-    // only xterm's own internal services have access to that.
-    //
-    // A copy rather than re-activating xterm's own element (what this did until now): xterm
-    // keeps mutating .composition-view for its own purposes, and the very next compositionstart
-    // blanks its textContent outright (CompositionHelper.compositionstart) while re-marking it
-    // active - so the frozen word silently became an empty box. Committing with Enter is
-    // exactly when a mobile IME immediately opens a fresh composition on the new line, which is
-    // why the Space case looked fixed (PR #103/#106) while Enter kept flickering. Nothing but
-    // the code below ever touches this element, so no amount of xterm-side churn can blank it.
+    // xterm hides its composition preview on compositionend but defers sending the committed
+    // text, so the just-typed word flickers until the echo returns. Copy the positioned
+    // .composition-view into our own overlay to bridge it (xterm keeps mutating its element).
     const compositionView = container.querySelector<HTMLElement>('.composition-view')
     const echoPreview = document.createElement('div')
-    // Same class (identical geometry/styling/stacking as the real preview it stands in for)
-    // plus a marker of our own, which is also what the e2e tests key off.
+    // Same class (identical geometry/styling) plus a marker the e2e tests key off.
     echoPreview.classList.add('composition-view', 'composition-echo')
     compositionView?.parentElement?.appendChild(echoPreview)
     let compositionFreezeTimeout: ReturnType<typeof setTimeout> | undefined
-    // Mirrors CompositionHelper's own _isComposing - compositionend (below) clears it, but so
-    // does the keydown case just below it, which is the whole reason this exists as a separate
-    // ref rather than reading xterm's private state.
+    // Mirrors CompositionHelper's own _isComposing, because both compositionend and the
+    // keydown case below finalize a composition and xterm's state is private.
     const isComposingRef = { current: false }
-    // True only for the tick in which an IME commit's text is handed to onData, so the sticky
-    // modifier there can tell a committed word apart from a paste or an escape sequence.
+    // True only for the tick an IME commit's text is handed to onData, so the sticky modifier
+    // there can tell a committed word from a paste or escape sequence.
     let compositionCommitPending = false
     function unfreezeComposition() {
       clearTimeout(compositionFreezeTimeout)
@@ -485,80 +383,55 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       echoPreview.classList.remove('active')
     }
     unfreezeCompositionRef.current = unfreezeComposition
-    // Snapshots the word xterm is about to stop previewing, at the position xterm had already
-    // computed for it (see the two call sites below), and arms the backstop that drops the
-    // snapshot again if real output never supersedes it.
+    // Snapshots the word xterm is about to stop previewing, at xterm's computed position, and
+    // arms a backstop that drops it if real output never supersedes it.
     function freezeComposition() {
       if (!compositionView?.textContent) return
       echoPreview.style.cssText = compositionView.style.cssText
       echoPreview.textContent = compositionView.textContent
       echoPreview.classList.add('active')
-      // Backstop for a shell that never echoes what was typed (rare, but possible) - don't
-      // leave stale composed text on screen forever if the real echo never arrives.
+      // Backstop for a shell that never echoes: don't leave stale composed text on screen.
       compositionFreezeTimeout = setTimeout(unfreezeComposition, 1000)
     }
-    // Marks the terminal as composing for as long as the IME holds a word, which is what the
-    // CSS keys off to move the caret onto the preview (see index.css). Not derived from
-    // xterm's own state: CompositionHelper keeps that private, and the keydown path below
-    // finalizes a composition without any compositionend event to observe.
+    // Marks the terminal as composing while the IME holds a word (CSS moves the caret onto the
+    // preview). Not derived from xterm's private state, and the keydown path below finalizes a
+    // composition without a compositionend event to observe.
     const composingRoot: HTMLDivElement = container
     const setComposing = (active: boolean) => composingRoot.classList.toggle('xterm-composing', active)
 
     const onCompositionEnd = () => {
       isComposingRef.current = false
       setComposing(false)
-      // The commit xterm is about to send is the one onData turns into a control code, and a
-      // control code isn't echoed back as the letter it was composed from - freezing the
-      // preview would leave a phantom "o" sitting on screen for the backstop second.
+      // A committed control code isn't echoed back as the letter it was composed from, so
+      // freezing the preview would leave a phantom letter for the backstop second.
       compositionCommitPending = true
       setTimeout(() => {
         compositionCommitPending = false
       }, 0)
       if (modifiersRef.current.ctrl || modifiersRef.current.alt) return
-      // xterm's own listener (registered first, at term.open() time - same-event listeners
-      // fire in registration order) has already hidden its preview as part of handling the
-      // commit; taking the snapshot here, synchronously after that, is what keeps the word on
-      // screen without interfering with that handling.
+      // xterm's own listener (registered first) has already hidden its preview; snapshotting
+      // here, synchronously after, keeps the word on screen.
       freezeComposition()
     }
     const onCompositionStart = () => {
       isComposingRef.current = true
       setComposing(true)
     }
-    // A new word being previewed lands on top of the frozen one (same cursor cell, since the
-    // echo that would have moved the cursor hasn't arrived yet), so the snapshot has to go the
-    // moment there's real preview text to replace it - on the update, not on the start, or
-    // typing ahead of a slow echo would blank the previous word again.
+    // A new previewed word lands on the frozen one (the echo hasn't moved the cursor yet), so
+    // drop the snapshot on update, not start, or typing ahead would blank the previous word.
     const onCompositionUpdate = () => {
       unfreezeComposition()
-      // A sticky modifier can only apply to a character the terminal actually receives, and a
-      // composing IME hands nothing over until the word is finished - so with Ctrl armed the
-      // "o" of Ctrl+O just sat in the composing region while nano waited, and whatever finally
-      // committed it arrived as a whole word rather than the single character onData applies
-      // the modifier to. That's the "Ctrl+O in nano types a literal o and leaves Ctrl lit"
-      // report. Committing the moment the IME starts holding text puts that first character
-      // through on its own, with the modifier still armed for it. Only while one is armed:
-      // ending every composition early would take the local preview (the whole reason
-      // composing is on, see MainActivity's TerminalWebView) away from normal typing.
+      // A composing IME hands nothing to onData until the word is finished, so an armed
+      // Ctrl can't apply to its first character (the "Ctrl+O in nano types a literal o" bug).
+      // Commit the composition the moment the IME starts holding text, only while armed, so
+      // normal typing keeps its local preview.
       if (modifiersRef.current.ctrl || modifiersRef.current.alt) void finishAndroidComposing()
     }
-    // A real compositionend DOM event isn't the only way a composition finishes: pressing
-    // Enter mid-word makes CompositionHelper.keydown finalize it right there, synchronously,
-    // via its "don't wait for propagation" branch (so the composed text reaches the shell
-    // before Enter runs the command) - hiding the composition-view with no compositionend event
-    // at all, since none needs to fire for xterm's own purposes. Without this, that path skipped
-    // the freeze above entirely, which is why committing a word with Space stopped flickering
-    // (PR #103) but committing the same word by pressing Enter still did.
-    //
-    // Registered capture:true (and after term.open(), so still after xterm's own listener in
-    // registration order) rather than the default bubble: xterm's own keydown listener on this
-    // same textarea is itself capture:true and calls stopPropagation() as part of ordinary key
-    // handling, which - on the very same element - keeps a bubble-phase listener from ever
-    // running at all, not merely from seeing ancestors. A bubble listener here would silently
-    // never fire for any key xterm considers fully handled, Enter included, which is exactly the
-    // one this needs to catch. The keyCode exclusions match CompositionHelper.keydown's own
-    // "still composing" cases (CapsLock/Enter's 229/Shift/Ctrl/Alt) so this only fires for a
-    // keydown that actually finalized the composition.
+    // Pressing Enter mid-word makes CompositionHelper.keydown finalize the composition
+    // synchronously, with no compositionend event - space stopped flickering (PR #103) but
+    // Enter didn't. Registered capture:true on the same textarea because xterm's own capture
+    // keydown listener calls stopPropagation(), so a bubble listener would never fire. The
+    // keyCode exclusions match CompositionHelper's own "still composing" cases.
     const onKeyDownDuringComposition = (event: KeyboardEvent) => {
       if (!isComposingRef.current) return
       if ([16, 17, 18, 20, 229].includes(event.keyCode)) return
@@ -588,21 +461,14 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     container.addEventListener('dragover', onDragOver)
     container.addEventListener('drop', onDrop)
 
-    // Everything the terminal answers to on a touchscreen - drag to scroll the scrollback, long
-    // press to select (then drag to extend), double tap for Tab, the way Termius does - lives in
-    // one gesture handler, since all three start from the same touchstart. Deliberately built on
-    // touch events rather than the mouse events a browser synthesizes from them, so a desktop
-    // mouse keeps meaning exactly what it always has here: xterm's own selection and wheel.
+    // All touchscreen gestures (drag-scroll, long-press-select, double-tap Tab) live in one
+    // handler since they share a touchstart. Built on touch events, not synthesized mouse
+    // events, so a desktop mouse keeps its usual xterm selection and wheel.
     const touch = registerTerminalTouch(term, container, {
       onDoubleTap: () => {
-        // Through the same commit-first path as the toolbar's own Tab key (see usePressProps in
-        // KeyboardToolbar): a double tap asking for completion is normally aimed at the word
-        // *currently being typed*, which on Android is still sitting in the IME's composing
-        // region and has never reached the shell. Sending a bare \t there completes against
-        // whatever the shell last saw - an empty word, so bash dumps every command it knows -
-        // and the composed text is then torn down on top of it. Awaiting the commit is what
-        // makes the double tap complete the word on screen; it resolves synchronously off
-        // Android and whenever nothing is composing.
+        // Commit the IME first (same as the toolbar's Tab key): the word being completed is
+        // still in the composing region, so a bare \t would complete against an empty word.
+        // Resolves synchronously off Android and when nothing is composing.
         void finishAndroidComposing().then(() => {
           sendRawRef.current('\t')
           term.focus()
@@ -622,24 +488,18 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
 
     const dataDisposable = term.onData((data) => {
       let payload = data
-      // One shot: a sticky modifier armed in the toolbar applies to the next single character
-      // and then disarms, whether that character came from a physical keystroke or an IME
-      // commit. Anything else (a paste, an escape sequence from an arrow key) isn't "the next
-      // character", so it passes through and leaves the modifier armed.
+      // One shot: a sticky modifier applies to the next single character (physical or IME
+      // commit) then disarms; a paste or arrow-key escape sequence passes through.
       const armed = modifiersRef.current
       if (armed.ctrl || armed.alt) {
-        // A committed word arriving whole is the fallback path: off the Android app there's no
-        // bridge to end the composition after its first character (see onCompositionUpdate),
-        // so the modifier applies to the first character and the rest lands as typed - better
-        // than dropping the combination outright and leaving the modifier armed forever. Only
-        // for an IME commit; a paste or an arrow key's escape sequence still passes through
-        // untouched. Array.from, not [0]/slice, so a surrogate pair stays one character.
+        // A committed word arriving whole is the fallback path (off Android there's no bridge
+        // to end the composition early); apply the modifier to the first character and let the
+        // rest land as typed. Array.from so a surrogate pair stays one character.
         const characters = data.length === 1 || compositionCommitPending ? Array.from(data) : []
         if (characters.length > 0) {
           payload = applyStickyModifiers(characters[0], armed) + characters.slice(1).join('')
-          // The ref is written directly as well as through state: two characters arriving in
-          // the same tick would both still see the armed value otherwise, since the ref only
-          // catches up on the next render.
+          // Write the ref directly too: two characters in the same tick would otherwise both
+          // see the armed value, since the ref only catches up on the next render.
           modifiersRef.current = { ctrl: false, alt: false }
           setModifiers({ ctrl: false, alt: false })
         }
@@ -647,17 +507,9 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       sendRawRef.current(payload)
     })
 
-    // Re-fit and push the new size to the backend PTY when the container changes size.
-    //
-    // Debounced rather than calling fitAndSyncSize() straight from the observer: a real
-    // drag-resize fires roughly one ResizeObserver notification per frame (confirmed by
-    // instrumenting it directly - ~30 notifications over half a second of dragging), and
-    // fit() calling term.resize() does a full renderer clear-and-redraw every time it
-    // actually changes cols/rows. Applying that on every intermediate frame - including
-    // whatever transient sizes happen to fall exactly on a column/row boundary as a
-    // scrollbar's reserved gutter comes in and out of the width calculation - is what
-    // reads as flicker; only the settled size after the resize stops actually matters (and
-    // it's that settled size we send the remote, not every intermediate one).
+    // Debounced refit/resize on container size change: a drag-resize fires ~one ResizeObserver
+    // notification per frame and fit() does a full clear-and-redraw each time cols/rows change,
+    // so applying every intermediate frame reads as flicker. Only the settled size matters.
     let resizeTimeout: ReturnType<typeof setTimeout> | undefined
     const resizeObserver = new ResizeObserver(() => {
       clearTimeout(resizeTimeout)
@@ -689,37 +541,25 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       fitAndSyncRef.current = () => {}
       unfreezeCompositionRef.current = () => {}
     }
-    // startupCommands is intentionally excluded - it's fixed for the lifetime of a given
-    // sessionId (resolved once at tab-creation time, see App.tsx), so re-running this
-    // whole effect over a prop-identity change would just tear down and recreate the same
-    // live session for no reason. request is likewise stable per tab and read via a ref.
+    // startupCommands is intentionally excluded (fixed per sessionId); request is stable per
+    // tab and read via a ref. Re-running would tear down and recreate the same live session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
-  // The connection to the session, deliberately separate from the terminal above: the shell
-  // now outlives any one WebSocket, so losing the socket has to be survivable without
-  // throwing away the terminal (and everything on its screen) with it.
-  //
-  // The Android case this exists for: the app goes to the background, the WebView is
-  // suspended or its renderer reclaimed, and this socket dies for reasons that say nothing
-  // about the SSH connection - which the backend now keeps detached for a few minutes. So a
-  // close is treated as "reattach", and only an explicit close reason from the server means
-  // the session is actually over.
+  // The socket effect is separate from the terminal: the shell outlives any one WebSocket, so
+  // losing the socket (e.g. Android backgrounding the WebView) is treated as "reattach" rather
+  // than throwing the terminal away. Only an explicit server close reason ends the session.
   useEffect(() => {
-    // A tab keeps this component across a reconnect (App.tsx keys the list by tab id, not by
-    // session), so a new session id has to start from a clean slate with nothing rendered yet.
+    // A tab keeps this component across a reconnect (keyed by tab id), so a new session id
+    // starts from a clean slate with nothing rendered yet.
     offsetRef.current = undefined
 
     let disposed = false
     let retryTimer: ReturnType<typeof setTimeout> | undefined
     let retryDelay = 500
     const startupTimeouts: ReturnType<typeof setTimeout>[] = []
-    // The socket this effect currently considers live. Every handler checks its own socket
-    // against it and does nothing if it isn't the current one: a retry timer, a
-    // visibilitychange and an in-flight "is the session still there?" probe can all decide to
-    // reconnect at nearly the same moment, and without this the losers of that race keep
-    // running - each opening another socket on its own close, which is a connection storm
-    // rather than a reconnect.
+    // The socket this effect considers live. Handlers check their socket against it so a race
+    // between a retry timer, visibilitychange and an in-flight state probe can't stack sockets.
     let current: WebSocket | null = null
 
     function connect() {
@@ -739,20 +579,15 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         setSuperseded(false)
         termRef.current?.focus()
 
-        // The shell channel is ready now, so correct the PTY from the ConnectRequest's initial
-        // 80x24 to the terminal's actual measured size (xterm has laid out by this point) -
-        // and, on a reattach, from whatever size it had before we were interrupted.
+        // The shell channel is ready, so correct the PTY from the initial 80x24 to xterm's
+        // actual measured size (laid out by this point) - and on reattach, to the current size.
         fitAndSyncRef.current()
       })
 
       socket.addEventListener('message', (event) => {
         if (current !== socket) return
-        // A text frame is the attach header (see TerminalSession.AttachAsync), saying where
-        // in the session's output the byte stream that follows begins. Everything else on
-        // this channel is raw PTY bytes, so the type is all the disambiguation needed. The
-        // backend also re-sends it mid-stream if this socket ever falls so far behind that
-        // the replay buffer drops output - hence resetting on `gap` here and not just on the
-        // first frame.
+        // A text frame is the attach header (TerminalSession.AttachAsync) giving the output
+        // offset the following bytes begin at; the backend re-sends it mid-stream on a `gap`.
         if (typeof event.data === 'string') {
           try {
             const header = JSON.parse(event.data) as { type?: string; offset?: number; gap?: boolean; fresh?: boolean }
@@ -761,11 +596,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
               // What follows doesn't join onto what's on screen. Start clean rather than
               // splice a hole.
               if (header.gap) termRef.current?.reset()
-              // The backend, not this component, decides whether the host's startup snippets
-              // still need running: only it knows whether this session has ever had a client.
-              // A page reload mounts a brand-new terminal onto a shell that may have been
-              // running for minutes, and typing the startup list into that a second time is
-              // exactly the kind of thing that reruns someone's deploy script.
+              // The backend decides via `fresh` whether startup snippets still need running
+              // (only it knows if the session ever had a client); retyping them would be bad.
               if (header.fresh) sendStartupCommands()
             }
           } catch {
@@ -776,17 +608,9 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
 
         const bytes = new Uint8Array(event.data as ArrayBuffer)
         offsetRef.current = (offsetRef.current ?? 0) + bytes.byteLength
-        // Real output has arrived - it's at least as current as any frozen composition preview
-        // (see the terminal effect above), so that preview goes now. Handing it to write()'s
-        // own completion callback rather than dropping it here first is what keeps the swap
-        // invisible: write() is asynchronous (xterm parses off a macrotask via WriteBuffer and
-        // only then schedules a render), so clearing the preview up front hands the browser a
-        // window in which it can paint the old row with the preview already gone and the echo
-        // not yet drawn - one flicker of exactly the blank this whole mechanism exists to
-        // prevent, and a much wider one for Enter, whose echo comes back as a burst (the line,
-        // the newline, the command's output, a fresh prompt) rather than a single small chunk.
-        // The callback fires right after the parse that draws the echo and before the render it
-        // schedules, so both land in the same frame.
+        // Real output arrived, so clear the frozen composition preview - but via write()'s
+        // completion callback, since write() is async and clearing up front would let the
+        // browser paint the row with the preview gone and the echo not yet drawn.
         const clearFrozenComposition = unfreezeCompositionRef.current
         termRef.current?.write(bytes, clearFrozenComposition)
         // Output landed while this tab is in the background - flag it once (until next viewed).
@@ -804,9 +628,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         socketRef.current = null
 
         if (event.reason === 'session-ended') {
-          // The shell itself ended (`exit`) - the tab is done. Stop this effect's own
-          // machinery first: App unmounts us in response, but a visibilitychange landing in
-          // the meantime would otherwise reconnect and fire the callback a second time.
+          // The shell itself ended (`exit`) - the tab is done. Stop this effect's machinery
+          // first so a visibilitychange can't reconnect and fire the callback twice.
           disposed = true
           clearTimeout(retryTimer)
           onSessionClosedRef.current()
@@ -814,8 +637,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         }
 
         if (event.reason === 'session-lost') {
-          // The SSH connection to the host died (a WiFi-to-mobile handover, the host
-          // rebooting). The user isn't finished, so keep the tab and dial again.
+          // The SSH connection to the host died (handover, host reboot). Keep the tab and redial.
           disposed = true
           clearTimeout(retryTimer)
           onSessionLostRef.current()
@@ -823,20 +645,17 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         }
 
         if (event.reason === 'session-superseded') {
-          // Another window attached to this same session and took it over. Reconnecting would
-          // evict that one straight back, and the two would trade the session forever, so
-          // this one stops and says so instead.
+          // Another window took this session over; reconnecting would evict it and the two
+          // would trade the session forever, so stop and say so instead.
           setSuperseded(true)
           setReconnecting(false)
           return
         }
 
         setReconnecting(true)
-        // Any other close - including the anonymous one the browser reports for both a
-        // rejected upgrade and a dead network - tells us nothing on its own, so ask.
+        // Any other close (rejected upgrade, dead network) tells us nothing on its own, so ask.
         void sshSessionState(sessionId).then((state) => {
-          // Something already reconnected while the question was in flight (coming back to
-          // the app doesn't wait for it) - leave that socket alone.
+          // Something already reconnected while the probe was in flight - leave that socket alone.
           if (disposed || current !== null) return
           if (state === 'ended') {
             // The shell finished while we were away. Close the tab, rather than quietly
@@ -851,11 +670,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
             return
           }
           retryTimer = setTimeout(connect, retryDelay)
-          // Backs off to half a minute rather than settling at a few seconds: when the answer
-          // is "live" only because the backend didn't answer at all (see sshSessionState),
-          // this is every open tab polling a server that may simply be gone, and on a phone
-          // that is a wakeup every few seconds for as long as the app is open. Coming back to
-          // the app resets it to an immediate retry, so responsiveness doesn't depend on it.
+          // Backs off to half a minute so every open tab isn't polling a gone backend; coming
+          // back to the app resets it to an immediate retry.
           retryDelay = Math.min(retryDelay * 2, 30_000)
         })
       })
@@ -864,9 +680,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     // Sends the host's startup snippets. Called only from the attach header's `fresh` flag,
     // which is the backend saying this socket is the session's first ever client.
     function sendStartupCommands() {
-      // A short guard delay before the first one lets the shell's own banner/prompt print
-      // first, so the command text doesn't land in the middle of it; spacing the rest out the
-      // same way keeps each one from racing a slow prompt on the previous line.
+      // A delay before the first lets the shell's banner/prompt print; spacing the rest keeps
+      // each command from racing a slow prompt on the previous line.
       let delay = 300
       for (const command of startupCommandsRef.current ?? []) {
         const text = command.endsWith('\n') || command.endsWith('\r') ? command : `${command}\r`
@@ -877,15 +692,11 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
 
     connect()
 
-    // Coming back to the app is the moment to retry, not whenever a backoff timer happens to
-    // fire: a backgrounded page has its timers throttled to about one a minute and a frozen
-    // one has them stopped altogether, so waiting on the timer alone would leave the user
-    // looking at a dead terminal for up to a minute after switching back. These events fire
-    // on thaw, which is exactly the right moment.
-    // Deliberately still runs when superseded: what causes the two-window ping-pong is the
-    // automatic backoff retry, which the superseded branch stops. Coming back to a window is
-    // the user saying they want this one, and two windows that are both on screen never fire
-    // this at all - so reclaiming here settles rather than oscillates.
+    // Retry on thaw/visible rather than waiting on a backoff timer: a backgrounded page has
+    // timers throttled to ~one a minute and a frozen one has them stopped, so the timer alone
+    // would leave a dead terminal for up to a minute after switching back.
+    // Still runs when superseded: the automatic backoff is what causes two-window ping-pong,
+    // and reclaiming on a visible window settles rather than oscillates.
     function reconnectNow() {
       if (disposed || document.visibilityState !== 'visible') return
       if (current && (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) return
@@ -910,9 +721,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     }
   }, [sessionId])
 
-  // Re-focus when this tab becomes the active one - it stays mounted-but-hidden while
-  // inactive (see App.tsx), so nothing else would move focus back into it on tab switch.
-  // Viewing the tab also re-arms the background-activity notifier (its output is now seen).
+  // Re-focus on becoming active (inactive tabs stay mounted-but-hidden), and re-arm the
+  // background-activity notifier since the output is now seen.
   useEffect(() => {
     isActiveRef.current = isActive
     if (isActive) {
@@ -946,15 +756,11 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       {/* The wrapper only exists to position the touch selection's Copy bubble against the
           terminal without putting a React-managed child inside the element xterm.js owns. */}
       <div className="relative min-h-0 flex-1">
-        {/* overflow-hidden so this container's own box can never be nudged by xterm's rendered
-            content (e.g. a fractional cell-size rounding mismatch) - it must stay purely
-            parent-driven, since fitAddon.fit() computes rows/cols *from* this element's size.
-            On mobile we need overflow-y-auto to allow scrolling when keyboard is open. */}
-        {/* touch-none on a touchscreen: every gesture over the terminal is one of ours (see
-            terminalTouch.ts), and letting the browser start a pan of its own first would leave a
-            drag scrolling this container instead of the scrollback. Elsewhere,
-            touch-manipulation still buys a double tap free of double-tap-to-zoom, and taps that
-            land without the browser's 300ms wait. */}
+        {/* overflow-hidden so xterm's rendered content can't nudge this box - fitAddon.fit()
+            derives rows/cols from its size; mobile uses overflow-y-auto for keyboard scrolling. */}
+        {/* touch-none on a touchscreen: all gestures are ours (see terminalTouch.ts), so the
+            browser must not pan first; touch-manipulation elsewhere buys double-tap-to-zoom-free
+            taps without the 300ms wait. */}
         <div
           ref={containerRef}
           className={`h-full w-full bg-black p-1 sm:p-2 overflow-y-auto sm:overflow-hidden ${
@@ -983,14 +789,12 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
                 style={{
                   left: `${handle.left}px`,
                   top: `${handle.top}px`,
-                  // Centred on the cell edge it controls and hanging below the row, so it
-                  // marks the boundary without covering the text it belongs to. The teardrop's
-                  // point (rounding, below) is what says which end it is.
+                  // Centred on the cell edge it controls and hanging below the row, so it marks
+                  // the boundary without covering its text; the rounding shows which end it is.
                   transform: 'translate(-50%, 0)',
                 }}
-                // Deliberately larger than it looks (the visible dot is the inner span): a
-                // 10px target is unusable with a fingertip, which is half of why the selection
-                // felt unadjustable even once the handles were there.
+                // Larger than it looks (the visible dot is the inner span): a 10px target is
+                // unusable with a fingertip.
                 className="absolute z-10 flex h-9 w-9 touch-none items-start justify-center"
               >
                 <span
@@ -1023,10 +827,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
           </button>
         )}
       </div>
-      {/* Keyboard toolbar for Android/mobile - special keys mobile keyboards don't expose.
-          Every button is wired to sendKey/toggleModifier above, which push bytes into the
-          same live WebSocket term.onData writes to - not into termRef, which has no such
-          capability (xterm's Terminal has no public "inject a keystroke" API). */}
+      {/* Keyboard toolbar for Android/mobile: buttons push bytes into the live WebSocket via
+          sendKey/toggleModifier, since xterm has no public "inject a keystroke" API. */}
       {isMobileApp() && (
         <KeyboardToolbar
           ctrlArmed={modifiers.ctrl}

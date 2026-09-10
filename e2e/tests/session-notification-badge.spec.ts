@@ -8,8 +8,6 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
 
 // API-level only: the toggle itself is rendered behind isMobileApp(), since the keep-alive
 // notification it controls exists on Android and nowhere else (see SessionKeepAliveService).
-// What's testable here is the setting it round-trips through - that it starts off, persists,
-// and comes back on the shared settings object the app reads at startup.
 test('"badge the app icon" defaults to off and round-trips through /api/settings', async ({ page }) => {
   await page.goto(ctx.baseUrl)
 

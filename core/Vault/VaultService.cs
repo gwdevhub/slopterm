@@ -17,19 +17,8 @@ public sealed class VaultService
     // In-memory only for the life of the process - never written to disk, never logged.
     private byte[]? _key;
 
-    /// <param name="clock">
-    /// This install's hybrid logical clock. Defaults to the process-wide one keyed to this
-    /// device's id, which is right for the app - there is one device per process. Tests pass
-    /// their own so two "devices" in one process are genuinely independent rather than
-    /// sharing a clock no real pair of devices ever would.
-    /// </param>
-    /// <param name="vaultDirectory">
-    /// Where this vault lives. Defaults to <see cref="AppPaths.GetVaultDirectory"/>, which is
-    /// what the app uses. Passing it explicitly is how a test runs two vaults in one process
-    /// without reaching for the SLOPTERM_VAULT_DIR environment variable - process-global
-    /// mutable state that every other vault in the process shares, and which nothing can make
-    /// safe once more than one of them exists.
-    /// </param>
+    /// <param name="clock">This install's hybrid logical clock; tests pass their own.</param>
+    /// <param name="vaultDirectory">Where this vault lives; defaults to <see cref="AppPaths.GetVaultDirectory"/>.</param>
     public VaultService(HybridLogicalClock? clock = null, string? vaultDirectory = null)
     {
         _vaultDir = vaultDirectory ?? AppPaths.GetVaultDirectory();
@@ -41,17 +30,12 @@ public sealed class VaultService
     public bool Exists => File.Exists(_metadataPath);
     public bool IsUnlocked => _key is not null;
 
-    /// <summary>
-    /// Where records actually live, per collection. Every typed accessor below goes through
-    /// this - the `local` collection is just "the vault directory as it always was", so a
-    /// vault with no collections behaves byte-for-byte the way it did before sync existed.
-    /// </summary>
+    /// <summary>Where records actually live, per collection; every typed accessor goes through this.</summary>
     public CollectionStore Collections { get; }
 
     /// <summary>
     /// Raised after any record changes, with the collection that changed. VaultSyncService
-    /// subscribes to debounce a push; nothing else may throw out of it, since a subscriber
-    /// blowing up would take the save that triggered it with it.
+    /// subscribes to debounce a push; subscribers must not throw.
     /// </summary>
     public event Action<string>? RecordChanged;
 
@@ -103,11 +87,8 @@ public sealed class VaultService
     public void Lock() => _key = null;
 
     /// <summary>
-    /// Called once at app startup. If settings say a master password isn't required, this
-    /// transparently creates/unlocks the vault with a fixed, non-secret key (see
-    /// VaultCrypto.NoPasswordSeed) so the frontend never shows an unlock prompt at all -
-    /// nothing else needs to know this mode exists, since /api/vault/status will just
-    /// already report "unlocked".
+    /// Called once at startup. If no master password is required, transparently creates/
+    /// unlocks the vault with the fixed NoPasswordSeed so no unlock prompt is shown.
     /// </summary>
     public void EnsureUnlockedIfPasswordNotRequired()
     {
@@ -133,11 +114,8 @@ public sealed class VaultService
             return new AppSettings();
         }
 
-        // Deliberately NOT swallowed into defaults: settings.json carries RequireMasterPassword,
-        // so silently treating a corrupt/older-format file as "all defaults" could unlock a
-        // password-protected vault. Fail closed instead, with a message that names the file and
-        // the fix (it's non-secret and safe to delete) - the crash reporter surfaces it, rather
-        // than a raw System.Text.Json stack trace nobody can act on.
+        // Fail closed on a corrupt settings.json rather than defaulting: it carries
+        // RequireMasterPassword, so defaults could unlock a password-protected vault.
         AppSettings settings;
         try
         {
@@ -167,11 +145,7 @@ public sealed class VaultService
     private const string PreferencesFolder = "preferences";
     private const string PreferencesRecordId = "preferences";
 
-    /// <summary>
-    /// The syncable preferences, migrating settings.json's values (and the old
-    /// secrets/appearance record) into one on first read so an existing install keeps every
-    /// toggle it had. Null only when the vault is locked.
-    /// </summary>
+    /// <summary>Syncable preferences, migrating settings.json/legacy appearance on first read. Null when locked.</summary>
     public PreferencesRecord? GetPreferences()
     {
         if (!IsUnlocked)
@@ -214,10 +188,7 @@ public sealed class VaultService
         return migrated;
     }
 
-    /// <summary>
-    /// Writes the preferences record AND mirrors the same values back into settings.json,
-    /// so the pre-unlock read and an older build both still see the user's choices.
-    /// </summary>
+    /// <summary>Writes the preferences record and mirrors values back into settings.json.</summary>
     public void SavePreferences(PreferencesRecord preferences)
     {
         RequireUnlocked();
@@ -250,11 +221,7 @@ public sealed class VaultService
         File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
     }
 
-    /// <summary>
-    /// Toggles whether a master password is required, re-keying the entire vault to match
-    /// (the actual encryption key changes between "derived from a real password" and
-    /// "derived from the fixed, non-secret NoPasswordSeed" - see AGENTS.md's Settings note).
-    /// </summary>
+    /// <summary>Toggles master-password requirement, re-keying the entire vault to match.</summary>
     public void SetRequireMasterPassword(bool required, string? currentPassword, string? newPassword)
     {
         var settings = GetSettings();
@@ -288,32 +255,19 @@ public sealed class VaultService
         File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
     }
 
-    /// <summary>
-    /// Persists whether closing the app window hides it to the tray (leaving the app
-    /// running) instead of quitting outright. A plain settings.json write - unlike
-    /// RequireMasterPassword it changes no encryption key, so there's nothing to re-key,
-    /// and it needs no unlock (settings.json is always plaintext/readable).
-    /// </summary>
+    /// <summary>Persists whether closing the window hides to tray instead of quitting.</summary>
     public void SetCloseToTray(bool enabled)
     {
         UpdatePreferences(p => p.CloseToTray = enabled, s => s.CloseToTray = enabled);
     }
 
-    /// <summary>
-    /// Persists whether the Hosts screen also lists ~/.ssh/config aliases as read-only
-    /// cards (see SshConfigService). Same shape as SetCloseToTray - no encryption key
-    /// changes, no unlock needed.
-    /// </summary>
+    /// <summary>Persists whether Hosts also lists ~/.ssh/config aliases read-only.</summary>
     public void SetShowSshConfigHosts(bool enabled)
     {
         UpdatePreferences(p => p.ShowSshConfigHosts = enabled, s => s.ShowSshConfigHosts = enabled);
     }
 
-    /// <summary>
-    /// Applies a change to the preferences record, or - with the vault locked - straight to
-    /// settings.json. The locked path matters: these toggles were always usable without an
-    /// unlock, and moving them into the vault must not quietly take that away.
-    /// </summary>
+    /// <summary>Applies a change to the preferences record, or straight to settings.json when locked.</summary>
     private void UpdatePreferences(Action<PreferencesRecord> applyToRecord, Action<AppSettings> applyToFile)
     {
         if (GetPreferences() is { } preferences)
@@ -329,20 +283,15 @@ public sealed class VaultService
         File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings));
     }
 
-    /// <summary>
-    /// Persists whether the Android keep-alive notification is allowed to badge the launcher
-    /// icon (see SessionKeepAliveService, which picks its notification channel from this).
-    /// Same shape as SetCloseToTray - no encryption key changes, no unlock needed.
-    /// </summary>
+    /// <summary>Persists whether the Android keep-alive notification badges the launcher icon.</summary>
     public void SetSessionNotificationBadge(bool enabled)
     {
         UpdatePreferences(p => p.SessionNotificationBadge = enabled, s => s.SessionNotificationBadge = enabled);
     }
 
     /// <summary>
-    /// Re-encrypts every existing record (hosts/snippets/logs/...) and vault.json's canary
-    /// with a newly derived key. Records are re-keyed before vault.json is overwritten, so
-    /// a crash partway through never leaves records unreadable by either the old or new key.
+    /// Re-encrypts every record and vault.json's canary with a new key. Records are re-keyed
+    /// before vault.json is overwritten, so a crash leaves neither state unreadable.
     /// </summary>
     private void ChangeMasterKey(string newDerivationInput)
     {
@@ -353,11 +302,8 @@ public sealed class VaultService
         var newKey = VaultCrypto.DeriveKey(
             newDerivationInput, newSalt, VaultCrypto.Argon2Iterations, VaultCrypto.Argon2MemoryKb, VaultCrypto.Argon2Parallelism);
 
-        // Recursive, unlike before: collections/{cid}/… nests one level deeper than the
-        // original record folders, and its collection.json/identity.json/members.json are
-        // vault-encrypted too - missing them would leave a synced collection unreadable after
-        // a password change, with its remote password and collection key stranded under the
-        // old key.
+        // Recursive: collections/{cid}/… nests deeper and is vault-encrypted too, so missing
+        // it would strand a synced collection's key under the old key.
         if (Directory.Exists(_vaultDir))
         {
             foreach (var path in EncryptedRecordFiles())
@@ -382,15 +328,9 @@ public sealed class VaultService
     }
 
     /// <summary>
-    /// Every vault-encrypted record file, at any depth. Files sitting directly in the vault
-    /// directory are deliberately excluded: vault.json, settings.json and window.json are
-    /// device-local plaintext, and trying to read one as a RecordEnvelope is how a re-key
-    /// blew up on an install that had simply moved its window.
-    ///
-    /// Materialized rather than enumerated lazily, because callers replace each file as they
-    /// go (temp + move) and mutating a directory mid-enumeration can hand the same path back
-    /// twice - which during a re-key would encrypt a record under the new key twice and leave
-    /// it unreadable by anything.
+    /// Every vault-encrypted record file, at any depth; root-level device-local files
+    /// (vault.json, settings.json, window.json) are deliberately excluded. Materialized
+    /// because callers replace files while enumerating.
     /// </summary>
     private string[] EncryptedRecordFiles() =>
         Directory.Exists(_vaultDir)
@@ -399,12 +339,8 @@ public sealed class VaultService
             : [];
 
     /// <summary>
-    /// Packages vault.json, settings.json, and every record file into a zip - the whole
-    /// point is that it's just already-encrypted bytes copied as-is, so exporting never
-    /// needs the vault to be unlocked (zero-knowledge: the backend doesn't need the key
-    /// either). settings.json is included so an imported vault's "requires a password"
-    /// state always matches how its records were actually encrypted, rather than being
-    /// silently overridden by whatever the importing machine's local settings said.
+    /// Packages vault.json, settings.json, and every record file into a zip as-is, so export
+    /// never needs the vault unlocked (zero-knowledge).
     /// </summary>
     public byte[] ExportBackup()
     {
@@ -422,10 +358,8 @@ public sealed class VaultService
                 archive.CreateEntryFromFile(_settingsPath, "settings.json");
             }
 
-            // Recursive, so collections/{cid}/… travels with the backup - restoring a vault
-            // that silently dropped every synced collection would be worse than not
-            // exporting at all. Root-level files are excluded for the same reason a re-key
-            // skips them: they describe this device, not its records.
+            // Recursive so collections travel with the backup; root-level files are excluded
+            // because they describe this device, not its records.
             foreach (var file in EncryptedRecordFiles())
             {
                 var relative = Path.GetRelativePath(_vaultDir, file).Replace(Path.DirectorySeparatorChar, '/');
@@ -437,26 +371,17 @@ public sealed class VaultService
     }
 
     /// <summary>
-    /// Replaces the entire vault directory with the contents of a previously exported
-    /// backup. Extracts into a temp staging directory first and validates every entry
-    /// resolves inside it (guards against a corrupt/malicious zip using "../" path
-    /// traversal - a.k.a. zip slip) before touching the real vault directory at all, so a
-    /// bad upload can't leave the vault half-replaced. Locks first (the in-memory key
-    /// almost certainly doesn't match the newly imported vault.json), then immediately
-    /// re-runs EnsureUnlockedIfPasswordNotRequired so an imported vault that doesn't
-    /// require a password auto-unlocks right away instead of sitting locked until the
-    /// next full app restart.
+    /// Replaces the vault directory from a backup. Extracts into a sibling temp dir and
+    /// validates entries against path traversal (zip slip) first, then locks and re-runs
+    /// EnsureUnlockedIfPasswordNotRequired.
     /// </summary>
     public void ImportBackup(byte[] zipBytes)
     {
         using var ms = new MemoryStream(zipBytes);
         using var archive = new ZipArchive(ms, ZipArchiveMode.Read);
 
-        // Staged as a *sibling* of the vault directory (not the system temp directory) so
-        // the final Directory.Move below is guaranteed to land on the same filesystem -
-        // Directory.Move throws (Linux: "Invalid cross-device link") if the source and
-        // destination are on different volumes, which the system temp dir isn't
-        // guaranteed to share with wherever the vault directory actually lives.
+        // Staged as a sibling of the vault directory so the final Directory.Move lands on the
+        // same filesystem (Move fails across volumes).
         var stagingParent = Path.GetDirectoryName(Path.GetFullPath(_vaultDir)) ?? Path.GetTempPath();
         var stagingDir = Path.Combine(stagingParent, ".slopterm-import-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stagingDir);
@@ -468,7 +393,7 @@ public sealed class VaultService
             {
                 if (string.IsNullOrEmpty(entry.Name))
                 {
-                    continue; // directory entry
+                    continue;
                 }
 
                 var destPath = Path.GetFullPath(Path.Combine(stagingDir, entry.FullName));
@@ -508,12 +433,8 @@ public sealed class VaultService
     }
 
     /// <summary>
-    /// Wipes the vault directory entirely (every host/snippet/keychain entry/log, plus
-    /// settings.json) and returns to the exact state a brand-new install starts in -
-    /// including re-running EnsureUnlockedIfPasswordNotRequired so a default install ends
-    /// up auto-unlocked again immediately, not just "no vault at all." Deliberately does
-    /// NOT require the vault to already be unlocked - this is the recovery path for
-    /// someone who's locked themselves out and just wants to start fresh.
+    /// Wipes the vault directory entirely back to a fresh-install state, then auto-unlocks if
+    /// no password is required. Does not require the vault to be unlocked (recovery path).
     /// </summary>
     public void ResetToDefault()
     {
@@ -528,13 +449,8 @@ public sealed class VaultService
         EnsureUnlockedIfPasswordNotRequired();
     }
 
-    // device-id identifies the MACHINE, not the vault contents (see DeviceIdentity), so it
-    // survives both wipes above - it lives in the vault directory only because that's where
-    // this app's per-install state goes. Losing it would silently strand every scheduled job
-    // pinned to this device, including after restoring your own backup onto the same machine,
-    // and would leave the running process's cached id disagreeing with the file on disk.
-    // Import still can't carry one IN: ExportBackup never packages it, so a backup restored
-    // on a second machine keeps that machine's own identity.
+    // device-id identifies the MACHINE, not the vault contents, so it survives wipes; it lives
+    // here only because this app's per-install state does. Export never packages it.
     private string? ReadDeviceId()
     {
         var path = Path.Combine(_vaultDir, "device-id");
@@ -628,10 +544,8 @@ public sealed class VaultService
     private const string AiApiKeyRecordId = "ai-api-key";
 
     /// <summary>
-    /// The AI endpoint's bearer token, or null if locked, unset, or unreadable. Never throws:
-    /// this is read on every agent turn and on the status probe, and a vault that can't hand
-    /// the key over must degrade to "no Authorization header" (which a local Ollama doesn't
-    /// need anyway), not take the turn down.
+    /// The AI endpoint's bearer token, or null if locked/unset/unreadable. Never throws - a
+    /// missing key degrades to "no Authorization header".
     /// </summary>
     public string? GetAiApiKey()
     {
@@ -679,9 +593,8 @@ public sealed class VaultService
     private const string AiChatsFolder = "ai-chats";
 
     /// <summary>
-    /// All persisted AI conversations (every host's - the caller filters by HostKey). All
-    /// four AI-chat methods are best-effort by design (like AppendLog): a locked vault just
-    /// means chats don't persist/restore/list, never an error in the agent path.
+    /// All persisted AI conversations. Best-effort by design - a locked vault means chats
+    /// don't persist/restore, never an error in the agent path.
     /// </summary>
     public IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, AiChatRecord Record)> ListAiChats()
     {
@@ -760,11 +673,7 @@ public sealed class VaultService
         }
     }
 
-    /// <summary>
-    /// Persists the AI agent's endpoint. A plain settings.json write like SetCloseToTray - a
-    /// loopback URL isn't secret, and needing no unlock means the agent is configurable even
-    /// with a locked vault.
-    /// </summary>
+    /// <summary>Persists the AI agent's endpoint. A plain settings.json write, no unlock needed.</summary>
     public void SetAiSettings(string baseUrl)
     {
         UpdatePreferences(
@@ -788,10 +697,8 @@ public sealed class VaultService
             return new OpenTabsRecord();
         }
 
-        // Genuinely never throw (this runs at startup, before there's any UI to surface an
-        // error): a restored-tabs record left over from an older/incompatible build - bad
-        // JSON, bad base64, or ciphertext this key can't decrypt - must degrade to "no tabs
-        // to restore", never take startup down. It's non-critical convenience data.
+        // Genuinely never throw (runs at startup): an older/incompatible record must degrade
+        // to "no tabs to restore", never take startup down.
         try
         {
             var envelope = JsonSerializer.Deserialize<RecordEnvelope>(File.ReadAllText(path));
@@ -823,10 +730,8 @@ public sealed class VaultService
     private const string AppearanceRecordId = "appearance";
 
     /// <summary>
-    /// The synced appearance (colors + fonts) blob, or null if locked or nothing saved yet.
-    /// Stored opaquely as the raw JSON the client sends (a JsonElement) so the theme schema
-    /// can evolve entirely client-side without a backend change. Never throws - the client
-    /// keeps a local cache for instant theming and treats null as "nothing to sync".
+    /// The synced appearance blob, or null if locked/unset. Stored opaquely as raw JSON so the
+    /// theme schema can evolve client-side. Never throws.
     /// </summary>
     public JsonElement? GetAppearance() => GetPreferences()?.Appearance ?? ReadLegacyAppearance();
 
@@ -842,11 +747,7 @@ public sealed class VaultService
         SavePreferences(preferences);
     }
 
-    /// <summary>
-    /// The pre-split location (secrets/appearance). Read once, on the migration into the
-    /// preferences record, and left on disk afterwards so an older build downgraded onto the
-    /// same vault still finds the theme it wrote.
-    /// </summary>
+    /// <summary>Reads the pre-split secrets/appearance once, for migration.</summary>
     private JsonElement? ReadLegacyAppearance()
     {
         if (!IsUnlocked)
@@ -956,9 +857,8 @@ public sealed class VaultService
     }
 
     /// <summary>
-    /// Prepends a run to the job's history, truncating its captured output and evicting
-    /// everything past MaxJobRuns. Best-effort like AppendLog: a locked vault (or a failed
-    /// write) means the run isn't recorded, never that the run itself fails.
+    /// Prepends a run, truncating output and evicting past MaxJobRuns. Best-effort like
+    /// AppendLog.
     /// </summary>
     public void AppendJobRun(string jobId, JobRunRecord run)
     {
@@ -1036,10 +936,8 @@ public sealed class VaultService
         ListRecords<RecentConnectionRecord>("recent-connections").OrderByDescending(r => r.UpdatedAt).ToList();
 
     /// <summary>
-    /// Best-effort, same as AppendLog. Upserts by host:port:username (case-insensitive
-    /// host/username) so reconnecting to the same destination refreshes its position and
-    /// credential instead of piling up duplicate entries, then trims down to
-    /// MaxRecentConnections, oldest first.
+    /// Best-effort, same as AppendLog. Upserts by host:port:username, then trims to
+    /// MaxRecentConnections oldest first.
     /// </summary>
     public void UpsertRecentConnection(RecentConnectionRecord entry)
     {
@@ -1063,11 +961,7 @@ public sealed class VaultService
         }
     }
 
-    /// <summary>
-    /// Every record of one kind, across every collection this device holds, each tagged
-    /// with where it came from. A vault with no collections yields exactly what it always
-    /// did, with CollectionId = "local".
-    /// </summary>
+    /// <summary>Every record of one kind across every collection, each tagged with its origin.</summary>
     private IReadOnlyList<(string Id, string CollectionId, DateTimeOffset UpdatedAt, T Record)> ListRecords<T>(string subfolder)
     {
         RequireUnlocked();
@@ -1085,10 +979,8 @@ public sealed class VaultService
     }
 
     /// <summary>
-    /// Saves into <paramref name="collectionId"/> for a new record. Updating an EXISTING id
-    /// always writes back to whichever collection already holds it, ignoring the argument -
-    /// changing collection is a deliberate move (see <see cref="MoveRecord"/>), never a
-    /// side effect of an edit that forgot to say where the record lived.
+    /// Saves a new record into a collection; updating an existing id writes back to whichever
+    /// collection already holds it. Moving is deliberate (see <see cref="MoveRecord"/>).
     /// </summary>
     private string SaveRecord<T>(string subfolder, string? id, T record, string? collectionId = null)
     {
@@ -1115,11 +1007,7 @@ public sealed class VaultService
         return deleted;
     }
 
-    /// <summary>
-    /// Moves one record between collections - "share this host with the team", or pull it
-    /// back out again. Both sides are notified so the collection it left writes its
-    /// tombstone out and the one it joined pushes it.
-    /// </summary>
+    /// <summary>Moves a record between collections, notifying both sides.</summary>
     public void MoveRecord(string subfolder, string id, string toCollectionId)
     {
         RequireUnlocked();

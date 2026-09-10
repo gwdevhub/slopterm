@@ -6,9 +6,7 @@ namespace Slopterm.Tests;
 
 /// <summary>
 /// A collection's crypto is deliberately small: one AES-256 key that records are encrypted
-/// under before they leave the device. There are no device identities, signatures or key
-/// wrapping to test, because who may read and write a collection is the WebDAV server's
-/// decision, not this app's.
+/// under before they leave the device. Access control is the WebDAV server's job, not this app's.
 /// </summary>
 public sealed class CollectionCryptoTests
 {
@@ -43,8 +41,7 @@ public sealed class CollectionCryptoTests
 
     /// <summary>
     /// Someone pointed at the same WebDAV folder with a different collection's token can't
-    /// read the records - which is what "the server stores ciphertext it can't use" means in
-    /// practice, and why the sync loop skips a record it can't decrypt rather than mangling it.
+    /// read the records - why the sync loop skips a record it can't decrypt rather than mangling it.
     /// </summary>
     [Fact]
     public void ADifferentKeyCannotReadTheRecord()
@@ -68,8 +65,8 @@ public sealed class CollectionCryptoTests
     }
 
     /// <summary>
-    /// The fingerprint is what two people compare out loud to confirm they pasted the same
-    /// token, so it has to be stable, short, and derived from the key without revealing it.
+    /// Two people compare the fingerprint out loud to confirm they pasted the same token, so
+    /// it has to be stable, short, and derived from the key without revealing it.
     /// </summary>
     [Fact]
     public void KeyFingerprintIsStableDistinctAndReadable()

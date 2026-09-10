@@ -6,21 +6,9 @@ using System.Xml.Linq;
 namespace Slopterm.Server.VaultSync;
 
 /// <summary>
-/// <see cref="IVaultSyncRemote"/> over plain WebDAV, hand-rolled on HttpClient - PUT/GET/
-/// DELETE/PROPFIND/MKCOL, basic auth, and just enough XML to pull href + getetag out of a
-/// multistatus. No package: the WebDAV clients on NuGet all bring a dependency tree for
-/// features (locking, quotas, versioning) this uses none of.
-///
-/// Every server disagreement lives in this file on purpose, so the merge logic never has
-/// to care (see todo/webdav-sync.md's pitfalls):
-///   - trailing slashes: directories are always requested WITH one, files always without;
-///   - percent-encoding: relative segments are escaped on the way out and hrefs unescaped
-///     on the way back, so a name only ever round-trips through one encoding;
-///   - PROPFIND returning the requested collection as its own first entry - dropped by
-///     comparing against the requested path rather than assuming a position;
-///   - MKCOL on an existing collection answering 405 (or 301, when a server redirects a
-///     missing trailing slash) instead of 201 - all treated as "it exists now", which is
-///     the only thing the caller wanted.
+/// <see cref="IVaultSyncRemote"/> over plain WebDAV, hand-rolled on HttpClient - PUT/GET/DELETE/
+/// PROPFIND/MKCOL, basic auth, minimal XML. Every server disagreement lives here so the merge
+/// logic never has to care (trailing slashes, percent-encoding, self-entry, MKCOL statuses).
 /// </summary>
 public sealed class WebDavRemote : IVaultSyncRemote, IDisposable
 {
@@ -46,13 +34,8 @@ public sealed class WebDavRemote : IVaultSyncRemote, IDisposable
         }
 
         _root = parsed.AbsoluteUri.EndsWith('/') ? parsed : new Uri(parsed.AbsoluteUri + "/");
-        // SocketsHttpHandler explicitly, not `new HttpClient()`'s default. On Android that
-        // default is AndroidMessageHandler, which routes through java.net.HttpURLConnection -
-        // and its setRequestMethod only accepts the eight standard verbs, so every WebDAV
-        // request dies before it leaves the phone with "Expected one of [OPTIONS, GET, HEAD,
-        // POST, PUT, DELETE, TRACE, PATCH] but was MKCOL" (and the same for PROPFIND). The
-        // managed handler has no such allow-list. On desktop this IS the default handler
-        // already, so naming it changes nothing there.
+        // SocketsHttpHandler explicitly: Android's default handler routes through
+        // java.net.HttpURLConnection, whose method allow-list rejects MKCOL/PROPFIND.
         _http = handler is null ? new HttpClient(new SocketsHttpHandler()) : new HttpClient(handler);
         _http.Timeout = TimeSpan.FromMinutes(5);
 
@@ -105,9 +88,7 @@ public sealed class WebDavRemote : IVaultSyncRemote, IDisposable
         };
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
 
-        // TryAddWithoutValidation because a server's ETag isn't always a syntactically valid
-        // entity-tag (some omit the quotes), and rejecting the write locally over that would
-        // be worse than letting the server decide.
+        // TryAddWithoutValidation: servers sometimes return an ETag that isn't a valid entity-tag.
         if (ifNoneMatchStar)
         {
             request.Headers.TryAddWithoutValidation("If-None-Match", "*");
@@ -138,10 +119,7 @@ public sealed class WebDavRemote : IVaultSyncRemote, IDisposable
         await ThrowIfFailedAsync(response, "DELETE", path);
     }
 
-    /// <summary>
-    /// MKCOLs every ancestor in turn, since MKCOL is not recursive anywhere - a fresh
-    /// share needs "slopterm", then "slopterm/v1", then its record folders.
-    /// </summary>
+    /// <summary>MKCOLs every ancestor in turn, since MKCOL is not recursive anywhere.</summary>
     public async Task EnsureDirectoryAsync(string path, CancellationToken ct)
     {
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -158,19 +136,15 @@ public sealed class WebDavRemote : IVaultSyncRemote, IDisposable
             using var request = new HttpRequestMessage(Mkcol, Resolve(soFar + "/"));
             using var response = await _http.SendAsync(request, ct);
 
-            // 405 = it's already there. 301 = the server redirected a create it won't
-            // perform, which in practice also means "already there". Anything else that
-            // isn't success is a real problem worth surfacing.
+            // 405 and 301 both mean "already there"; anything else non-success is a real problem.
             if (response.IsSuccessStatusCode ||
                 response.StatusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.MovedPermanently)
             {
                 continue;
             }
 
-            // 409 on the FIRST segment means the collection's own base URL doesn't exist -
-            // MKCOL never creates intermediate collections, so the server is saying "your
-            // parent isn't there". That's a typo in the URL nine times out of ten, and
-            // "MKCOL slopterm failed with 409 Conflict" tells nobody that.
+            // 409 means the collection's base URL doesn't exist - MKCOL never creates intermediate
+            // collections, and the raw "409 Conflict" tells nobody that.
             if (response.StatusCode == HttpStatusCode.Conflict)
             {
                 throw new VaultSyncRemoteException(
@@ -251,9 +225,7 @@ public sealed class WebDavRemote : IVaultSyncRemote, IDisposable
             return;
         }
 
-        // 401/403 are the two the UI has real copy for ("check the credentials", "this
-        // collection is read-only for you"), so they keep their status code in the message
-        // rather than being flattened into a generic failure.
+        // 401/403 keep their status code: the UI has specific copy for both.
         var body = await response.Content.ReadAsStringAsync();
         var detail = body.Length > 200 ? body[..200] : body;
         throw new VaultSyncRemoteException(
@@ -263,8 +235,7 @@ public sealed class WebDavRemote : IVaultSyncRemote, IDisposable
 }
 
 /// <summary>
-/// A remote operation the server refused. StatusCode is what makes 401 (bad credentials)
-/// and 403 (read-only share) presentable as their own messages rather than "sync failed".
+/// A remote operation the server refused; StatusCode lets 401 and 403 surface as their own messages.
 /// </summary>
 public sealed class VaultSyncRemoteException(int statusCode, string message) : Exception(message)
 {

@@ -43,8 +43,7 @@ interface ConnectionFormProps {
   // Pre-fills the fields (the "Edit host" flow). Read once on mount, so callers that switch
   // the edited host must remount the form (key it by the host id) for new values to take.
   initialValues?: ConnectionFormValues
-  // Shows the collection picker. Only the saved-host form has anywhere to put one; Quick
-  // Connect saves nothing, so it has no collection to choose.
+  // Shows the collection picker; only the saved-host form has a collection to choose.
   includeCollection?: boolean
 }
 
@@ -52,11 +51,8 @@ const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
 const labelClasses = 'mb-1 block text-sm font-medium text-slate-300'
 
-// Shared by Quick Connect and the "new host" form - they used to be two separately
-// maintained forms and drifted (the host form had no private-key option at all). Quick
-// Connect renders this with no vault present, so the Keychain lookup below is best-effort:
-// a failed/locked-vault fetch just means the "use a saved key" dropdown doesn't appear,
-// it never blocks connecting with a pasted/browsed key.
+// Shared by Quick Connect and the "new host" form. Quick Connect renders this with no vault,
+// so the Keychain lookup is best-effort and never blocks connecting with a pasted/browsed key.
 export function ConnectionForm({
   includeName,
   submitLabel,

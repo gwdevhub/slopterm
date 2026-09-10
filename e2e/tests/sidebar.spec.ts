@@ -27,16 +27,14 @@ test('mobile menu overlay opens from a menu button, selects a section, and close
   await page.goto(ctx.baseUrl)
   await ensureVaultUnlocked(page)
 
-  // The desktop sidebar's own "Hosts" button is `display:none` at this width, so it's
-  // excluded from the accessibility tree entirely - only the mobile menu button and
-  // whatever section is currently showing should be reachable.
+  // The desktop sidebar's "Hosts" button is display:none here, so it's excluded from the
+  // accessibility tree - only the mobile menu button and the current section are reachable.
   await expect(page.getByRole('button', { name: 'Hosts', exact: true })).toBeHidden()
   await page.getByRole('button', { name: 'Open menu' }).click()
 
   await expect(page.getByRole('button', { name: 'Hosts', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Keychain', exact: true }).click()
 
-  // Selecting an option both navigates and closes the overlay in one action.
   await expect(page.getByText('No saved keys yet.')).toBeVisible({ timeout: 10_000 })
   await expect(page.getByRole('button', { name: 'Keychain', exact: true })).toBeHidden()
   await expect(page.getByRole('button', { name: 'Open menu' })).toBeVisible()

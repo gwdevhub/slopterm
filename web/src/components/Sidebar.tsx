@@ -22,21 +22,15 @@ interface SidebarProps {
   onSelect: (section: NavSection) => void
   collapsed: boolean
   onToggleCollapsed: () => void
-  // Shown as a small dot over the Settings icon (both desktop and mobile) - deliberately
-  // just a dot, not a number/toast, per the "not too invasive" requirement. See App.tsx's
-  // one-time startup check and UpdateSection.tsx for the actual update UI.
+  // Shown as a small dot over the Settings icon. See UpdateSection.tsx for the update UI.
   updateAvailable?: boolean
-  // In the chromeless desktop app the custom TitleBar owns the collapse toggle and Settings
-  // (in its hamburger), so the sidebar drops both to avoid duplicating them. A normal
-  // browser has no title bar, so it keeps them here. Doesn't affect the mobile overlay.
+  // In the chromeless desktop app TitleBar owns the collapse toggle and Settings, so the
+  // sidebar drops both to avoid duplicating them.
   hideChromeControls?: boolean
 }
 
-// The persistent left sidebar (issue #8's nav rail, now always visible - there's no more
-// "Quick Connect" view to fall back to when no tab is open, see App.tsx). Desktop/tablet
-// gets a real collapsible column; phones get a slim top bar with just a menu button that
-// opens a full-screen overlay instead, since a permanently-visible icon column has no
-// room at phone width.
+// The persistent left sidebar (issue #8's nav rail). Desktop gets a collapsible column;
+// phones get a slim top bar whose menu button opens a full-screen overlay.
 export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed, updateAvailable, hideChromeControls }: SidebarProps) {
   const [mobileOpen, setMobileOpen] = useState(false)
 
@@ -71,10 +65,8 @@ export function Sidebar({ active, onSelect, collapsed, onToggleCollapsed, update
           collapsed ? 'sm:w-14' : 'sm:w-48'
         }`}
       >
-        {/* Fixed-height header row, deliberately the same height as TabBar's row so the
-            two align visually as one continuous toolbar across the top of the app. In the
-            desktop app the collapse toggle moves up into the title bar's hamburger, leaving
-            this as an empty spacer that keeps the sidebar/TabBar top edges aligned. */}
+        {/* Fixed-height header row, matched to TabBar's height so the two align as one
+            toolbar. In the desktop app the toggle moves to the title bar, leaving a spacer. */}
         <div className="flex h-[42px] shrink-0 items-center justify-center border-b border-slate-800 px-1">
           {!hideChromeControls && (
             <button

@@ -15,11 +15,8 @@ test('toggling "require master password" off and back on re-keys the vault corre
   await gotoSection(page, 'Settings')
   await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 10_000 })
 
-  // Master password protection is off by default - no other test file touches
-  // /api/settings/require-master-password, so if it's already "Enabled" here it must
-  // have been left that way by a previous run of this same test; if it's "Disabled"
-  // (the normal case), turn it on with the shared password first so the rest of this
-  // test can exercise the disable/re-enable toggle from a known starting point.
+  // Protection is off by default; enable it with the shared password first, unless a
+  // previous run of this test left it Enabled, so the toggle test starts from a known state.
   if (await page.getByRole('button', { name: 'Disabled' }).isVisible().catch(() => false)) {
     await page.click('button:has-text("Disabled")')
     await page.fill('#settings-password', E2E_VAULT_PASSWORD)
@@ -27,22 +24,18 @@ test('toggling "require master password" off and back on re-keys the vault corre
     await expect(page.getByRole('button', { name: 'Enabled' })).toBeVisible({ timeout: 10_000 })
   }
 
-  // Wrong current password must be rejected and leave protection enabled.
   await page.click('button:has-text("Enabled")')
   await page.fill('#settings-password', 'not-the-real-password')
   await page.click('button:has-text("Disable")')
   await expect(page.getByText('Incorrect master password.')).toBeVisible({ timeout: 10_000 })
   await expect(page.getByRole('button', { name: 'Enabled' })).toBeVisible()
 
-  // Correct password disables it.
   await page.fill('#settings-password', E2E_VAULT_PASSWORD)
   await page.click('button:has-text("Disable")')
   await expect(page.getByRole('button', { name: 'Disabled' })).toBeVisible({ timeout: 10_000 })
 
-  // The old password must no longer unlock the vault (it was re-keyed to the fixed
-  // no-password seed) - checked directly against the API rather than via a UI reload,
-  // since there's currently no "lock" affordance in the UI to force re-triggering the
-  // unlock screen mid-session.
+  // Old password must no longer unlock (vault re-keyed to the no-password seed); checked
+  // via the API since there's no UI lock affordance to re-trigger the unlock screen.
   const oldPasswordStillWorks = await page.evaluate(async (pw) => {
     const res = await fetch('/api/vault/unlock', {
       method: 'POST',
@@ -53,14 +46,12 @@ test('toggling "require master password" off and back on re-keys the vault corre
   }, E2E_VAULT_PASSWORD)
   expect(oldPasswordStillWorks).toBe(false)
 
-  // Re-enable with a new password.
   await page.click('button:has-text("Disabled")')
   const newPassword = 'a-brand-new-e2e-password'
   await page.fill('#settings-password', newPassword)
   await page.click('button:has-text("Enable")')
   await expect(page.getByRole('button', { name: 'Enabled' })).toBeVisible({ timeout: 10_000 })
 
-  // The new password must now actually unlock the vault.
   const newPasswordWorks = await page.evaluate(async (pw) => {
     const res = await fetch('/api/vault/unlock', {
       method: 'POST',
@@ -71,10 +62,8 @@ test('toggling "require master password" off and back on re-keys the vault corre
   }, newPassword)
   expect(newPasswordWorks).toBe(true)
 
-  // Restore the shared default (protection off) - every e2e test file uses the same
-  // server/vault for the whole suite run (see vault-helpers.ts), and every other test
-  // file's ensureVaultUnlocked() call expects the no-prompt, auto-unlocked default, not
-  // a lingering "Enabled" state left over from this test.
+  // Restore the shared default (protection off) - every other test file's
+  // ensureVaultUnlocked() expects the no-prompt, auto-unlocked default.
   await page.evaluate(async (current) => {
     await fetch('/api/settings/require-master-password', {
       method: 'POST',
@@ -96,7 +85,6 @@ test('"keep running in the tray when closed" defaults to off and toggles + persi
   await gotoSection(page, 'Settings')
   await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 10_000 })
 
-  // On non-Windows, verify the API default directly and skip the UI toggle test.
   if (!isWindows) {
     const closeToTrayValue = await page.evaluate(async () => (await (await fetch('/api/settings')).json()).closeToTray)
     expect(closeToTrayValue).toBe(false)
@@ -113,13 +101,11 @@ test('"keep running in the tray when closed" defaults to off and toggles + persi
   const before = await page.evaluate(async () => (await (await fetch('/api/settings')).json()).closeToTray)
   expect(before).toBe(false)
 
-  // Turning it on persists to the backend...
   await toggle.click()
   await expect(toggle).toHaveText('On')
   const afterOn = await page.evaluate(async () => (await (await fetch('/api/settings')).json()).closeToTray)
   expect(afterOn).toBe(true)
 
-  // ...and turning it back off restores the shared default the rest of the suite expects.
   await toggle.click()
   await expect(toggle).toHaveText('Off')
   const afterOff = await page.evaluate(async () => (await (await fetch('/api/settings')).json()).closeToTray)

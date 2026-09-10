@@ -3,12 +3,8 @@ using System.Text.Json;
 namespace Slopterm.Server.Vault;
 
 /// <summary>
-/// Encodes a single <see cref="HostRecord"/> (address, port, credentials and all) into a
-/// compact, clipboard-friendly token another slopterm instance can import - the "Copy"
-/// action on a host's right-click menu. The record is AES-GCM encrypted under the app-wide,
-/// non-secret <see cref="VaultCrypto.ShareSeed"/> key, so the token is never human-readable
-/// plaintext (a password won't sit on the clipboard in the clear) but is decodable by any
-/// slopterm build - see ShareSeed's comment for exactly what that does and doesn't protect.
+/// Encodes a HostRecord into a compact, clipboard-friendly token another slopterm instance
+/// can import. AES-GCM encrypted under the non-secret ShareSeed, so it is not plaintext.
 /// </summary>
 public static class HostShareCodec
 {
@@ -30,11 +26,7 @@ public static class HostShareCodec
         return Prefix + Base64UrlEncode(blob);
     }
 
-    /// <summary>
-    /// Throws <see cref="FormatException"/> for a token that isn't ours/is malformed, and
-    /// <see cref="System.Security.Cryptography.CryptographicException"/> if the ciphertext
-    /// fails authentication - callers turn both into a friendly "not a valid share" error.
-    /// </summary>
+    /// <summary>Throws FormatException for a malformed token, CryptographicException if authentication fails.</summary>
     public static HostRecord Decode(string token)
     {
         token = token.Trim();

@@ -7,10 +7,8 @@ import { ensureVaultUnlocked, gotoSection } from './vault-helpers'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-8')) as { baseUrl: string }
 
-// Drives a real left-button press-move-move-release across the two given elements' centres,
-// the same motion an accidental drag makes. Two intermediate moves (not one straight jump)
-// so the browser actually runs selection extension between the endpoints rather than
-// treating it as a single click.
+// Drives a real left-button press-move-move-release across both elements' centres; two
+// intermediate moves so the browser runs selection extension rather than treating it as a click.
 async function dragBetween(page: Page, from: string, to: string) {
   const start = await page.getByText(from, { exact: true }).first().boundingBox()
   const end = await page.getByText(to, { exact: true }).first().boundingBox()
@@ -22,11 +20,8 @@ async function dragBetween(page: Page, from: string, to: string) {
   await page.mouse.up()
 }
 
-// The app is a chromeless desktop window, so an accidental left-click drag across its chrome
-// (nav rail, tab strip, title bar, host cards, dividers) must NOT smear a text selection the
-// way a browser would - that reads as "the web leaking through" (issue #61). Selection is
-// only meant to work inside real content: the terminal (xterm's own SelectionService, see
-// terminal-copy.spec.ts) and text-entry fields.
+// The app is a chromeless desktop window, so an accidental left-drag across its chrome must
+// NOT smear a selection (issue #61); selection is only for real content and text-entry fields.
 test('dragging across the nav rail chrome does not select its text', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await ensureVaultUnlocked(page)
@@ -39,10 +34,8 @@ test('dragging across the nav rail chrome does not select its text', async ({ pa
   expect(selection).toBe('')
 })
 
-// The flip side of the guard above: turning selection off globally must not also disable it
-// on the surfaces where it's the whole point. Text-entry fields opt back in (they're the
-// browser-testable stand-in for the terminal, whose own copy/selection is covered by
-// terminal-copy.spec.ts and rides xterm's buffer, not the native selection API).
+// The flip side: disabling selection globally must not disable text-entry fields, which opt
+// back in (the browser-testable stand-in for the terminal).
 test('text in an input field can still be selected', async ({ page }) => {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')

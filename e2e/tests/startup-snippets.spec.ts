@@ -20,9 +20,8 @@ function terminalText(page: import('@playwright/test').Page) {
 test('a host can run its attached startup snippets automatically right after connecting', async ({ page }) => {
   await page.goto(ctx.baseUrl)
 
-  // One snippet attached at host-creation time (ConnectionForm's checklist), one attached
-  // later to the already-saved host via the edit modal (same checklist, reused) - covers
-  // both places a snippet can be attached.
+  // Covers both places a snippet can be attached: at host-creation time and later via the
+  // saved host's edit modal.
   await gotoSection(page, 'Snippets')
   await ensureVaultUnlocked(page)
   const markerA = `startupmarkerA${Date.now()}`
@@ -49,8 +48,6 @@ test('a host can run its attached startup snippets automatically right after con
   await page.click('button:has-text("Save host")')
   await expect(page.getByText('startup snippet test host')).toBeVisible({ timeout: 10_000 })
 
-  // Attach the second snippet to the now-saved host via its edit modal (the card's pencil
-  // icon), then save.
   await page.getByRole('button', { name: 'Edit startup snippet test host' }).click()
   await page.getByLabel('startup snippet B').check()
   await page.click('button:has-text("Save changes")')

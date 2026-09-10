@@ -33,16 +33,11 @@ import { applyFaviconBadge, isTabBadgeEnabled, subscribeTabBadge } from './lib/t
 import { updateAppBadge } from './lib/appBadge'
 import { useMobileKeyboardScroll, useVisualViewportHeight } from './hooks/useMobileKeyboard'
 
-// Checked once at startup (not polled) so the Sidebar's Settings icon can show a small
-// "something's new" dot without the user having to open Settings first - the actual
-// check/apply UI lives there (UpdateSection.tsx). A failed check (no GitHub token
-// configured yet, network hiccup, dev build) just means no dot, never an error the user
-// has to deal with on every other screen.
+// Checked once at startup (not polled) so the Sidebar's Settings icon can show a "something's new" dot.
 function useUpdateAvailable() {
   const [updateAvailable, setUpdateAvailable] = useState(false)
   useEffect(() => {
-    // The Android app has no update UI at all (Play ships updates; see SettingsPage), so
-    // there is nothing for a dot to point at - don't even ask.
+    // The Android app has no update UI at all (Play ships updates), so don't even ask.
     if (isAndroidApp()) return
     checkForUpdate()
       .then((result) => setUpdateAvailable(result.supported && !result.error && result.updateAvailable))
@@ -51,11 +46,7 @@ function useUpdateAvailable() {
   return updateAvailable
 }
 
-// Browsers don't expose a "window moved" event, and JS can't reposition the current
-// top-level window after the fact anyway (only the launcher can, via Chrome/Edge's
-// --window-position/--window-size flags - see server/BrowserLauncher.cs) - so this just
-// periodically checks screenX/screenY/outerWidth/outerHeight and reports changes,
-// relying on the *next* launch to actually apply them, not this session.
+// Browsers have no "window moved" event and JS can't reposition the window; poll screen coords and rely on the next launch to apply them.
 function useRememberWindowPosition() {
   useEffect(() => {
     let lastSent = ''
@@ -78,18 +69,14 @@ function useRememberWindowPosition() {
   }, [])
 }
 
-// Replace the browser's default right-click menu with nothing, so the app reads as a native
-// window rather than a web page. Our own context menus (host cards, etc.) open via React
-// onContextMenu handlers that run first during bubbling and aren't affected by this. Text
-// fields keep their native menu, so right-click paste still works where it's actually useful
-// (pasting a share token, a private key, a password).
+// Suppress the browser's default right-click menu so the app reads as native; text fields
+// and data-selectable-text surfaces keep theirs.
 function useSuppressBrowserContextMenu() {
   useEffect(() => {
     function onContextMenu(event: MouseEvent) {
       const target = event.target as HTMLElement | null
-      // data-selectable-text marks read-only surfaces where selecting/copying text is the
-      // point (e.g. the AI agent transcript) - they get the browser's own menu back so
-      // right-click -> Copy works, same as real text-entry fields.
+      // data-selectable-text marks read-only surfaces (e.g. the agent transcript) where
+      // right-click -> Copy should still work.
       if (target?.closest('input, textarea, [contenteditable="true"], [data-selectable-text]')) return
       event.preventDefault()
     }
@@ -100,10 +87,8 @@ function useSuppressBrowserContextMenu() {
 
 function requestToOpenTabRecord(tab: SessionTab) {
   const { request } = tab
-  // A local tab has no destination and no credential. The stored record requires all four of
-  // host/port/username/authMethod, so rather than change a schema every existing vault
-  // already holds, they carry a description of what was opened - which is also what makes a
-  // restored local tab recognisable as one.
+  // A local tab has no destination/credential; fill the stored record's required fields with
+  // placeholders instead of changing the schema every existing vault holds.
   if (!request) {
     return {
       kind: tab.kind,
@@ -126,17 +111,13 @@ function requestToOpenTabRecord(tab: SessionTab) {
     port: request.port,
     username: request.username,
     authMethod: request.authMethod,
-    // A tab on a SAVED host carries no secret - the frontend never received one - so it
-    // records what to resolve instead, and the backend re-resolves on restore. That also
-    // means a password changed since the tab was opened is picked up rather than replayed.
+    // A saved-host tab carries no secret; record hostId/credentialId so the backend re-resolves on restore.
     secret: request.authMethod === 'password' ? request.password : request.privateKey,
     passphrase: request.authMethod === 'privateKey' ? request.passphrase : undefined,
     hostId: request.hostId,
     credentialId: request.credentialId,
     startupCommands: tab.startupCommands,
-    // So a reload lands back on the shell that's still running rather than opening a second
-    // connection beside it - see the restore effect, which only trusts this after checking
-    // it against the sessions the backend actually still holds.
+    // Lets a reload land back on the still-running shell; the restore effect checks it against live sessions.
     sessionId: tab.sessionId ?? undefined,
   }
 }
@@ -145,8 +126,7 @@ function App() {
   useRememberWindowPosition()
   useSuppressBrowserContextMenu()
   useMobileKeyboardScroll()
-  // Sizes the app to the part of the window the virtual keyboard leaves visible, so the
-  // terminal's key toolbar sits above the keyboard instead of underneath it.
+  // Sizes the app to the area the virtual keyboard leaves visible so the key toolbar sits above it.
   useVisualViewportHeight()
   const updateAvailable = useUpdateAvailable()
   const [section, setSection] = useState<NavSection>('hosts')
@@ -161,9 +141,7 @@ function App() {
   // snapshot with an empty one) before the one-time restore-on-startup fetch has resolved.
   const [tabsRestored, setTabsRestored] = useState(false)
 
-  // Favicon tab badge (opt-in, see lib/tabBadge.ts). `unseenTabIds` holds background tabs
-  // that produced output the user hasn't looked at yet; the badge turns the accent color
-  // while any exist. `badgeEnabled` mirrors the localStorage pref that Settings toggles.
+  // Favicon tab badge (opt-in, see lib/tabBadge.ts): background tabs with unseen output.
   const [unseenTabIds, setUnseenTabIds] = useState<Set<string>>(new Set())
   const [badgeEnabled, setBadgeEnabled] = useState(isTabBadgeEnabled())
   useEffect(() => subscribeTabBadge(() => setBadgeEnabled(isTabBadgeEnabled())), [])
@@ -191,17 +169,14 @@ function App() {
     tabsRef.current = tabs
   }, [tabs])
 
-  // Kept in a ref (like tabsRef) so the Ctrl+T keydown listener can read the currently
-  // active tab without re-subscribing on every activeTabId change.
+  // Kept in a ref (like tabsRef) so the Ctrl+T listener can read the active tab without re-subscribing.
   const activeTabIdRef = useRef<string | null>(activeTabId)
   useEffect(() => {
     activeTabIdRef.current = activeTabId
   }, [activeTabId])
 
-  // Appearance is cached in localStorage (applied at first paint in main.tsx) but the vault
-  // holds the synced, cross-device copy. Pull it as soon as the vault is readable - now if
-  // it's already unlocked (auto-unlocks when no master password is set), and again whenever
-  // the user unlocks it - so a theme set on another device shows up here.
+  // Appearance is cached in localStorage but the vault holds the synced cross-device copy;
+  // pull it whenever the vault is readable.
   useEffect(() => {
     let cancelled = false
     const pull = () => {
@@ -219,12 +194,10 @@ function App() {
     }
   }, [])
 
-  // Viewing a tab clears its unseen-activity flag (its output is now seen).
   useEffect(() => {
     if (activeTabId) clearTabUnseen(activeTabId)
   }, [activeTabId])
 
-  // Redraw the favicon badge whenever the count, unseen state, or the pref changes.
   useEffect(() => {
     void applyFaviconBadge({ enabled: badgeEnabled, count: tabs.length, hasUnseen: unseenTabIds.size > 0 })
     updateAppBadge(tabs.length)
@@ -257,17 +230,13 @@ function App() {
     })
   }
 
-  // Drives both the initial restore-on-startup reconnects and every subsequent retry -
-  // retried indefinitely with capped exponential backoff rather than giving up, since the
-  // whole point is unattended recovery (e.g. the target host coming back up after a
-  // reboot). Stops on its own once the tab is closed/cancelled (checked via tabsRef, which
-  // reflects the latest committed tabs state).
+  // Drives restore-on-startup reconnects and subsequent retries: indefinite capped backoff for
+  // unattended recovery, stopping once the tab is gone (checked via tabsRef).
   async function attemptConnectTab(tab: SessionTab) {
     updateTab(tab.id, { status: 'connecting', errorMessage: undefined })
     try {
       if (tab.kind === 'local') {
-        // Nothing to dial and nothing to authenticate - "reconnecting" a local tab is just
-        // starting a fresh shell, which is why this one can't meaningfully fail twice.
+        // Nothing to dial or authenticate: "reconnecting" a local tab just starts a fresh shell.
         const response = await connectLocalShell({ columns: 80, rows: 24 })
         if (!tabsRef.current.some((t) => t.id === tab.id)) {
           void disconnect(response.sessionId)
@@ -275,9 +244,7 @@ function App() {
         }
         updateTab(tab.id, { sessionId: response.sessionId, status: 'connected' })
       } else if (!tab.request) {
-        // Only a local tab is allowed to have no request, and it was handled above - a
-        // remote tab without one has nothing to dial, so retrying forever would be a loop
-        // that could never succeed.
+        // Only local tabs may lack a request (handled above); a remote tab without one can never succeed.
         updateTab(tab.id, { status: 'error', errorMessage: 'This tab has no saved connection details.' })
       } else if (tab.kind === 'ssh') {
         const response = await connect(tab.request)
@@ -313,15 +280,8 @@ function App() {
     void attemptConnectTab(tab)
   }
 
-  // Restore whichever tabs were open last time, once - each starts 'connecting' and
-  // reconnects itself via attemptConnectTab's retry loop rather than blocking the rest of
-  // the app on every tab succeeding first.
-  //
-  // A tab whose session the backend is still holding skips that entirely and mounts straight
-  // onto the running shell. That's the same-process case - the Android WebView's renderer was
-  // reclaimed in the background and the page reloaded, or the user hit reload - where the SSH
-  // connection never went anywhere. After a real restart no id in the record matches anything
-  // live (they're per-process), so every tab takes the reconnect path exactly as before.
+  // Restore tabs open last time, once. A tab whose session the backend still holds (same-process
+  // reload) mounts straight onto it; otherwise each reconnects itself via attemptConnectTab.
   useEffect(() => {
     Promise.all([
       getOpenTabs(),
@@ -332,9 +292,8 @@ function App() {
         const liveHomes = new Map(liveSftp.map((s) => [s.sessionId, s.homeDirectory]))
         const liveKinds = new Map(liveSsh.map((s) => [s.sessionId, s.kind]))
         const restored: SessionTab[] = record.tabs.map((t) => {
-          // Matched on kind as well as id, now that local shells share the terminal session
-          // store: an id is only ever reused within one process, but a tab reattaching to a
-          // session of the other kind would mount the wrong view on it entirely.
+          // Match on kind too now that local shells share the terminal session store; reattaching
+          // to the wrong kind would mount the wrong view.
           const stillLive =
             t.sessionId !== undefined &&
             (t.kind === 'sftp' ? liveHomes.has(t.sessionId) : liveKinds.get(t.sessionId) === t.kind)
@@ -343,10 +302,8 @@ function App() {
             sessionId: stillLive ? (t.sessionId ?? null) : null,
             label: t.label,
             kind: t.kind,
-            // A local shell has nothing to reconnect TO, so it carries no request at all.
-            // For the rest, hostId/credentialId are what a saved host reconnects by: the
-            // secret fields are only populated for Quick Connect / Recent tabs, since the
-            // frontend no longer holds a saved host's credential (see CredentialResolver).
+            // Local carries no request; otherwise hostId/credentialId reconnect a saved host
+            // (secret fields only for Quick Connect / Recent).
             request:
               t.kind === 'local'
                 ? undefined
@@ -369,12 +326,8 @@ function App() {
           }
         })
 
-        // A local shell is this machine's process and nothing else - it has no destination to
-        // dial and no credential to resolve. Reattaching to one that's STILL RUNNING is the
-        // point of persisting it at all (a page reload must land back on the same shell), but
-        // once that session is gone there is nothing to restore: the tab would sit at
-        // "connecting" forever with no request to connect with. So a restart drops them,
-        // rather than resurrecting a shell the user never asked to reopen.
+        // Drop local tabs whose session isn't still running: with no request they'd sit at
+        // "connecting" forever, so a restart drops them.
         const restorable = restored.filter((tab) => tab.kind !== 'local' || tab.sessionId !== null)
 
         if (restorable.length > 0) {
@@ -388,16 +341,12 @@ function App() {
       })
       .catch(() => {})
       .finally(() => setTabsRestored(true))
-    // Intentionally run once on mount only - attemptConnectTab/setTabs/setActiveTabId are
-    // all stable enough (refs/setState functions) that re-running this on their account
-    // would just re-restore the same tabs a second time.
+    // Intentionally run once on mount: re-running would restore the same tabs a second time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Snapshots the whole tab list (and which one is active) on every change - see
-  // OpenTabsRecord's doc comment for why this is a wholesale rewrite rather than a
-  // per-tab upsert. Gated on tabsRestored so this can never fire before the restore fetch
-  // above resolves and clobber the saved snapshot with an empty one.
+  // Snapshot the whole tab list on every change; gated on tabsRestored so it can't clobber
+  // the saved snapshot with an empty one.
   useEffect(() => {
     if (!tabsRestored) return
     const activeIndex = tabs.findIndex((t) => t.id === activeTabId)
@@ -412,9 +361,7 @@ function App() {
     setActiveTabId(null)
   }
 
-  // Returns whether the connect succeeded - HostsSection uses this to only remember an ad
-  // hoc (Quick Connect/Recent) destination's credential once it's actually proven to work,
-  // not on every attempt (a mistyped password shouldn't get remembered for next time).
+  // Returns whether the connect succeeded so HostsSection only remembers an ad hoc credential once it works.
   async function handleConnect(request: ConnectRequest, startupCommands?: string[]): Promise<boolean> {
     setIsConnecting(true)
     setErrorMessage(null)
@@ -440,8 +387,7 @@ function App() {
     }
   }
 
-  // A shell on the machine slopterm is running on - this PC, or the phone. No form, no
-  // credential, no failure mode worth a retry loop: it either starts or it says why.
+  // A shell on the machine slopterm runs on - no form, credential, or retry loop.
   async function handleConnectLocal(): Promise<boolean> {
     setIsConnecting(true)
     setErrorMessage(null)
@@ -490,13 +436,8 @@ function App() {
     }
   }
 
-  // Ctrl+T opens another tab connected to the same server as the active one (issue #51) -
-  // a no-op when a sidebar section is showing instead of a tab (nothing to duplicate).
-  // Reuses the active tab's own ConnectRequest/kind rather than re-resolving a saved Host,
-  // so it works identically for a saved-Host, Quick Connect or Recent-originated tab. A
-  // window-level listener (not the xterm handler in TerminalView) is what covers both SSH
-  // and SFTP tabs, since SFTP tabs never mount an xterm. preventDefault suppresses the
-  // browser/OS default (new browser tab) while the app has focus.
+  // Ctrl+T duplicates the active tab (issue #51), reusing its ConnectRequest. A window-level
+  // listener covers SSH and SFTP (SFTP tabs never mount an xterm).
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== 't' || !event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
@@ -510,15 +451,11 @@ function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-    // handleConnect/handleConnectSftp are stable enough (plain closures over setState) that
-    // re-subscribing on their identity would just churn the listener; the live tab/active-id
-    // are read from refs so this stays mounted once.
+    // Stable enough; live tab/active-id are read from refs so this stays mounted once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Renaming just updates the tab's label in place - it's persisted (and restored across
-  // restarts) for free by the saveOpenTabs effect above, which already snapshots label.
-  // Empty/whitespace names are rejected in TabBar, so nothing to guard against here.
+  // Renaming updates the label in place; persistence is handled by the saveOpenTabs effect.
   function handleRenameTab(id: string, label: string) {
     updateTab(id, { label })
   }
@@ -533,31 +470,24 @@ function App() {
   }
 
   function handleTerminalSessionClosed(id: string) {
-    // The backend already removed the SSH session before closing its WebSocket. Remove
-    // only the local tab here; issuing another disconnect request is unnecessary.
+    // The backend already removed the session, so just remove the local tab.
     setPendingCloseTabId((current) => (current === id ? null : current))
     removeTab(id)
   }
 
-  // The session behind this tab is gone but the tab isn't: the terminal's socket dropped and
-  // the backend no longer has that session (it aged out of its detached grace period, or was
-  // disconnected from elsewhere). Keep the tab and reconnect it - the same treatment a tab
-  // gets when the remote host reboots under it. Only handleTerminalSessionClosed above, which
-  // means the shell itself ended, still takes the tab away.
+  // The session is gone but the tab isn't (socket dropped, backend lost it): keep the tab and
+  // reconnect, unlike session-closed above.
   function handleTerminalSessionLost(id: string) {
     const tab = tabsRef.current.find((t) => t.id === id)
     if (!tab) return
-    // Any retry chain already running for this tab is superseded by the one below - without
-    // this, a tab that loses its session twice ends up with two chains dialling the host.
+    // Supersede any running retry chain, or losing the session twice would leave two chains dialling.
     cancelReconnect(id)
     const reconnecting: SessionTab = { ...tab, sessionId: null, status: 'connecting', errorMessage: undefined }
     updateTab(id, { sessionId: null, status: 'connecting', errorMessage: undefined })
     void attemptConnectTab(reconnecting)
   }
 
-  // A tab that isn't connected yet has no live session to lose, so closing it skips the
-  // "close this session?" confirmation entirely - that dialog exists to prevent
-  // accidentally dropping a real connection, which doesn't apply here.
+  // An unconnected tab has no live session, so skip the close confirmation.
   function handleRequestClose(id: string) {
     const tab = tabs.find((t) => t.id === id)
     if (!tab) return
@@ -598,18 +528,14 @@ function App() {
             onRename={handleRenameTab}
           />
         <div className="relative min-h-0 flex-1">
-          {/* Every open tab's view stays mounted (just hidden) when inactive, so switching
-              tabs doesn't tear down its WebSocket/SFTP connection - see issue #9's
-              requirement, now shared by both SSH and SFTP tabs. */}
+          {/* Every open tab stays mounted (just hidden) when inactive, so switching tabs
+              doesn't tear down its WebSocket/SFTP connection. */}
           {tabs.map((tab) => (
             <div key={tab.id} className={`absolute inset-0 ${activeTabId === tab.id ? 'block' : 'hidden'}`}>
               {tab.status === 'connected' && tab.sessionId ? (
                 tab.kind !== 'sftp' ? (
-                  // Flex column so the AgentBar SHRINKS the terminal instead of overlaying
-                  // it - keeps xterm fit() parent-driven (its ResizeObserver auto-refits
-                  // when the bar expands/collapses). The bar's collapsed strip is a
-                  // fixed-height shrink-0 element present at first paint with no transition,
-                  // so it does not induce an extra fit()/redraw at connect time.
+                  // Flex column so the AgentBar shrinks the terminal instead of overlaying it,
+                  // keeping xterm fit() parent-driven.
                   <div className="flex h-full min-h-0 flex-col">
                     <div className="min-h-0 flex-1">
                       <TerminalView

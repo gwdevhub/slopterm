@@ -35,21 +35,15 @@ async function connect(page: Page, hostName: string) {
   await expect(page.locator('.xterm-rows:visible')).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
 }
 
-// Regression test for the "output caps at 80 columns" bug: the remote PTY used to stay at
-// the ConnectRequest's hard-coded 80x24 because the frontend never told the backend the
-// real window size, so `tput cols` (and anything else reading the terminal width) reported
-// 80 no matter how wide the window was. The frontend now posts the fitted size to
-// /api/ssh/{id}/resize, which issues an SSH window-change request. With a wide viewport the
-// remote must therefore report well over 80 columns.
+// Regression test for the "output caps at 80 columns" bug: the frontend now posts the fitted
+// size to /api/ssh/{id}/resize, so a wide viewport must report well over 80 columns.
 test('the remote PTY width matches the (wide) window, not the default 80 columns', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 800 })
   const hostName = 'pty-width test host'
   await connect(page, hostName)
 
-  // Print the remote-reported PTY size ("rows cols") in a form that's unambiguous to parse
-  // out of the scrollback. `stty size` is busybox-portable (the openssh-server test image
-  // is Alpine and ships no `tput`/terminfo); the marker digits only appear in the *output*,
-  // never in the echoed command line, so a match is always the real value.
+  // `stty size` is busybox-portable (the Alpine test image has no terminfo); the PTYSIZE
+  // marker digits only appear in the output, never the echoed command line.
   await page.keyboard.type('printf "PTYSIZE=%s\\n" "$(stty size)"')
   await page.keyboard.press('Enter')
 

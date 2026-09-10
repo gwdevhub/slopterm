@@ -30,9 +30,7 @@ const inputClasses =
 const labelClasses = 'mb-1 block text-xs font-medium text-slate-400'
 
 // Runs a saved command against a saved host on a schedule (backend SchedulerService). Same
-// card-grid layout as Port Forwarding / Folder Sync. The banner is not decoration: the
-// schedule lives in this app, so a job genuinely does not run while slopterm is closed, and
-// the one thing worse than that limitation is not saying so.
+// card-grid layout as Port Forwarding / Folder Sync.
 export function JobsSection() {
   return (
     <VaultGate>
@@ -454,9 +452,8 @@ function JobModal({
   )
 }
 
-// The job's own output stream. Deliberately not folded into the Logs section: that's a
-// connection log (connected/failed/disconnected), and a wall of command output would drown
-// it - see todo/scheduled-jobs.md.
+// The job's own output stream, deliberately not folded into the Logs section: a wall of
+// command output would drown the connection log.
 function JobHistoryModal({ job, onClose }: { job: SavedJob; onClose: () => void }) {
   const [runs, setRuns] = useState<JobRun[] | null>(null)
   const [expanded, setExpanded] = useState<number | null>(0)
@@ -538,9 +535,8 @@ function JobHistoryModal({ job, onClose }: { job: SavedJob; onClose: () => void 
 }
 
 function describeSchedule(job: JobRecord): string {
-  // Cron shows the expression verbatim rather than a prose translation: rendering one in
-  // English is a whole library's worth of work, and a wrong summary on the card is worse
-  // than the expression the user typed and can read back.
+  // Cron shows the expression verbatim: a wrong prose translation on the card is worse than
+  // the expression the user typed and can read back.
   if (job.scheduleKind === 'cron') return job.cronExpression ?? 'Cron'
   if (job.scheduleKind === 'daily') return `Daily at ${job.dailyTime}`
   const m = job.intervalMinutes
@@ -548,10 +544,8 @@ function describeSchedule(job: JobRecord): string {
   return `Every ${m}m`
 }
 
-// The next three times the schedule in the form would actually fire, resolved by the backend
-// (the same code the scheduler runs on) so a cron expression can be checked before saving
-// rather than by waiting to see whether anything happens. Debounced because it re-runs on
-// every keystroke in the cron field.
+// The next three times the form's schedule would fire, resolved by the backend so a cron
+// expression can be checked before saving. Debounced since it re-runs on every keystroke.
 function SchedulePreviewLine(schedule: Pick<JobRecord, 'scheduleKind' | 'intervalMinutes' | 'dailyTime' | 'cronExpression'>) {
   const [preview, setPreview] = useState<SchedulePreview | null>(null)
   const { scheduleKind, intervalMinutes, dailyTime, cronExpression } = schedule

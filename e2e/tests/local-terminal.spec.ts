@@ -9,10 +9,8 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
   baseUrl: string
 }
 
-// The one tab kind that needs no server at all: a shell on the machine slopterm is running
-// on. Unlike every other terminal spec here, nothing in this file touches the disposable
-// sshd container - which is the point, and also why it's the one terminal spec that would
-// still run on a machine with no Docker.
+// The one tab kind that needs no server: a shell on the machine slopterm runs on. Nothing
+// here touches the sshd container, so it would still run on a machine with no Docker.
 async function openLocalShell(page: Page) {
   await page.goto(ctx.baseUrl)
   await gotoSection(page, 'Hosts')
@@ -21,9 +19,8 @@ async function openLocalShell(page: Page) {
   await expect(page.locator('.xterm-rows:visible')).toBeVisible({ timeout: 15_000 })
 }
 
-// The tab's own label, which the backend built from whichever shell it actually launched
-// ("bash (local)", "sh (local)") - so nothing here hard-codes a shell that a given machine
-// may not have.
+// The tab's label is built from whichever shell actually launched ("bash (local)", "sh
+// (local)"), so nothing here hard-codes a shell a given machine may not have.
 async function localTabLabel(page: Page): Promise<string> {
   const label = page.locator('button:has-text("(local)")').first()
   await expect(label).toBeVisible({ timeout: 15_000 })
@@ -46,9 +43,8 @@ test('a local shell opens in its own tab and runs commands on this machine', asy
 
   await run(page, 'echo LOCAL-$((6*7))', 'LOCAL-42')
 
-  // Proves this is a real PTY rather than a pair of pipes: `tty` only names a terminal
-  // device when the shell has a controlling terminal, and prints "not a tty" when it
-  // doesn't. Without one there'd be no job control, no Ctrl+C and no window size.
+  // `tty` names a device only with a controlling terminal (else "not a tty"), proving a real
+  // PTY - without one there's no job control, no Ctrl+C and no window size.
   await run(page, 'tty', '/dev/')
 
   await closeTab(page, tabLabel)
@@ -58,9 +54,8 @@ test('a local tab reattaches to the same shell across a reload', async ({ page }
   await openLocalShell(page)
   const tabLabel = await localTabLabel(page)
 
-  // Leaves a marker in the scrollback, reloads, and expects to land back on the SAME shell:
-  // a local session outlives its WebSocket exactly like an SSH one, so a reload has to
-  // reattach rather than start a second shell that would know nothing about this.
+  // A local session outlives its WebSocket like an SSH one, so a reload must reattach rather
+  // than start a fresh shell that knows nothing of the marker.
   await run(page, 'echo BEFORE-RELOAD-MARKER', 'BEFORE-RELOAD-MARKER')
   await page.reload()
   await ensureVaultUnlocked(page)
@@ -76,10 +71,8 @@ test('a local tab is not restored once its shell is gone', async ({ page }) => {
   const tabLabel = await localTabLabel(page)
   await run(page, 'echo LOCAL-TAB-OPEN', 'LOCAL-TAB-OPEN')
 
-  // End the shell, then reload. The tab was persisted so a reload could reattach to a LIVE
-  // session (the test above), but a local shell has no destination and no credential - once
-  // the session is gone there is nothing to restore it from, and bringing the tab back would
-  // either sit at "connecting" forever or silently spawn a shell nobody asked for.
+  // The tab is persisted so a reload can reattach to a LIVE session, but a local shell has no
+  // destination or credential - once gone there's nothing to restore it from.
   await page.keyboard.type('exit')
   await page.keyboard.press('Enter')
   await expect(page.getByRole('button', { name: `Close ${tabLabel}` })).toHaveCount(0, { timeout: 20_000 })
@@ -95,10 +88,8 @@ test('exiting a local shell closes its tab instead of reconnecting it', async ({
   const tabLabel = await localTabLabel(page)
   await run(page, 'echo READY-TO-EXIT', 'READY-TO-EXIT')
 
-  // A local shell has no transport that could merely have blipped, so `exit` has exactly one
-  // meaning and the tab must go. That's what LocalShellChannel reporting CanLoseTransport as
-  // false buys: an SSH tab treats an ambiguous EOF as "reconnect", and a local tab doing the
-  // same would silently respawn a shell the user just closed.
+  // An SSH tab treats an ambiguous EOF as "reconnect", but a local shell has no transport that
+  // could merely have blipped, so `exit` must close the tab instead of respawning a shell.
   await page.keyboard.type('exit')
   await page.keyboard.press('Enter')
   await expect(page.getByRole('button', { name: `Close ${tabLabel}` })).toHaveCount(0, { timeout: 20_000 })
