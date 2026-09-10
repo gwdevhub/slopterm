@@ -154,12 +154,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-
-      - uses: actions/checkout@v4
 
       # The version stamp the self-updater reads to name the target version (see
       # UpdateService's VersionStampAssetName) - the rolling tag itself is always

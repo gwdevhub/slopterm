@@ -22,7 +22,8 @@ async function removeAllCollections(page: Page) {
   while (true) {
     const leave = page.getByRole('button', { name: 'Leave' }).first()
     if (!(await leave.isVisible().catch(() => false))) return
-    await leave.click()
+    await expect(leave).toBeEnabled({ timeout: 15_000 })
+    await leave.click({ timeout: 15_000 })
     // Don't keep the records: these are throwaway test collections, and leaving copies
     // behind would leak hosts into later specs.
     await page.getByLabel('Keep a copy of its hosts and snippets here').uncheck()
