@@ -156,16 +156,18 @@ public static class OpenAiChatClient
                             acc = ("", "", new StringBuilder());
                         }
 
-                        if (call.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                        // Some gateways send empty metadata on argument-only continuation chunks.
+                        // Preserve the initial id/name rather than erasing a valid tool call.
+                        if (TryGetString(call, "id", out var id) && !string.IsNullOrEmpty(id))
                         {
-                            acc.Id = id.GetString() ?? acc.Id;
+                            acc.Id = id;
                         }
 
                         if (call.TryGetProperty("function", out var fn))
                         {
-                            if (fn.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String)
+                            if (TryGetString(fn, "name", out var name) && !string.IsNullOrEmpty(name))
                             {
-                                acc.Name = name.GetString() ?? acc.Name;
+                                acc.Name = name;
                             }
 
                             if (fn.TryGetProperty("arguments", out var args) && args.ValueKind == JsonValueKind.String)
