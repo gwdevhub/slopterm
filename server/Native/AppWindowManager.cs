@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Text.Json;
 using Photino.NET;
 
 namespace Slopterm.Server.Native;
@@ -198,6 +199,9 @@ public static class AppWindowManager
                         // the frontend can't read the native maximize state directly.
                         w.SendWebMessage(w.Maximized ? "wc:maximized" : "wc:restored");
                         break;
+                    case var msg when msg.StartsWith("wc:open-external:", StringComparison.Ordinal):
+                        OpenExternalLink(msg["wc:open-external:".Length..]);
+                        break;
                     case var msg when msg.StartsWith("wc:set-badge:"):
                         HandleSetBadge(msg);
                         break;
@@ -273,6 +277,23 @@ public static class AppWindowManager
                 _window = null;
                 _creating = false;
             }
+        }
+    }
+
+    private static void OpenExternalLink(string payload)
+    {
+        try
+        {
+            var url = JsonSerializer.Deserialize<string>(payload);
+            if (Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            {
+                BrowserLauncher.OpenDefaultBrowser(uri.AbsoluteUri);
+            }
+        }
+        catch
+        {
+            // A malformed message or failed browser launch must not affect the app window.
         }
     }
 

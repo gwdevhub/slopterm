@@ -6,6 +6,7 @@ interface AndroidBridge {
   // Optional: an older APK still injects a bridge object, so callers must check first
   // regardless because the desktop/browser fallback has to work anyway.
   hideKeyboard?: () => void
+  openExternal?: (url: string) => void
 }
 
 function androidBridge(): AndroidBridge | undefined {
@@ -61,6 +62,13 @@ export async function saveFileViaAndroid(blob: Blob, fileName: string, mimeType:
 // panels). Native and a no-op elsewhere; deliberately doesn't blur, which would steal focus.
 export function hideAndroidKeyboard(): void {
   androidBridge()?.hideKeyboard?.()
+}
+
+export function openExternalViaAndroid(url: string): boolean {
+  const openExternal = androidBridge()?.openExternal
+  if (!openExternal) return false
+  openExternal(url)
+  return true
 }
 
 // Whether the IME is holding a word in its composing region (from the real

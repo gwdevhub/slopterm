@@ -23,9 +23,13 @@ public static class BrowserLauncher
             return appModeProcess;
         }
 
-        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        OpenDefaultBrowser(url);
         return null;
     }
+
+    /// <summary>Opens a web URL with the operating system's default browser.</summary>
+    public static void OpenDefaultBrowser(string url) =>
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
 
     private static Process? TryLaunchChromiumAppMode(string url)
     {

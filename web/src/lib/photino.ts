@@ -28,6 +28,12 @@ export function sendWindowMessage(type: string, payload: unknown): void {
   photino()?.sendMessage?.(`wc:${type}:${JSON.stringify(payload)}`)
 }
 
+export function openExternalViaDesktop(url: string): boolean {
+  if (!isDesktopApp) return false
+  sendWindowMessage('open-external', url)
+  return true
+}
+
 // Registers a handler for backend -> frontend messages (e.g. "wc:maximized"/"wc:restored"
 // so the maximize/restore glyph can track the real window state).
 export function onWindowMessage(callback: (message: string) => void): void {
