@@ -78,8 +78,8 @@ public class MainActivity : Activity
         webView.Settings.JavaScriptEnabled = true;
         webView.Settings.DomStorageEnabled = true;
         webView.Settings.AllowFileAccess = true;
-        // Keep navigation inside the WebView instead of bouncing out to a browser.
-        webView.SetWebViewClient(new WebViewClient());
+        var webViewClient = new ExternalBrowserWebViewClient(this);
+        webView.SetWebViewClient(webViewClient);
         // A plain WebView ignores <input type=file> and blob downloads: the chrome client wires
         // file inputs to the document picker, the JS bridge gives Export a native save dialog.
         webView.SetWebChromeClient(new FileChooserChromeClient(this));
@@ -109,7 +109,35 @@ public class MainActivity : Activity
             // Auto-start rules come up as part of Start; first chance to know if forwards are live.
             RefreshForwardCount();
             RefreshSessionNotificationBadge();
-            RunOnUiThread(() => webView.LoadUrl(host.LaunchUrl));
+            RunOnUiThread(() =>
+            {
+                webViewClient.SetInternalUrl(host.LaunchUrl);
+                webView.LoadUrl(host.LaunchUrl);
+            });
+        });
+    }
+
+    private void OpenExternalUrl(Android.Net.Uri uri)
+    {
+        var scheme = uri.Scheme;
+        if (!string.Equals(scheme, "http", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(scheme, "https", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        RunOnUiThread(() =>
+        {
+            try
+            {
+                var intent = new Intent(Intent.ActionView, uri);
+                intent.AddCategory(Intent.CategoryBrowsable);
+                StartActivity(intent);
+            }
+            catch
+            {
+                // A missing browser or rejected URL must not replace or crash the WebView.
+            }
         });
     }
 
@@ -315,6 +343,50 @@ public class MainActivity : Activity
         }
     }
 
+    // Keeps slopterm's loopback origin in the WebView while handing any external web
+    // navigation (including redirects not initiated by an anchor click) to Android.
+    private sealed class ExternalBrowserWebViewClient : WebViewClient
+    {
+        private readonly MainActivity _activity;
+        private string? _internalScheme;
+        private string? _internalHost;
+        private int _internalPort;
+
+        public ExternalBrowserWebViewClient(MainActivity activity) => _activity = activity;
+
+        public void SetInternalUrl(string url)
+        {
+            var uri = Android.Net.Uri.Parse(url);
+            _internalScheme = uri.Scheme;
+            _internalHost = uri.Host;
+            _internalPort = uri.Port;
+        }
+
+        public override bool ShouldOverrideUrlLoading(WebView? view, IWebResourceRequest? request)
+        {
+            var uri = request?.Url;
+            if (uri is null || request?.IsForMainFrame != true || IsInternalUrl(uri))
+            {
+                return false;
+            }
+
+            var scheme = uri.Scheme;
+            if (!string.Equals(scheme, "http", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(scheme, "https", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            _activity.OpenExternalUrl(uri);
+            return true;
+        }
+
+        private bool IsInternalUrl(Android.Net.Uri uri) =>
+            string.Equals(uri.Scheme, _internalScheme, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(uri.Host, _internalHost, StringComparison.OrdinalIgnoreCase)
+            && uri.Port == _internalPort;
+    }
+
     // Routes a web <input type=file> (Browse a key file, Import a backup) to the Android
     // document picker, honoring the input's own `accept` filter via CreateIntent.
     private sealed class FileChooserChromeClient : WebChromeClient
@@ -345,7 +417,7 @@ public class MainActivity : Activity
         }
     }
 
-    // Exposed to the web app as window.SloptermAndroid.saveFile(...) for the Export backup flow.
+    // Exposed to the web app as window.SloptermAndroid for operations the WebView cannot do.
     private sealed class SaveFileBridge : Java.Lang.Object
     {
         private readonly MainActivity _activity;
@@ -360,6 +432,13 @@ public class MainActivity : Activity
             {
                 _activity.PromptSaveFile(bytes, fileName, mimeType);
             }
+        }
+
+        [JavascriptInterface]
+        [Export("openExternal")]
+        public void OpenExternal(string url)
+        {
+            _activity.OpenExternalUrl(Android.Net.Uri.Parse(url));
         }
 
         [JavascriptInterface]

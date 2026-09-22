@@ -5,8 +5,10 @@ import '@xterm/xterm/css/xterm.css'
 import { resizeTerminal, sshSessionState, sshUpload, terminalSocketUrl, type ConnectRequest } from '../lib/api'
 import { getAppearance, subscribeAppearance, terminalFontFamily } from '../lib/appearance'
 import { KeyboardToolbar } from './KeyboardToolbar'
-import { finishAndroidComposing, isMobileApp, registerCompositionBridge } from '../lib/androidBridge'
+import { finishAndroidComposing, isAndroidApp, isMobileApp, registerCompositionBridge } from '../lib/androidBridge'
 import { registerTerminalTouch, type TouchSelection } from '../lib/terminalTouch'
+import { openExternalInNativeApp } from '../lib/externalLinks'
+import { isDesktopApp } from '../lib/photino'
 
 interface TerminalViewProps {
   sessionId: string
@@ -210,6 +212,13 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       fontWeight: initialFont.weight as FontWeight,
       letterSpacing: initialFont.letterSpacing,
       lineHeight: initialFont.lineHeight,
+      ...(isDesktopApp || isAndroidApp()
+        ? {
+            linkHandler: {
+              activate: (_event: MouseEvent, url: string) => openExternalInNativeApp(url),
+            },
+          }
+        : {}),
     })
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
