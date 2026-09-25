@@ -144,50 +144,54 @@ export function HostGrid({
 
   return (
     <div className="flex flex-1 flex-col gap-3 p-3 sm:p-4">
-      <div className="flex flex-col gap-2 sm:flex-row">
+      <div className="flex flex-col gap-2 xl:flex-row">
         <input
-          className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none"
+          className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none"
           placeholder="Find a host or ssh user@hostname…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <button
-          type="button"
-          onClick={() => onSelectionModeChange(!selectionMode)}
-          disabled={hosts.length === 0 || bulkBusy}
-          className="rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-50"
-        >
-          {selectionMode ? 'Cancel selection' : 'Select'}
-        </button>
-        <button
-          type="button"
-          onClick={onQuickConnect}
-          className="flex items-center gap-1.5 rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700"
-        >
-          Quick connect
-        </button>
-        {localShell && (
+        <div className="flex gap-2 xl:contents">
           <button
             type="button"
-            onClick={onLocalShell}
-            title={`Open a ${localShell.shell} shell on this ${localShell.platform} machine`}
-            className="flex items-center justify-center gap-1.5 rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700"
+            onClick={() => onSelectionModeChange(!selectionMode)}
+            disabled={hosts.length === 0 || bulkBusy}
+            className="flex-1 rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-50 xl:flex-none"
           >
-            <LocalTerminalTabIcon aria-hidden="true" className="h-4 w-4" />
-            Local shell
+            {selectionMode ? 'Cancel selection' : 'Select'}
           </button>
-        )}
-        <button
-          type="button"
-          onClick={onImport}
-          className="flex items-center gap-1.5 rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700"
-        >
-          Import
-        </button>
+          <button
+            type="button"
+            onClick={onImport}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 xl:flex-none"
+          >
+            Import
+          </button>
+        </div>
+        <div className="flex gap-2 xl:contents">
+          <button
+            type="button"
+            onClick={onQuickConnect}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 xl:flex-none"
+          >
+            Quick connect
+          </button>
+          {localShell && (
+            <button
+              type="button"
+              onClick={onLocalShell}
+              title={`Open a ${localShell.shell} shell on this ${localShell.platform} machine`}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 xl:flex-none"
+            >
+              <LocalTerminalTabIcon aria-hidden="true" className="h-4 w-4" />
+              Local shell
+            </button>
+          )}
+        </div>
         <button
           type="button"
           onClick={onNewHost}
-          className="flex items-center gap-1.5 rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+          className="flex items-center justify-center gap-1.5 rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
         >
           <PlusIcon aria-hidden="true" className="h-4 w-4" />
           New host
