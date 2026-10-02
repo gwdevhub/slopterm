@@ -25,6 +25,25 @@ cd ../server
 dotnet run         # prints a http://127.0.0.1:<port>/?token=... URL - open it in a browser
 ```
 
+## Headless command gateway
+
+`headless/` is a separate, explicitly configured server for automation. It does
+not expose the desktop UI or vault. A bearer-authenticated client can list
+configured aliases and run one bounded SSH command; the gateway owns the
+private key, pins each SSH host key, and never accepts an arbitrary destination.
+
+Required environment:
+
+- `SLOPTERM_HEADLESS_LISTEN` and optional `SLOPTERM_HEADLESS_PORT`
+- `SLOPTERM_API_TOKEN` (at least 32 characters)
+- `SLOPTERM_HEADLESS_PRIVATE_KEY_FILE`
+- either `SLOPTERM_HEADLESS_HOSTS_FILE` or `SLOPTERM_HEADLESS_HOSTS_JSON`,
+  keyed by alias, with `address`, `port`, `username`, and an OpenSSH
+  `SHA256:` host-key fingerprint
+
+The container image in `headless/Dockerfile` exposes port 8080 but does not
+publish it; deployments should attach it only to a private application network.
+
 ## Building a standalone executable
 
 ```sh

@@ -20,7 +20,7 @@
          plain library rather than a web *app* with its own entry point - the head owns the
          entry point and calls SloptermHost.Start. -->
     <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />
-    <PackageReference Include="SSH.NET" Version="2025.1.0" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.10" />
     <!-- Cron expressions for scheduled jobs (SchedulerService). A hand-rolled parser was the
          original plan, but the DST rules alone (a nightly job whose local time doesn't exist
