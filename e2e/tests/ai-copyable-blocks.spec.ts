@@ -14,6 +14,8 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
 }
 
 test('assistant blocks copy exact text and report clipboard failures at mobile width', async ({ page }) => {
+  test.setTimeout(60_000)
+  page.setDefaultTimeout(5_000)
   await page.addInitScript(() => {
     const state = window as typeof window & { copiedBlocks: string[]; failCopy: boolean }
     state.copiedBlocks = []
