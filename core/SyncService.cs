@@ -305,11 +305,27 @@ public sealed class SyncService : IDisposable
 
         private void RunInitialLocalScan(CancellationToken token)
         {
-            foreach (var localFile in Directory.EnumerateFiles(rule.LocalPath, "*", SearchOption.AllDirectories))
+            UploadLocalTree(rule.LocalPath, token);
+        }
+
+        private void UploadLocalTree(string directory, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            SftpPaths.RejectLocalLink(directory);
+            var relativeDirectory = Path.GetRelativePath(rule.LocalPath, directory);
+            EnsureRemoteDir(relativeDirectory == "." ? NormalizedRemoteRoot() : RemotePathFor(relativeDirectory));
+            foreach (var child in Directory.EnumerateFileSystemEntries(directory))
             {
                 token.ThrowIfCancellationRequested();
-                var relative = Path.GetRelativePath(rule.LocalPath, localFile);
-                UploadIfChanged(relative, localFile);
+                SftpPaths.RejectLocalLink(child);
+                if (Directory.Exists(child))
+                {
+                    UploadLocalTree(child, token);
+                }
+                else
+                {
+                    UploadIfChanged(RelativeOf(child), child);
+                }
             }
         }
 
@@ -319,7 +335,7 @@ public sealed class SyncService : IDisposable
         {
             var remoteRoot = NormalizedRemoteRoot();
             var entries = new Dictionary<string, (long Size, DateTime ModifiedUtc)>();
-            CollectRemoteFiles(remoteRoot, remoteRoot, entries, token);
+            CollectRemoteFiles(remoteRoot, "", entries, token);
 
             foreach (var (relative, info) in entries)
             {
@@ -341,7 +357,7 @@ public sealed class SyncService : IDisposable
                 {
                     try
                     {
-                        var localPath = Path.Combine(rule.LocalPath, relative.Replace('/', Path.DirectorySeparatorChar));
+                        var localPath = SftpPaths.LocalRelative(rule.LocalPath, relative);
                         if (File.Exists(localPath))
                         {
                             File.Delete(localPath);
@@ -358,31 +374,36 @@ public sealed class SyncService : IDisposable
             _knownRemoteEntries = entries;
         }
 
-        private void CollectRemoteFiles(string dir, string remoteRoot, Dictionary<string, (long, DateTime)> into, CancellationToken token)
+        private void CollectRemoteFiles(string dir, string relativeDir, Dictionary<string, (long, DateTime)> into, CancellationToken token)
         {
+            var localDirectory = relativeDir.Length == 0 ? rule.LocalPath : SftpPaths.LocalRelative(rule.LocalPath, relativeDir);
             foreach (var entry in _client!.ListDirectory(dir).Where(e => e.Name != "." && e.Name != ".."))
             {
                 token.ThrowIfCancellationRequested();
+                if (entry.IsSymbolicLink)
+                {
+                    throw new IOException($"Symbolic links are not supported for folder sync: {entry.FullName}");
+                }
+
+                // Build relative paths from leaf names, not by slicing an absolute FullName
+                // against a possibly relative rule root. Validate before touching local disk.
+                var relative = relativeDir.Length == 0 ? entry.Name : SftpPaths.JoinRemote(relativeDir, entry.Name);
+                var localPath = SftpPaths.LocalChild(localDirectory, entry.Name);
                 if (entry.IsDirectory)
                 {
-                    CollectRemoteFiles(entry.FullName, remoteRoot, into, token);
+                    Directory.CreateDirectory(localPath);
+                    CollectRemoteFiles(SftpPaths.JoinRemote(dir, entry.Name), relative, into, token);
                 }
                 else
                 {
-                    into[RelativeToRemoteRoot(entry.FullName, remoteRoot)] = (entry.Length, entry.LastWriteTimeUtc);
+                    into[relative] = (entry.Length, entry.LastWriteTimeUtc);
                 }
             }
         }
 
-        private static string RelativeToRemoteRoot(string fullPath, string remoteRoot)
-        {
-            var trimmedRoot = remoteRoot.TrimEnd('/');
-            return trimmedRoot.Length == 0 ? fullPath.TrimStart('/') : fullPath[(trimmedRoot.Length + 1)..];
-        }
-
         private void DownloadIfChanged(string relativePath, long remoteSize, DateTime remoteModifiedUtc)
         {
-            var localPath = Path.Combine(rule.LocalPath, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            var localPath = SftpPaths.LocalRelative(rule.LocalPath, relativePath);
             if (rule.SkipUnchanged && File.Exists(localPath))
             {
                 var localInfo = new FileInfo(localPath);
@@ -451,20 +472,9 @@ public sealed class SyncService : IDisposable
         private void OnRenamed(object sender, RenamedEventArgs e)
         {
             _pending.Enqueue((RelativeOf(e.OldFullPath), Deleted: true));
-            if (Directory.Exists(e.FullPath))
-            {
-                // The watcher only fires one event for the renamed directory itself, not its
-                // contents - re-walk it so every file underneath lands at its new remote path.
-                foreach (var file in SafeEnumerateFiles(e.FullPath))
-                {
-                    _pending.Enqueue((RelativeOf(file), Deleted: false));
-                }
-            }
-            else
-            {
-                _pending.Enqueue((RelativeOf(e.FullPath), Deleted: false));
-            }
-
+            // UpsertLocalPath walks directories, including a moved-in populated tree for
+            // which the watcher only reports the directory itself.
+            _pending.Enqueue((RelativeOf(e.FullPath), Deleted: false));
             _wake.Set();
         }
 
@@ -510,9 +520,10 @@ public sealed class SyncService : IDisposable
         private void UpsertLocalPath(string relativePath)
         {
             var localPath = Path.Combine(rule.LocalPath, relativePath);
+            SftpPaths.RejectLocalLink(localPath);
             if (Directory.Exists(localPath))
             {
-                EnsureRemoteDir(RemotePathFor(relativePath));
+                UploadLocalTree(localPath, _cts!.Token);
                 return;
             }
 
@@ -602,9 +613,17 @@ public sealed class SyncService : IDisposable
                 EnsureRemoteDir(parent);
             }
 
-            if (!_client!.Exists(remoteDir))
+            var entry = SftpSession.FindRemoteEntry(_client!, remoteDir);
+            if (entry is null)
             {
                 _client.CreateDirectory(remoteDir);
+            }
+            else
+            {
+                if (!entry.IsDirectory || entry.IsSymbolicLink)
+                {
+                    throw new IOException($"The remote destination is not a regular folder: {remoteDir}");
+                }
             }
 
             _knownRemoteDirs.Add(remoteDir);
@@ -612,24 +631,11 @@ public sealed class SyncService : IDisposable
 
         private string RemotePathFor(string relativePath)
         {
-            var posixRelative = relativePath.Replace('\\', '/');
-            var basePath = rule.RemotePath.TrimEnd('/');
-            return posixRelative.Length == 0 ? basePath : $"{basePath}/{posixRelative}";
+            var posixRelative = relativePath.Replace(Path.DirectorySeparatorChar, '/');
+            return posixRelative.Length == 0 ? NormalizedRemoteRoot() : SftpPaths.JoinRemote(NormalizedRemoteRoot(), posixRelative);
         }
 
         private string RelativeOf(string fullPath) => Path.GetRelativePath(rule.LocalPath, fullPath);
-
-        private static IEnumerable<string> SafeEnumerateFiles(string dir)
-        {
-            try
-            {
-                return Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).ToList();
-            }
-            catch
-            {
-                return [];
-            }
-        }
 
         private static string? PosixParent(string path)
         {

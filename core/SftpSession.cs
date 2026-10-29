@@ -1,4 +1,5 @@
 using Renci.SshNet;
+using Renci.SshNet.Sftp;
 
 namespace Slopterm.Server;
 
@@ -71,8 +72,33 @@ public sealed class SftpSession : IDisposable
         return new FsListing(target, ComputePosixParent(target), entries);
     }
 
-    /// <summary>Uploads a local file into a remote directory, keeping its original file name.</summary>
-    public async Task UploadFileAsync(string localPath, string remoteDir, CancellationToken ct)
+    /// <summary>Copies a local file or folder into a remote directory, keeping its name.</summary>
+    public async Task UploadAsync(string localPath, string remoteDir, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        localPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(localPath));
+        SftpPaths.RejectLocalLink(localPath);
+        var name = Path.GetFileName(localPath);
+        if (string.IsNullOrEmpty(name))
+        {
+            throw new ArgumentException("Select a file or folder, rather than a filesystem root.");
+        }
+
+        if (!Directory.Exists(localPath))
+        {
+            await UploadFileAsync(localPath, remoteDir, ct);
+            return;
+        }
+
+        var destination = SftpPaths.JoinRemote(remoteDir, name);
+        EnsureRemoteDirectory(destination);
+        foreach (var child in Directory.EnumerateFileSystemEntries(localPath))
+        {
+            await UploadAsync(child, destination, ct);
+        }
+    }
+
+    private async Task UploadFileAsync(string localPath, string remoteDir, CancellationToken ct)
     {
         var remotePath = JoinPosixPath(remoteDir, Path.GetFileName(localPath));
         await using var stream = File.OpenRead(localPath);
@@ -97,13 +123,71 @@ public sealed class SftpSession : IDisposable
         await _client.UploadFileAsync(content, remotePath, ct);
     }
 
-    /// <summary>Downloads a remote file into a local directory, keeping its original file name.</summary>
-    public async Task DownloadFileAsync(string remotePath, string localDir, CancellationToken ct)
+    /// <summary>Copies a remote file or folder into a local directory, including empty folders.</summary>
+    public async Task DownloadAsync(string remotePath, string localDir, CancellationToken ct)
     {
-        var fileName = remotePath.TrimEnd('/').Split('/').Last();
-        var localPath = Path.Combine(localDir, fileName);
+        ct.ThrowIfCancellationRequested();
+        remotePath = remotePath.TrimEnd('/');
+        SftpPaths.RemoteName(remotePath);
+        var source = FindRemoteEntry(_client, remotePath)
+            ?? throw new FileNotFoundException($"Remote file or folder not found: {remotePath}");
+        await DownloadEntryAsync(remotePath, localDir, source, ct);
+    }
+
+    private async Task DownloadEntryAsync(string remotePath, string localDir, ISftpFile source, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var localPath = SftpPaths.LocalChild(localDir, SftpPaths.RemoteName(remotePath));
+        if (source.IsSymbolicLink)
+        {
+            throw new IOException($"Symbolic links are not supported for folder transfers: {remotePath}");
+        }
+
+        if (!source.IsDirectory)
+        {
+            await DownloadFileAsync(remotePath, localPath, ct);
+            return;
+        }
+
+        Directory.CreateDirectory(localPath);
+        foreach (var entry in _client.ListDirectory(remotePath).Where(e => e.Name != "." && e.Name != ".."))
+        {
+            // Validate the server-supplied leaf itself, before composing a remote path.
+            SftpPaths.LocalChild(localPath, entry.Name);
+            await DownloadEntryAsync(SftpPaths.JoinRemote(remotePath, entry.Name), localPath, entry, ct);
+        }
+    }
+
+    private async Task DownloadFileAsync(string remotePath, string localPath, CancellationToken ct)
+    {
         await using var stream = File.Create(localPath);
         await _client.DownloadFileAsync(remotePath, stream, ct);
+    }
+
+    private void EnsureRemoteDirectory(string path)
+    {
+        var entry = FindRemoteEntry(_client, path);
+        if (entry is null)
+        {
+            _client.CreateDirectory(path);
+            return;
+        }
+
+        if (!entry.IsDirectory || entry.IsSymbolicLink)
+        {
+            throw new IOException($"The remote destination is not a regular folder: {path}");
+        }
+    }
+
+    // SSH.NET canonicalizes Get/GetAttributes paths before lstat, which can resolve a
+    // symlink. Parent listings retain the entry's actual type, including dangling links.
+    internal static ISftpFile? FindRemoteEntry(SftpClient client, string path)
+    {
+        var trimmed = path.TrimEnd('/');
+        var separator = trimmed.LastIndexOf('/');
+        var parent = separator < 0 ? "." : separator == 0 ? "/" : trimmed[..separator];
+        var name = trimmed[(separator + 1)..];
+        return client.ListDirectory(parent).FirstOrDefault(entry => entry.Name == name);
     }
 
     /// <summary>Renames (or moves within the same parent) a remote file or directory to a new leaf name.</summary>

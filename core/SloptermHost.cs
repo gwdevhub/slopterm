@@ -287,7 +287,7 @@ app.MapPost("/api/sftp/{sessionId}/upload", async (string sessionId, SftpUploadR
 
     try
     {
-        await session.UploadFileAsync(request.LocalPath, request.RemoteDir, ct);
+        await session.UploadAsync(request.LocalPath, request.RemoteDir, ct);
         return Results.NoContent();
     }
     catch (Exception ex)
@@ -361,7 +361,7 @@ app.MapPost("/api/sftp/{sessionId}/download", async (string sessionId, SftpDownl
 
     try
     {
-        await session.DownloadFileAsync(request.RemotePath, request.LocalDir, ct);
+        await session.DownloadAsync(request.RemotePath, request.LocalDir, ct);
         return Results.NoContent();
     }
     catch (Exception ex)
