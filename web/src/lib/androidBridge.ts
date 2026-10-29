@@ -82,8 +82,8 @@ let pendingFinishResolvers: Array<() => void> = []
 let finishRequestInFlight = false
 
 // Wires up xterm's input textarea so finishAndroidComposing() can tell a real commit apart
-// and know when one has landed. Call once per terminal instance; dispose the cleanup on teardown.
-export function registerCompositionBridge(textarea: HTMLTextAreaElement): () => void {
+// and know when one has landed. Call once per terminal instance; call dispose() on teardown.
+export function registerCompositionBridge(textarea: HTMLTextAreaElement) {
   const onStart = () => {
     composing = true
   }
@@ -100,9 +100,14 @@ export function registerCompositionBridge(textarea: HTMLTextAreaElement): () => 
   }
   textarea.addEventListener('compositionstart', onStart)
   textarea.addEventListener('compositionend', onEnd)
-  return () => {
-    textarea.removeEventListener('compositionstart', onStart)
-    textarea.removeEventListener('compositionend', onEnd)
+  return {
+    // Keydown may commit synchronously without a compositionend. TerminalView observes the
+    // owned onData in that case, so toolbar actions need not wait for a redundant native end.
+    committed: onEnd,
+    dispose() {
+      textarea.removeEventListener('compositionstart', onStart)
+      textarea.removeEventListener('compositionend', onEnd)
+    },
   }
 }
 
