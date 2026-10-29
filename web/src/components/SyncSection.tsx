@@ -21,8 +21,7 @@ const inputClasses =
   'w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 focus:border-slate-400 focus:outline-none'
 const labelClasses = 'mb-1 block text-xs font-medium text-slate-400'
 
-// One-way local -> remote folder sync, tunnelled through a saved host over SFTP (see the
-// backend SyncService). Remote-side changes are not picked up (SFTP has no push/notify).
+// Folder sync through a saved host over SFTP: local watching and/or remote polling.
 export function SyncSection() {
   return (
     <VaultGate>
@@ -170,26 +169,30 @@ interface FormState {
   skipUnchanged: boolean
 }
 
-function SyncRuleModal({
+export function SyncRuleModal({
   rule,
   hosts,
+  defaults,
+  submitLabel,
   onClose,
   onSaved,
 }: {
   rule: SavedSyncRule | null
   hosts: SavedHost[]
+  defaults?: Partial<SyncRuleRecord>
+  submitLabel?: string
   onClose: () => void
-  onSaved: () => void
+  onSaved: (id: string) => void
 }) {
   const [form, setForm] = useState<FormState>(() => ({
-    hostId: rule?.rule.hostId ?? hosts[0]?.id ?? '',
-    localPath: rule?.rule.localPath ?? '',
-    remotePath: rule?.rule.remotePath ?? '',
+    hostId: rule?.rule.hostId ?? defaults?.hostId ?? hosts[0]?.id ?? '',
+    localPath: rule?.rule.localPath ?? defaults?.localPath ?? '',
+    remotePath: rule?.rule.remotePath ?? defaults?.remotePath ?? '',
     description: rule?.rule.description ?? '',
     autoStart: rule?.rule.autoStart ?? false,
-    direction: rule?.rule.direction ?? 'localToRemote',
-    deleteExtraneous: rule?.rule.deleteExtraneous ?? true,
-    skipUnchanged: rule?.rule.skipUnchanged ?? true,
+    direction: rule?.rule.direction ?? defaults?.direction ?? 'localToRemote',
+    deleteExtraneous: rule?.rule.deleteExtraneous ?? defaults?.deleteExtraneous ?? true,
+    skipUnchanged: rule?.rule.skipUnchanged ?? defaults?.skipUnchanged ?? true,
   }))
   const [error, setError] = useState<string | null>(null)
 
@@ -202,8 +205,8 @@ function SyncRuleModal({
     setError(null)
     const record: SyncRuleRecord = {
       hostId: form.hostId || hosts[0]?.id || '',
-      localPath: form.localPath.trim(),
-      remotePath: form.remotePath.trim(),
+      localPath: form.localPath,
+      remotePath: form.remotePath,
       description: form.description.trim() || undefined,
       autoStart: form.autoStart,
       direction: form.direction,
@@ -211,9 +214,13 @@ function SyncRuleModal({
       skipUnchanged: form.skipUnchanged,
     }
     try {
-      if (rule) await updateSyncRule(rule.id, record)
-      else await createSyncRule(record)
-      onSaved()
+      if (rule) {
+        await updateSyncRule(rule.id, record)
+        onSaved(rule.id)
+      } else {
+        const { id } = await createSyncRule(record)
+        onSaved(id)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save sync rule')
     }
@@ -297,7 +304,7 @@ function SyncRuleModal({
                 Cancel
               </button>
               <button type="submit" className="rounded bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500">
-                {rule ? 'Save changes' : 'Add sync rule'}
+                {submitLabel ?? (rule ? 'Save changes' : 'Add sync rule')}
               </button>
             </div>
           </>

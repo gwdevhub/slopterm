@@ -1,10 +1,11 @@
 import { useEffect, useState, type DragEvent, type MouseEvent } from 'react'
 import type { FsEntry, FsListing } from '../lib/api'
+import { joinPanePath, type FilePaneSide } from '../lib/sftpPaths'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ContextMenu, type ContextMenuItem } from './ContextMenu'
 import { FileIcon, FolderIcon } from './icons'
 
-export type FilePaneSide = 'local' | 'remote'
+export type { FilePaneSide } from '../lib/sftpPaths'
 
 export interface DraggedFile {
   side: FilePaneSide
@@ -19,6 +20,7 @@ export interface FilePaneActions {
   makeDirectory: (parentDir: string, name: string) => Promise<void>
   // Uploads (local pane) or downloads (remote pane) the given entries onto the other pane.
   transfer: (paths: string[]) => Promise<void>
+  syncFolder?: (path: string) => Promise<void>
 }
 
 interface FilePaneProps {
@@ -57,12 +59,8 @@ function formatSize(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`
 }
 
-function joinPath(dir: string, name: string): string {
-  return dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`
-}
-
 // One side of the dual-pane SFTP browser; identical UI for local and remote, since the
-// backend normalizes both to the same FsListing shape. Files (not directories) are
+// backend normalizes both to the same FsListing shape. Files and directories are
 // draggable onto the *other* pane; SftpView owns the transfer. Right-click opens a
 // context menu, and Ctrl/Shift+click builds a multi-selection.
 export function FilePane({ title, side, initialPath, list, reloadToken, onPathChange, onDropFile, onDropOsFiles, actions, transferLabel }: FilePaneProps) {
@@ -106,7 +104,7 @@ export function FilePane({ title, side, initialPath, list, reloadToken, onPathCh
   const selectedEntries = entries.filter((e) => selected.has(e.name))
 
   function fullPath(entry: FsEntry): string {
-    return joinPath(listing!.path, entry.name)
+    return joinPanePath(listing!.path, entry.name, side)
   }
 
   // Ctrl/Cmd toggles one entry; Shift extends a contiguous range from the anchor; a plain
@@ -208,6 +206,14 @@ export function FilePane({ title, side, initialPath, list, reloadToken, onPathCh
     }
   }
 
+  async function handleSyncFolder(folderPath: string) {
+    try {
+      await actions.syncFolder?.(folderPath)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to configure folder sync')
+    }
+  }
+
   async function copyPath(entry: FsEntry) {
     if (!listing) return
     try {
@@ -224,11 +230,12 @@ export function FilePane({ title, side, initialPath, list, reloadToken, onPathCh
       // Bulk actions act on the whole selection when the target is part of it; otherwise
       // just the clicked entry (handleEntryContextMenu already narrowed the selection).
       const targets = selected.has(target.name) ? selectedEntries : [target]
-      const files = targets.filter((e) => !e.isDirectory)
       const single = targets.length === 1
       items.push({ label: 'Rename', onClick: () => setRenaming(target), disabled: !single })
-      // Directories can't be transferred yet (recursive up/download isn't supported).
-      items.push({ label: single ? transferLabel : `${transferLabel} ${files.length} files`, onClick: () => void handleTransfer(files), disabled: files.length === 0 })
+      items.push({ label: single ? transferLabel : `${transferLabel} ${targets.length} items`, onClick: () => void handleTransfer(targets) })
+      if (single && target.isDirectory && actions.syncFolder) {
+        items.push({ label: 'Sync folder…', onClick: () => void handleSyncFolder(fullPath(target)) })
+      }
       items.push({ label: 'Copy path', onClick: () => void copyPath(target), disabled: !single })
       items.push({ label: single ? 'Delete' : `Delete ${targets.length} items`, onClick: () => setConfirming(targets), danger: true })
     }
@@ -262,6 +269,17 @@ export function FilePane({ title, side, initialPath, list, reloadToken, onPathCh
       <div className="flex shrink-0 items-center gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2 text-sm">
         <span className="shrink-0 font-medium text-slate-200">{title}</span>
         <span className="min-w-0 flex-1 truncate text-slate-500">{listing?.path ?? ''}</span>
+        {actions.syncFolder && (
+          <button
+            type="button"
+            aria-label={`Sync folder in ${title}`}
+            disabled={!listing}
+            onClick={() => listing && void handleSyncFolder(listing.path)}
+            className="shrink-0 rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300 hover:bg-slate-700 disabled:opacity-40"
+          >
+            Sync folder
+          </button>
+        )}
         <button
           type="button"
           aria-label={`New folder in ${title}`}
@@ -296,7 +314,7 @@ export function FilePane({ title, side, initialPath, list, reloadToken, onPathCh
           <li key={entry.name}>
             <button
               type="button"
-              draggable={!entry.isDirectory}
+              draggable
               aria-pressed={selected.has(entry.name)}
               onDragStart={(event) => {
                 if (!listing) return
