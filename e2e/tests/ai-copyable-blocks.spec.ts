@@ -13,6 +13,9 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
   sshPassword: string
 }
 
+// The PWA worker forwards fetches itself, bypassing page.route's fake AI status.
+test.use({ serviceWorkers: 'block' })
+
 test('assistant blocks copy exact text and report clipboard failures at mobile width', async ({ page }) => {
   test.setTimeout(60_000)
   page.setDefaultTimeout(5_000)
