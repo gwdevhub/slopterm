@@ -4,6 +4,7 @@ import {
   localList,
   localMkdir,
   localRename,
+  listHosts,
   sftpDelete,
   sftpDownload,
   sftpList,
@@ -11,27 +12,49 @@ import {
   sftpRename,
   sftpUpload,
   sftpUploadBytes,
+  startSyncRule,
+  type SavedHost,
+  type SyncRuleRecord,
 } from '../lib/api'
+import { folderSyncDefaults, paneFileName } from '../lib/sftpPaths'
 import { FilePane, type DraggedFile, type FilePaneActions, type FilePaneSide } from './FilePane'
+import { SyncRuleModal } from './SyncSection'
 
 interface SftpViewProps {
   sessionId: string
   homeDirectory: string
-}
-
-function fileName(path: string): string {
-  return path.split('/').filter(Boolean).pop() ?? path
+  hostId?: string
 }
 
 // The dual-pane SFTP browser: local filesystem on the left, the host's remote filesystem on
 // the right. It owns transfers and file-management actions, handing each pane a FilePaneActions.
-export function SftpView({ sessionId, homeDirectory }: SftpViewProps) {
+export function SftpView({ sessionId, homeDirectory, hostId }: SftpViewProps) {
   const [localPath, setLocalPath] = useState<string>()
   const [remotePath, setRemotePath] = useState(homeDirectory)
   const [localReloadToken, setLocalReloadToken] = useState(0)
   const [remoteReloadToken, setRemoteReloadToken] = useState(0)
   const [transferStatus, setTransferStatus] = useState<{ message: string; error?: boolean } | null>(null)
   const transferIdRef = useRef(0)
+  const [syncDraft, setSyncDraft] = useState<{ hosts: SavedHost[]; defaults: SyncRuleRecord } | null>(null)
+
+  async function configureFolderSync(side: FilePaneSide, path: string) {
+    if (!hostId) throw new Error('Save this host before creating a folder sync rule.')
+    if (!localPath) throw new Error('Wait for the local folder listing before configuring sync.')
+    const hosts = await listHosts()
+    if (!hosts.some((host) => host.id === hostId)) throw new Error('The saved host for this SFTP tab no longer exists.')
+    setSyncDraft({ hosts, defaults: folderSyncDefaults(hostId, side, path, localPath, remotePath) })
+  }
+
+  async function startFolderSync(id: string) {
+    setSyncDraft(null)
+    ++transferIdRef.current
+    try {
+      await startSyncRule(id)
+      setTransferStatus({ message: 'Folder sync started. Manage or stop it in Folder Sync.' })
+    } catch (err) {
+      setTransferStatus({ message: `Sync rule saved, but could not start: ${err instanceof Error ? err.message : 'Unknown error'}. Manage it in Folder Sync.`, error: true })
+    }
+  }
 
   function reloadLocal() {
     setLocalReloadToken((t) => t + 1)
@@ -46,7 +69,7 @@ export function SftpView({ sessionId, homeDirectory }: SftpViewProps) {
     if (!destDir) return
 
     const thisTransferId = ++transferIdRef.current
-    const name = fileName(file.path)
+    const name = paneFileName(file.path, file.side)
     setTransferStatus({ message: destSide === 'remote' ? `Uploading ${name}…` : `Downloading ${name}…` })
     try {
       if (destSide === 'remote') {
@@ -55,17 +78,16 @@ export function SftpView({ sessionId, homeDirectory }: SftpViewProps) {
         await sftpDownload(sessionId, file.path, destDir)
       }
       setTransferStatus({ message: destSide === 'remote' ? `Uploaded ${name}` : `Downloaded ${name}` })
-      if (destSide === 'remote') {
-        reloadRemote()
-      } else {
-        reloadLocal()
-      }
       // Only clears the banner if no other transfer started in the meantime.
       setTimeout(() => {
         if (transferIdRef.current === thisTransferId) setTransferStatus(null)
       }, 3000)
     } catch (err) {
       setTransferStatus({ message: err instanceof Error ? err.message : 'Transfer failed', error: true })
+    } finally {
+      // A failed recursive transfer may still have copied some children.
+      if (destSide === 'remote') reloadRemote()
+      else reloadLocal()
     }
   }
 
@@ -77,15 +99,21 @@ export function SftpView({ sessionId, homeDirectory }: SftpViewProps) {
 
     const thisTransferId = ++transferIdRef.current
     const verb = fromSide === 'local' ? 'Uploading' : 'Downloading'
-    for (const path of paths) {
-      setTransferStatus({ message: `${verb} ${fileName(path)}…` })
-      if (fromSide === 'local') await sftpUpload(sessionId, path, destDir)
-      else await sftpDownload(sessionId, path, destDir)
+    try {
+      for (const path of paths) {
+        setTransferStatus({ message: `${verb} ${paneFileName(path, fromSide)}…` })
+        if (fromSide === 'local') await sftpUpload(sessionId, path, destDir)
+        else await sftpDownload(sessionId, path, destDir)
+      }
+    } catch (err) {
+      setTransferStatus({ message: err instanceof Error ? err.message : 'Transfer failed', error: true })
+      throw err
+    } finally {
+      if (fromSide === 'local') reloadRemote()
+      else reloadLocal()
     }
 
-    setTransferStatus({ message: `${fromSide === 'local' ? 'Uploaded' : 'Downloaded'} ${paths.length} file${paths.length === 1 ? '' : 's'}` })
-    if (fromSide === 'local') reloadRemote()
-    else reloadLocal()
+    setTransferStatus({ message: `${fromSide === 'local' ? 'Uploaded' : 'Downloaded'} ${paths.length} item${paths.length === 1 ? '' : 's'}` })
     setTimeout(() => {
       if (transferIdRef.current === thisTransferId) setTransferStatus(null)
     }, 3000)
@@ -105,6 +133,7 @@ export function SftpView({ sessionId, homeDirectory }: SftpViewProps) {
       reloadLocal()
     },
     transfer: (paths) => transferSelection('local', paths),
+    syncFolder: (path) => configureFolderSync('local', path),
   }
 
   const remoteActions: FilePaneActions = {
@@ -121,6 +150,7 @@ export function SftpView({ sessionId, homeDirectory }: SftpViewProps) {
       reloadRemote()
     },
     transfer: (paths) => transferSelection('remote', paths),
+    syncFolder: (path) => configureFolderSync('remote', path),
   }
 
   // Files dragged in from the OS's file manager upload into the remote pane. The local pane
@@ -180,6 +210,16 @@ export function SftpView({ sessionId, homeDirectory }: SftpViewProps) {
           onDropOsFiles={(files) => void handleOsDrop('remote', files)}
         />
       </div>
+      {syncDraft && (
+        <SyncRuleModal
+          rule={null}
+          hosts={syncDraft.hosts}
+          defaults={syncDraft.defaults}
+          submitLabel="Add and start sync rule"
+          onClose={() => setSyncDraft(null)}
+          onSaved={(id) => void startFolderSync(id)}
+        />
+      )}
     </div>
   )
 }

@@ -551,7 +551,7 @@ function App() {
                     <AgentBar sessionId={tab.sessionId} />
                   </div>
                 ) : (
-                  <SftpView sessionId={tab.sessionId} homeDirectory={tab.homeDirectory ?? '/'} />
+                  <SftpView sessionId={tab.sessionId} homeDirectory={tab.homeDirectory ?? '/'} hostId={tab.request?.hostId} />
                 )
               ) : (
                 <ReconnectingPane tab={tab} onRetryNow={() => retryNow(tab)} />
