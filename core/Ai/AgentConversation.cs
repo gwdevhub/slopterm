@@ -1137,7 +1137,10 @@ public sealed class AgentConversation : IDisposable
         const string answerRule =
             "ALWAYS finish your turn by answering the user in the chat. After any tool use, state what happened and "
             + "answer their question in plain language. Never end a turn without a chat reply. Never invent command "
-            + "output - only report what the terminal actually shows.";
+            + "output - only report what the terminal actually shows. "
+            + "Put code, commands, configuration, and other text the user may want to copy in fenced Markdown "
+            + "blocks (triple backticks, optionally followed by a language, or text for plain text). "
+            + "The chat displays a Copy button beneath each block; do not include explanatory prose inside it.";
 
         switch (mode)
         {
