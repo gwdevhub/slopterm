@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Renci.SshNet;
 using Slopterm.Server.Vault;
+using Slopterm.Server.VaultSync;
 
 namespace Slopterm.Server;
 
@@ -105,7 +106,7 @@ public sealed class SyncService : IDisposable
         }
     }
 
-    private (SyncRuleRecord Rule, ConnectRequest Request) ResolveRule(string ruleId)
+    internal (SyncRuleRecord Rule, ConnectRequest Request) ResolveRule(string ruleId)
     {
         var match = _vault.ListSyncRules().FirstOrDefault(r => r.Id == ruleId);
         if (match.Record is null)
@@ -119,8 +120,24 @@ public sealed class SyncService : IDisposable
             throw new InvalidOperationException("The host this sync rule uses no longer exists.");
         }
 
-        var request = HostConnect.Resolve(host.Record)
-            ?? throw new InvalidOperationException("That host has no usable SSH credential.");
+        // Use the same device-local/name-based resolution as the Hosts screen's SSH/SFTP
+        // connections, including the host's collection and the resolved key's passphrase.
+        var credential = CredentialResolver.ResolveForHost(_vault, host.CollectionId, host.Record);
+        if (credential?.CanConnect != true)
+        {
+            throw new InvalidOperationException("That host has no usable SSH credential.");
+        }
+
+        var request = new ConnectRequest
+        {
+            Host = host.Record.Address,
+            Port = host.Record.Port,
+            Username = credential.Username ?? string.Empty,
+            AuthMethod = credential.Password is not null ? "password" : "privateKey",
+            Password = credential.Password,
+            PrivateKey = credential.PrivateKey,
+            Passphrase = credential.Passphrase,
+        };
         return (match.Record, request);
     }
 
