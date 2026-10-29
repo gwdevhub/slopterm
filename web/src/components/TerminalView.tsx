@@ -7,6 +7,7 @@ import { getAppearance, subscribeAppearance, terminalFontFamily } from '../lib/a
 import { KeyboardToolbar } from './KeyboardToolbar'
 import { finishAndroidComposing, isAndroidApp, isMobileApp, registerCompositionBridge } from '../lib/androidBridge'
 import { registerTerminalTouch, type TouchSelection } from '../lib/terminalTouch'
+import { applyStickyModifiers, registerTerminalComposition } from '../lib/terminalComposition'
 import { openExternalInNativeApp } from '../lib/externalLinks'
 import { isDesktopApp } from '../lib/photino'
 
@@ -34,18 +35,6 @@ function uploadFileName(item: File): string {
   if (item.name) return item.name
   const ext = item.type.split('/')[1] || 'bin'
   return `pasted-${Date.now()}.${ext}`
-}
-
-// Applies the toolbar's armed Ctrl/Alt to one character (C0 control code / meta-escape);
-// a combination with no terminal meaning is left as the plain character.
-function applyStickyModifiers(char: string, armed: { ctrl: boolean; alt: boolean }): string {
-  let bytes = char
-  if (armed.ctrl) {
-    const code = char.toLowerCase().charCodeAt(0)
-    if (code >= 97 && code <= 122) bytes = String.fromCharCode(code - 96)
-    else if (char === ' ') bytes = '\x00'
-  }
-  return armed.alt ? `\x1b${bytes}` : bytes
 }
 
 // Renders only the terminal; the tab strip (App.tsx/TabBar.tsx) owns the session label and
@@ -86,9 +75,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
   const sendRawRef = useRef<(data: string) => void>(() => {})
   // Drags one end of the touch selection. Same cross-effect-ref pattern as sendRawRef.
   const moveSelectionHandleRef = useRef<(which: 'start' | 'end', clientX: number, clientY: number) => void>(() => {})
-  // Clears the frozen composition preview (see the terminal effect below) once real output has
-  // been drawn - same cross-effect-ref pattern as sendRawRef.
-  const unfreezeCompositionRef = useRef<() => void>(() => {})
+  // Captures the preview owned by each output frame, to clear only that preview after parsing.
+  const compositionOutputRef = useRef<() => (() => void) | undefined>(() => undefined)
   // Ctrl/Alt are "sticky" one-shot modifiers for the toolbar; applied in term.onData rather
   // than keydown (Android soft keyboards report keyCode=229 and the real char arrives as IME).
   const [modifiers, setModifiers] = useState({ ctrl: false, alt: false })
@@ -369,89 +357,14 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
 
     // Lets the Android keyboard toolbar commit an in-progress IME composition before its own
     // bytes go out, without racing xterm's handling of the same commit. No-op off Android.
-    const disposeCompositionBridge = textarea ? registerCompositionBridge(textarea) : undefined
+    const compositionBridge = textarea ? registerCompositionBridge(textarea) : undefined
 
-    // xterm hides its composition preview on compositionend but defers sending the committed
-    // text, so the just-typed word flickers until the echo returns. Copy the positioned
-    // .composition-view into our own overlay to bridge it (xterm keeps mutating its element).
-    const compositionView = container.querySelector<HTMLElement>('.composition-view')
-    const echoPreview = document.createElement('div')
-    // Same class (identical geometry/styling) plus a marker the e2e tests key off.
-    echoPreview.classList.add('composition-view', 'composition-echo')
-    compositionView?.parentElement?.appendChild(echoPreview)
-    let compositionFreezeTimeout: ReturnType<typeof setTimeout> | undefined
-    // Mirrors CompositionHelper's own _isComposing, because both compositionend and the
-    // keydown case below finalize a composition and xterm's state is private.
-    const isComposingRef = { current: false }
-    // True only for the tick an IME commit's text is handed to onData, so the sticky modifier
-    // there can tell a committed word from a paste or escape sequence.
-    let compositionCommitPending = false
-    function unfreezeComposition() {
-      clearTimeout(compositionFreezeTimeout)
-      compositionFreezeTimeout = undefined
-      echoPreview.classList.remove('active')
-    }
-    unfreezeCompositionRef.current = unfreezeComposition
-    // Snapshots the word xterm is about to stop previewing, at xterm's computed position, and
-    // arms a backstop that drops it if real output never supersedes it.
-    function freezeComposition() {
-      if (!compositionView?.textContent) return
-      echoPreview.style.cssText = compositionView.style.cssText
-      echoPreview.textContent = compositionView.textContent
-      echoPreview.classList.add('active')
-      // Backstop for a shell that never echoes: don't leave stale composed text on screen.
-      compositionFreezeTimeout = setTimeout(unfreezeComposition, 1000)
-    }
-    // Marks the terminal as composing while the IME holds a word (CSS moves the caret onto the
-    // preview). Not derived from xterm's private state, and the keydown path below finalizes a
-    // composition without a compositionend event to observe.
-    const composingRoot: HTMLDivElement = container
-    const setComposing = (active: boolean) => composingRoot.classList.toggle('xterm-composing', active)
-
-    const onCompositionEnd = () => {
-      isComposingRef.current = false
-      setComposing(false)
-      // A committed control code isn't echoed back as the letter it was composed from, so
-      // freezing the preview would leave a phantom letter for the backstop second.
-      compositionCommitPending = true
-      setTimeout(() => {
-        compositionCommitPending = false
-      }, 0)
-      if (modifiersRef.current.ctrl || modifiersRef.current.alt) return
-      // xterm's own listener (registered first) has already hidden its preview; snapshotting
-      // here, synchronously after, keeps the word on screen.
-      freezeComposition()
-    }
-    const onCompositionStart = () => {
-      isComposingRef.current = true
-      setComposing(true)
-    }
-    // A new previewed word lands on the frozen one (the echo hasn't moved the cursor yet), so
-    // drop the snapshot on update, not start, or typing ahead would blank the previous word.
-    const onCompositionUpdate = () => {
-      unfreezeComposition()
-      // A composing IME hands nothing to onData until the word is finished, so an armed
-      // Ctrl can't apply to its first character (the "Ctrl+O in nano types a literal o" bug).
-      // Commit the composition the moment the IME starts holding text, only while armed, so
-      // normal typing keeps its local preview.
-      if (modifiersRef.current.ctrl || modifiersRef.current.alt) void finishAndroidComposing()
-    }
-    // Pressing Enter mid-word makes CompositionHelper.keydown finalize the composition
-    // synchronously, with no compositionend event - space stopped flickering (PR #103) but
-    // Enter didn't. Registered capture:true on the same textarea because xterm's own capture
-    // keydown listener calls stopPropagation(), so a bubble listener would never fire. The
-    // keyCode exclusions match CompositionHelper's own "still composing" cases.
-    const onKeyDownDuringComposition = (event: KeyboardEvent) => {
-      if (!isComposingRef.current) return
-      if ([16, 17, 18, 20, 229].includes(event.keyCode)) return
-      isComposingRef.current = false
-      setComposing(false)
-      freezeComposition()
-    }
-    textarea?.addEventListener('compositionend', onCompositionEnd)
-    textarea?.addEventListener('compositionstart', onCompositionStart)
-    textarea?.addEventListener('compositionupdate', onCompositionUpdate)
-    textarea?.addEventListener('keydown', onKeyDownDuringComposition, true)
+    const composition = textarea ? registerTerminalComposition(container, textarea, {
+      hasModifiers: () => modifiersRef.current.ctrl || modifiersRef.current.alt,
+      finishComposing: finishAndroidComposing,
+      onSynchronousCommit: () => compositionBridge?.committed(),
+    }) : undefined
+    compositionOutputRef.current = () => composition?.prepareOutput()
 
     // Drag a file from the OS onto the terminal to upload it into the shell's cwd. dragover
     // must preventDefault or the browser never fires a drop; copy is the right affordance.
@@ -496,6 +409,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     }
 
     const dataDisposable = term.onData((data) => {
+      const isCompositionCommit = composition?.consumeCommit(data) ?? false
       let payload = data
       // One shot: a sticky modifier applies to the next single character (physical or IME
       // commit) then disarms; a paste or arrow-key escape sequence passes through.
@@ -504,7 +418,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         // A committed word arriving whole is the fallback path (off Android there's no bridge
         // to end the composition early); apply the modifier to the first character and let the
         // rest land as typed. Array.from so a surrogate pair stays one character.
-        const characters = data.length === 1 || compositionCommitPending ? Array.from(data) : []
+        const characters = data.length === 1 || isCompositionCommit ? Array.from(data) : []
         if (characters.length > 0) {
           payload = applyStickyModifiers(characters[0], armed) + characters.slice(1).join('')
           // Write the ref directly too: two characters in the same tick would otherwise both
@@ -529,15 +443,10 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     return () => {
       unsubscribeAppearance()
       clearTimeout(resizeTimeout)
-      clearTimeout(compositionFreezeTimeout)
       resizeObserver.disconnect()
       textarea?.removeEventListener('paste', onPaste)
-      textarea?.removeEventListener('compositionend', onCompositionEnd)
-      textarea?.removeEventListener('compositionstart', onCompositionStart)
-      textarea?.removeEventListener('compositionupdate', onCompositionUpdate)
-      textarea?.removeEventListener('keydown', onKeyDownDuringComposition, true)
-      echoPreview.remove()
-      disposeCompositionBridge?.()
+      composition?.dispose()
+      compositionBridge?.dispose()
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
       touch.dispose()
@@ -548,7 +457,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       termRef.current = null
       sendRawRef.current = () => {}
       fitAndSyncRef.current = () => {}
-      unfreezeCompositionRef.current = () => {}
+      compositionOutputRef.current = () => undefined
     }
     // startupCommands is intentionally excluded (fixed per sessionId); request is stable per
     // tab and read via a ref. Re-running would tear down and recreate the same live session.
@@ -620,7 +529,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         // Real output arrived, so clear the frozen composition preview - but via write()'s
         // completion callback, since write() is async and clearing up front would let the
         // browser paint the row with the preview gone and the echo not yet drawn.
-        const clearFrozenComposition = unfreezeCompositionRef.current
+        const clearFrozenComposition = compositionOutputRef.current()
         termRef.current?.write(bytes, clearFrozenComposition)
         // Output landed while this tab is in the background - flag it once (until next viewed).
         if (!isActiveRef.current && !activityNotifiedRef.current) {
