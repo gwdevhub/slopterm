@@ -14,7 +14,6 @@ const ctx = JSON.parse(readFileSync(resolve(HERE, '../.tmp/context.json'), 'utf-
 }
 
 test('assistant blocks copy exact text and report clipboard failures at mobile width', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 })
   await page.addInitScript(() => {
     const state = window as typeof window & { copiedBlocks: string[]; failCopy: boolean }
     state.copiedBlocks = []
@@ -51,6 +50,9 @@ test('assistant blocks copy exact text and report clipboard failures at mobile w
   try {
     await page.getByRole('button', { name: `SSH to ${name}` }).click()
     await page.getByRole('button', { name: 'AI agent', exact: true }).click()
+    // The shared section-navigation helper targets the desktop sidebar. Exercise
+    // the message controls at phone width after setup, then restore it for cleanup.
+    await page.setViewportSize({ width: 390, height: 844 })
     const copyButtons = page.getByRole('button', { name: 'Copy block', exact: true })
     await expect(copyButtons).toHaveCount(2)
     await expect(page.locator('pre code').last()).toHaveText('<script>literal text</script>\n')
@@ -65,6 +67,7 @@ test('assistant blocks copy exact text and report clipboard failures at mobile w
     await copyButtons.last().click()
     await expect(page.getByRole('status').filter({ hasText: 'Could not copy.' })).toBeVisible()
   } finally {
+    await page.setViewportSize({ width: 1280, height: 720 })
     await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`, { first: true })
     await gotoSection(page, 'Hosts')
     await deleteHost(page, name)
