@@ -80,11 +80,16 @@ let pendingFinishResolvers: Array<() => void> = []
 // Whether a native finishComposing() request is already outstanding, so a second overlapping
 // call queues onto the same commit instead of asking the IME to finish twice.
 let finishRequestInFlight = false
+let flushComposition: (() => Promise<void>) | undefined
+let finishingComposition: Promise<void> | undefined
 
 // Wires up xterm's input textarea so finishAndroidComposing() can tell a real commit apart
-// and know when one has landed. Call once per terminal instance; call dispose() on teardown.
-export function registerCompositionBridge(textarea: HTMLTextAreaElement) {
+// and know when one has landed. flush drains xterm and resets its retained input context
+// before external keys. Call once per terminal instance; call dispose() on teardown.
+export function registerCompositionBridge(textarea: HTMLTextAreaElement, flush?: () => Promise<void>) {
+  const onFocus = () => { flushComposition = flush }
   const onStart = () => {
+    onFocus()
     composing = true
   }
   const onEnd = () => {
@@ -100,6 +105,8 @@ export function registerCompositionBridge(textarea: HTMLTextAreaElement) {
   }
   textarea.addEventListener('compositionstart', onStart)
   textarea.addEventListener('compositionend', onEnd)
+  textarea.addEventListener('focus', onFocus)
+  if (textarea.ownerDocument?.activeElement === textarea) onFocus()
   return {
     // Keydown may commit synchronously without a compositionend. TerminalView observes the
     // owned onData in that case, so toolbar actions need not wait for a redundant native end.
@@ -107,16 +114,20 @@ export function registerCompositionBridge(textarea: HTMLTextAreaElement) {
     dispose() {
       textarea.removeEventListener('compositionstart', onStart)
       textarea.removeEventListener('compositionend', onEnd)
+      textarea.removeEventListener('focus', onFocus)
+      if (flushComposition === flush) flushComposition = undefined
     },
   }
 }
 
 // Commits any composing word and resolves once it has actually reached the terminal, not when
-// the native request returned. Resolves immediately when nothing is composing.
+// the native request returned. Even without a live composition, reset retained input text.
 export function finishAndroidComposing(): Promise<void> {
   const bridge = androidBridge()
-  if (!bridge || !composing) return Promise.resolve()
-  return new Promise((resolve) => {
+  if (!bridge) return Promise.resolve()
+  if (finishingComposition) return finishingComposition
+  const flush = flushComposition
+  const committed = !composing ? Promise.resolve() : new Promise<void>((resolve) => {
     pendingFinishResolvers.push(resolve)
     if (!finishRequestInFlight) {
       finishRequestInFlight = true
@@ -131,6 +142,12 @@ export function finishAndroidComposing(): Promise<void> {
       resolve()
     }, 250)
   })
+  // Both the native-event path and the timeout must drain xterm before releasing keys.
+  // Share the whole operation across overlapping taps, including the textarea reset.
+  finishingComposition = committed.then(() => flush?.()).finally(() => {
+    finishingComposition = undefined
+  })
+  return finishingComposition
 }
 
 function blobToBase64(blob: Blob): Promise<string> {

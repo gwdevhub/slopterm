@@ -357,13 +357,12 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
 
     // Lets the Android keyboard toolbar commit an in-progress IME composition before its own
     // bytes go out, without racing xterm's handling of the same commit. No-op off Android.
-    const compositionBridge = textarea ? registerCompositionBridge(textarea) : undefined
-
     const composition = textarea ? registerTerminalComposition(container, textarea, {
       hasModifiers: () => modifiersRef.current.ctrl || modifiersRef.current.alt,
       finishComposing: finishAndroidComposing,
       onSynchronousCommit: () => compositionBridge?.committed(),
     }) : undefined
+    const compositionBridge = textarea ? registerCompositionBridge(textarea, () => composition!.finish()) : undefined
     compositionOutputRef.current = () => composition?.prepareOutput()
 
     // Drag a file from the OS onto the terminal to upload it into the shell's cwd. dragover
