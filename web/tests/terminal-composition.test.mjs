@@ -1,6 +1,8 @@
 // Source-level browser tests: Node erases TypeScript types, and Chromium runs the installed,
 // prebuilt xterm bundle. No Vite, tsc, .NET server, or project build is involved.
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { stripTypeScriptTypes } from 'node:module'
 import { after, afterEach, before, beforeEach, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { chromium } from '@playwright/test'
@@ -19,6 +21,9 @@ beforeEach(async () => {
   // Function.toString() here is the source loaded by Node's native type erasure, not a
   // separate test reimplementation of the composition controller.
   await page.addScriptTag({ content: `${applyStickyModifiers}\n${registerTerminalComposition}` })
+  await page.addScriptTag({ content: stripTypeScriptTypes(
+    readFileSync(new URL('../src/lib/androidBridge.ts', import.meta.url), 'utf8'),
+  ).replaceAll('export ', '') })
   await page.evaluate(() => {
     const container = document.getElementById('terminal')
     const term = new window.Terminal({ cols: 80, rows: 10 })
@@ -83,6 +88,116 @@ beforeEach(async () => {
   })
 })
 afterEach(async () => { await page?.close() })
+
+for (const nativeEnd of [false, true]) {
+  test(`completion drains and resets the IME context ${nativeEnd ? 'after native end' : 'when native end is missing'}`, async () => {
+    const result = await page.evaluate(async nativeEnd => {
+      const h = window.h
+      h.start()
+      h.update('/var')
+      await h.tick()
+      if (nativeEnd) h.end('/var')
+      // Same boundary used by double-tap and toolbar Tab: the local composition must be
+      // drained even if Android's finishComposingText never delivered compositionend.
+      await h.composition.finish()
+      h.sent.push('\t')
+      const afterTab = { ...h.snapshot(), textarea: h.textarea.value }
+      await h.output('/var/')
+      const completed = h.snapshot()
+      // Start from the input context the IME sees, rather than manually clearing it in
+      // the test. Retaining /var here lets the keyboard recompose the completed segment.
+      h.start()
+      h.update('ww')
+      await h.tick()
+      const nextWord = h.snapshot()
+      await h.composition.finish()
+      h.sent.push('\t')
+      await h.output('www/')
+      h.end('ww') // a late native end must not resend the cleared textarea range
+      await h.tick()
+      return { afterTab, completed, nextWord, final: h.snapshot(), textarea: h.textarea.value }
+    }, nativeEnd)
+    assert.deepEqual(result.afterTab.sent, ['/var', '\t'])
+    assert.equal(result.afterTab.textarea, '')
+    assert.equal(result.afterTab.live.active, false)
+    assert.equal(result.afterTab.composing, false)
+    assert.equal(result.completed.line, '/var/')
+    assert.equal(result.completed.frozen.active, false)
+    assert.equal(result.nextWord.live.text, 'ww')
+    assert.equal(result.nextWord.frozen.active, false)
+    assert.deepEqual(result.final.sent, ['/var', '\t', 'ww', '\t'])
+    assert.equal(result.final.line, '/var/www/')
+    assert.equal(result.final.live.active, false)
+    assert.equal(result.final.frozen.active, false)
+    assert.equal(result.textarea, '')
+  })
+}
+
+for (const nativeEnd of [false, true]) {
+  test(`Android completion waits for local drain with ${nativeEnd ? 'a delayed native end' : 'the native timeout'}`, async () => {
+    const result = await page.evaluate(async nativeEnd => {
+      const h = window.h
+      let requests = 0
+      window.SloptermAndroid = { finishComposing() {
+        requests++
+        if (nativeEnd) setTimeout(() => h.end(), 20)
+      } }
+      const bridge = registerCompositionBridge(h.textarea, () => h.composition.finish())
+      h.start()
+      h.update('/var')
+      await h.tick()
+      await Promise.all([
+        finishAndroidComposing().then(() => h.sent.push('\t')),
+        finishAndroidComposing().then(() => h.sent.push('\t')),
+      ])
+      await h.output('/var/')
+      const afterTab = { ...h.snapshot(), textarea: h.textarea.value }
+      // A no-longer-composing bridge must still clear retained input before another Tab.
+      h.textarea.value = 'retained'
+      await finishAndroidComposing()
+      const cleared = h.textarea.value
+      h.start()
+      h.update('ww')
+      await h.tick()
+      await finishAndroidComposing()
+      h.sent.push('\t')
+      await h.output('www/')
+      h.end('ww')
+      await h.tick()
+      bridge.dispose()
+      return { requests, afterTab, cleared, final: h.snapshot() }
+    }, nativeEnd)
+    assert.equal(result.requests, 2)
+    assert.equal(result.afterTab.textarea, '')
+    assert.equal(result.afterTab.line, '/var/')
+    assert.equal(result.afterTab.live.active, false)
+    assert.equal(result.afterTab.frozen.active, false)
+    assert.equal(result.cleared, '')
+    assert.deepEqual(result.final.sent, ['/var', '\t', '\t', 'ww', '\t'])
+    assert.equal(result.final.line, '/var/www/')
+    assert.equal(result.final.live.active, false)
+    assert.equal(result.final.frozen.active, false)
+  })
+}
+
+test('a composition restarted during the drain is sent before Tab, never cleared unsent', async () => {
+  const result = await page.evaluate(async () => {
+    const h = window.h
+    h.start()
+    h.update('/var')
+    await h.tick()
+    const finished = h.composition.finish()
+    h.start()
+    h.update('ww')
+    await finished
+    h.sent.push('\t')
+    return { ...h.snapshot(), textarea: h.textarea.value }
+  })
+  assert.deepEqual(result.sent, ['/var', 'ww', '\t'])
+  assert.equal(result.textarea, '')
+  assert.equal(result.composing, false)
+  assert.equal(result.live.active, false)
+})
 
 test('insertText before compositionend cannot send or echo a composing path segment twice', async () => {
   const result = await page.evaluate(async () => {

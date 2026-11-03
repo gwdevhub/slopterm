@@ -142,6 +142,18 @@ export function registerTerminalComposition(
   textarea.addEventListener('compositionend', expirePendingCommit)
 
   return {
+    async finish(): Promise<void> {
+      // Native finishComposingText is only a request: some Android IMEs omit the end
+      // event. Still end through xterm so its live overlay and deferred send agree.
+      do {
+        if (composing) textarea.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      } while (composing || pending)
+      // Wait until xterm has read its owned range before clearing the editing context.
+      // Otherwise the keyboard can reuse the old word after shell completion changes
+      // the cursor (e.g. /var -> /var/ followed by a recomposed varww).
+      textarea.value = ''
+    },
     consumeCommit(data: string): boolean {
       if (!pending || pending.sent || !data) return false
       const expected = textarea.value.slice(pending.start, pending.end)
