@@ -5,9 +5,9 @@ import { expect, type Page } from '@playwright/test'
 export const E2E_VAULT_PASSWORD = 'e2e-shared-test-master-password'
 
 export function gotoSection(page: Page, name: string) {
-  // Exact match avoids substring collisions; the mobile overlay's same-named button is
-  // excluded from the accessibility tree via display:none at the desktop test viewport.
-  return page.getByRole('button', { name, exact: true }).click()
+  // The terminal toolbar also has a Snippets button. Scope section navigation to the
+  // sidebar; its mobile counterpart is hidden at the desktop test viewport.
+  return page.getByRole('navigation').getByRole('button', { name, exact: true }).click()
 }
 
 // Closing a tab opens a ConfirmDialog (Close/Cancel), so every caller needs both clicks.
