@@ -4,8 +4,8 @@ A cross-platform (Linux, macOS, Windows) SSH/FTP terminal client in the spirit o
 [Termius](https://termius.com/), built by [gwdevhub](https://github.com/gwdevhub).
 
 - React + xterm.js front-end
-- .NET backend (SSH.NET) for SSH/SFTP, served locally — no bundled browser, point your own
-  browser at the printed `localhost` URL
+- .NET backend (SSH.NET) for SSH/SFTP, served locally in a native desktop window on
+  Windows and Linux — no bundled browser
 - End-to-end encrypted vault with cross-device sync
 - No telemetry, no ads, no accounts — see [PRIVACY.md](./PRIVACY.md) for what's stored locally
   and the handful of servers slopterm ever talks to
@@ -19,10 +19,11 @@ a single working terminal tab. No saved hosts, vault, or sync yet. See
 ```sh
 cd web
 npm install
-npm run build      # builds the React UI into ../server/wwwroot
+npm run build      # builds the React UI into ../core/wwwroot
 
 cd ../server
-dotnet run         # prints a http://127.0.0.1:<port>/?token=... URL - open it in a browser
+dotnet run         # opens a native window on Windows/Linux desktops
+# For browser-only use: dotnet run -- --no-window
 ```
 
 ## Building a standalone executable
@@ -39,8 +40,15 @@ with the .NET runtime, all dependencies, and the entire React UI embedded inside
 
 **On Windows, the published exe has no console window** — look for a tray icon instead;
 click it (or its right-click menu's "Open") to open the app in its own window (or bring
-it back to focus if it's already open), and "Quit" to stop it. Linux/macOS builds still
-print the URL to the console for now (see `AGENTS.md`'s System tray section).
+it back to focus if it's already open), and "Quit" to stop it.
+
+**On Linux, launching the executable opens a native GTK window** with the system's title
+bar and window controls. Closing it quits the app; close-to-tray is Windows-only. Install
+GTK 3, WebKitGTK 4.1 and libnotify using your distribution's package manager. If a native
+webview dependency is missing, slopterm falls back to your browser. Headless Linux sessions
+and macOS print the browser URL; `--no-window` explicitly selects browser-only mode.
+On desktop startup, slopterm registers its icon and a hidden desktop entry under
+`$XDG_DATA_HOME` (default `~/.local/share`) so Wayland displays the app icon correctly.
 
 **Or just grab a prebuilt one:** every push to `main` automatically builds and publishes
 Windows/Linux/macOS executables to the repo's

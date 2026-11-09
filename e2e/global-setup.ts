@@ -99,7 +99,7 @@ export default async function globalSetup() {
   const sshConfigPath = resolve(CONTEXT_DIR, 'ssh_config')
   writeFileSync(sshConfigPath, `Host e2e-ssh-config-host\n  HostName 127.0.0.1\n  Port ${sshPort}\n  User ${SSH_USERNAME}\n`)
 
-  const serverProcess = spawn('dotnet', ['run', '--no-launch-profile'], {
+  const serverProcess = spawn('dotnet', ['run', '--no-launch-profile', '--', '--no-window'], {
     cwd: SERVER_DIR,
     env: { ...process.env, SLOPTERM_VAULT_DIR: vaultDir, SLOPTERM_SSH_CONFIG_PATH: sshConfigPath },
   }) as ChildProcessWithoutNullStreams

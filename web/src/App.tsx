@@ -8,7 +8,7 @@ import { ReconnectingPane } from './components/ReconnectingPane'
 import { SectionContent } from './components/SectionContent'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { TitleBar } from './components/TitleBar'
-import { isDesktopApp } from './lib/photino'
+import { hasCustomTitleBar } from './lib/photino'
 import { isAndroidApp } from './lib/androidBridge'
 import {
   checkForUpdate,
@@ -502,7 +502,7 @@ function App() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-950">
-      {isDesktopApp && (
+      {hasCustomTitleBar && (
         <TitleBar
           collapsed={sidebarCollapsed}
           onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
@@ -517,7 +517,7 @@ function App() {
           collapsed={sidebarCollapsed}
           onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
           updateAvailable={updateAvailable}
-          hideChromeControls={isDesktopApp}
+          hideChromeControls={hasCustomTitleBar}
         />
         <div className="flex min-h-0 flex-1 flex-col">
           <TabBar
