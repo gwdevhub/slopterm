@@ -14,16 +14,20 @@ There's no dev-server proxy to the backend yet, so `npm run dev` is only useful 
 iterating on layout/components in isolation. For an end-to-end test, run `npm run build`
 then `dotnet run` in `../server` — it serves the built bundle directly.
 
-## Composition regression tests (no build)
+## Android input regression tests (no build)
 
 With Node 22.6+ and dependencies installed:
 
 ```sh
 npx playwright install chromium
-npm run test:composition
+npm run test:android-input
 ```
 
-These run the composition TypeScript source via Node's native type erasure against the
-installed prebuilt xterm bundle in headless Chromium, plus the Android commit-order bridge.
-They require no application build, backend, SSH server, or Android emulator. On Linux,
-Playwright's browser system dependencies must also be installed.
+These load the production source through Node's type erasure and use the installed
+xterm bundle in Playwright Chromium, without building the application. Android DOM
+edits have a single owner: changed suffixes become terminal input, and only the
+shell echo is rendered. No local composition or frozen-echo overlays are used.
+
+No backend, SSH server, or Android emulator is required. On Linux, Playwright's
+browser system dependencies must also be installed. `test:composition` remains an
+alias for this replacement suite.

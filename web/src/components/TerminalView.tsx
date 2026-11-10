@@ -7,9 +7,9 @@ import { getAppearance, subscribeAppearance, terminalFontFamily } from '../lib/a
 import { KeyboardToolbar } from './KeyboardToolbar'
 import { finishAndroidComposing, isAndroidApp, isMobileApp, registerCompositionBridge } from '../lib/androidBridge'
 import { registerTerminalTouch, type TouchSelection } from '../lib/terminalTouch'
-import { applyStickyModifiers, registerTerminalComposition } from '../lib/terminalComposition'
 import { openExternalInNativeApp } from '../lib/externalLinks'
 import { isDesktopApp } from '../lib/photino'
+import { applyStickyModifiers, registerAndroidTerminalInput } from '../lib/androidTerminalInput'
 
 interface TerminalViewProps {
   sessionId: string
@@ -75,8 +75,6 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
   const sendRawRef = useRef<(data: string) => void>(() => {})
   // Drags one end of the touch selection. Same cross-effect-ref pattern as sendRawRef.
   const moveSelectionHandleRef = useRef<(which: 'start' | 'end', clientX: number, clientY: number) => void>(() => {})
-  // Captures the preview owned by each output frame, to clear only that preview after parsing.
-  const compositionOutputRef = useRef<() => (() => void) | undefined>(() => undefined)
   // Ctrl/Alt are "sticky" one-shot modifiers for the toolbar; applied in term.onData rather
   // than keydown (Android soft keyboards report keyCode=229 and the real char arrives as IME).
   const [modifiers, setModifiers] = useState({ ctrl: false, alt: false })
@@ -355,15 +353,24 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
     const textarea = container.querySelector('textarea')
     textarea?.addEventListener('paste', onPaste)
 
-    // Lets the Android keyboard toolbar commit an in-progress IME composition before its own
-    // bytes go out, without racing xterm's handling of the same commit. No-op off Android.
-    const composition = textarea ? registerTerminalComposition(container, textarea, {
-      hasModifiers: () => modifiersRef.current.ctrl || modifiersRef.current.alt,
-      finishComposing: finishAndroidComposing,
-      onSynchronousCommit: () => compositionBridge?.committed(),
-    }) : undefined
-    const compositionBridge = textarea ? registerCompositionBridge(textarea, () => composition!.finish()) : undefined
-    compositionOutputRef.current = () => composition?.prepareOutput()
+    // Android has one DOM-edit owner. Desktop keeps xterm's normal keyboard/IME path.
+    // Browser-hosted Android sessions need the same handling as the native WebView.
+    let androidTextInput = false
+    const androidInput = textarea && (isAndroidApp() || /Android/i.test(navigator.userAgent))
+      ? registerAndroidTerminalInput(container, textarea, {
+        send(data, text) {
+          androidTextInput = text
+          try {
+            // Use the public user-input path so selection clearing, scroll-to-bottom
+            // and disableStdin still behave just like xterm's own keyboard handling.
+            term.input(data, true)
+          } finally {
+            androidTextInput = false
+          }
+        },
+      }) : undefined
+    const disposeCompositionBridge = textarea && androidInput
+      ? registerCompositionBridge(textarea, () => androidInput.finish()) : undefined
 
     // Drag a file from the OS onto the terminal to upload it into the shell's cwd. dragover
     // must preventDefault or the browser never fires a drop; copy is the right affordance.
@@ -407,17 +414,15 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       }
     }
 
-    const dataDisposable = term.onData((data) => {
-      const isCompositionCommit = composition?.consumeCommit(data) ?? false
+    function sendInput(data: string, text = false) {
       let payload = data
       // One shot: a sticky modifier applies to the next single character (physical or IME
       // commit) then disarms; a paste or arrow-key escape sequence passes through.
       const armed = modifiersRef.current
       if (armed.ctrl || armed.alt) {
-        // A committed word arriving whole is the fallback path (off Android there's no bridge
-        // to end the composition early); apply the modifier to the first character and let the
-        // rest land as typed. Array.from so a surrogate pair stays one character.
-        const characters = data.length === 1 || isCompositionCommit ? Array.from(data) : []
+        // Android edit deltas may arrive as several characters. Apply the modifier to
+        // the first character only. Array.from keeps a surrogate pair together.
+        const characters = data.length === 1 || text ? Array.from(data) : []
         if (characters.length > 0) {
           payload = applyStickyModifiers(characters[0], armed) + characters.slice(1).join('')
           // Write the ref directly too: two characters in the same tick would otherwise both
@@ -427,7 +432,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         }
       }
       sendRawRef.current(payload)
-    })
+    }
+    const dataDisposable = term.onData((data) => sendInput(data, androidTextInput))
 
     // Debounced refit/resize on container size change: a drag-resize fires ~one ResizeObserver
     // notification per frame and fit() does a full clear-and-redraw each time cols/rows change,
@@ -444,8 +450,8 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       clearTimeout(resizeTimeout)
       resizeObserver.disconnect()
       textarea?.removeEventListener('paste', onPaste)
-      composition?.dispose()
-      compositionBridge?.dispose()
+      androidInput?.dispose()
+      disposeCompositionBridge?.()
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
       touch.dispose()
@@ -456,7 +462,6 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
       termRef.current = null
       sendRawRef.current = () => {}
       fitAndSyncRef.current = () => {}
-      compositionOutputRef.current = () => undefined
     }
     // startupCommands is intentionally excluded (fixed per sessionId); request is stable per
     // tab and read via a ref. Re-running would tear down and recreate the same live session.
@@ -525,11 +530,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
 
         const bytes = new Uint8Array(event.data as ArrayBuffer)
         offsetRef.current = (offsetRef.current ?? 0) + bytes.byteLength
-        // Real output arrived, so clear the frozen composition preview - but via write()'s
-        // completion callback, since write() is async and clearing up front would let the
-        // browser paint the row with the preview gone and the echo not yet drawn.
-        const clearFrozenComposition = compositionOutputRef.current()
-        termRef.current?.write(bytes, clearFrozenComposition)
+        termRef.current?.write(bytes)
         // Output landed while this tab is in the background - flag it once (until next viewed).
         if (!isActiveRef.current && !activityNotifiedRef.current) {
           activityNotifiedRef.current = true
