@@ -20,8 +20,10 @@ async function removeAllCollections(page: Page) {
   await gotoSection(page, 'Collections')
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const leave = page.getByRole('button', { name: 'Leave' }).first()
+    const leaves = page.getByRole('button', { name: 'Leave', exact: true })
+    const leave = leaves.first()
     if (!(await leave.isVisible().catch(() => false))) return
+    const count = await leaves.count()
     await expect(leave).toBeEnabled({ timeout: 15_000 })
     await leave.click({ timeout: 15_000 })
     // Don't keep the records: these are throwaway test collections, and leaving copies
@@ -29,6 +31,9 @@ async function removeAllCollections(page: Page) {
     await page.getByLabel('Keep a copy of its hosts and snippets here').uncheck()
     await page.getByRole('button', { name: 'Leave collection' }).click()
     await expect(page.getByRole('heading', { name: /^Leave / })).not.toBeVisible({ timeout: 10_000 })
+    // The dialog closes before the refreshed collection list arrives. Do not
+    // start another iteration against the stale card while it is disappearing.
+    await expect(leaves).toHaveCount(count - 1, { timeout: 15_000 })
   }
 }
 
