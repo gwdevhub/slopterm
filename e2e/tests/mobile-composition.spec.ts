@@ -65,14 +65,18 @@ test('Android edits reach the shell once, before space, without stale compositio
       }))
     })
     await page.keyboard.press('Enter')
-    await expect(rows).toContainText(/php-zts\s+php-zts/)
+    // xterm's row elements have no textContent separators. Read rendered lines to
+    // distinguish the command echo from exactly one line of command output.
+    const renderedLines = async () => (await rows.innerText()).split('\n').map(line => line.trim())
+    await expect.poll(async () => (await renderedLines()).filter(line => line === 'php-zts').length).toBe(1)
 
     await page.keyboard.type('printf TAILCALL')
     await page.keyboard.press('Enter')
     await expect(rows).toContainText('TAILCALL')
     await page.keyboard.type('pwd')
     await page.keyboard.press('Enter')
-    await expect(rows).toContainText('/home/')
+    // The linuxserver/openssh-server fixture sets the user's home to /config.
+    await expect.poll(renderedLines).toContain('/config')
     await expect(rows).not.toContainText('pwdILCALL')
     await expect(page.locator('.composition-view.active, .composition-echo')).toHaveCount(0)
   } catch (error) {

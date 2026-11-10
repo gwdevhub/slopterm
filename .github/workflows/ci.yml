@@ -13,7 +13,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -36,6 +36,10 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
+
+      - name: Run source-level Android input regressions
+        working-directory: web
+        run: npm run test:composition
 
       - name: Run e2e tests
         working-directory: e2e
