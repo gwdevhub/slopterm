@@ -72,29 +72,20 @@ export function openExternalViaAndroid(url: string): boolean {
 }
 
 // Per-terminal registration: background tabs must not finish or clear the active tab's input.
-const inputOwners = new Map<HTMLTextAreaElement, () => Promise<void>>()
-const pendingFinishes = new Map<HTMLTextAreaElement, Promise<void>>()
+const inputOwners = new Map<HTMLTextAreaElement, (requestNative: () => void) => Promise<void>>()
 
-export function registerCompositionBridge(textarea: HTMLTextAreaElement, finish: () => Promise<void>): () => void {
+export function registerCompositionBridge(textarea: HTMLTextAreaElement, finish: (requestNative: () => void) => Promise<void>): () => void {
   inputOwners.set(textarea, finish)
-  return () => { inputOwners.delete(textarea); pendingFinishes.delete(textarea) }
+  return () => { inputOwners.delete(textarea) }
 }
 
 export function finishAndroidComposing(): Promise<void> {
   const textarea = document.activeElement as HTMLTextAreaElement
   const finish = inputOwners.get(textarea)
   if (!finish) return Promise.resolve()
-  const pending = pendingFinishes.get(textarea)
-  if (pending) return pending
-  // Register the waiter BEFORE posting the native request. The controller, rather
-  // than a separate composition flag or xterm timer, decides when input is drained.
-  const drained = finish()
-  const result = drained.finally(() => {
-    if (pendingFinishes.get(textarea) === result) pendingFinishes.delete(textarea)
-  })
-  pendingFinishes.set(textarea, result)
-  androidBridge()?.finishComposing()
-  return result
+  // The owner shares in-flight drains and requests native finish only when needed.
+  // An idle toolbar tap must not wait a task or post a late native end event.
+  return finish(() => androidBridge()?.finishComposing())
 }
 
 function blobToBase64(blob: Blob): Promise<string> {

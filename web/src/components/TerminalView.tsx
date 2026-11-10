@@ -370,7 +370,7 @@ export function TerminalView({ sessionId, isActive, onSessionClosed, onSessionLo
         },
       }) : undefined
     const disposeCompositionBridge = textarea && androidInput
-      ? registerCompositionBridge(textarea, () => androidInput.finish()) : undefined
+      ? registerCompositionBridge(textarea, (requestNative) => androidInput.finish(requestNative)) : undefined
 
     // Drag a file from the OS onto the terminal to upload it into the shell's cwd. dragover
     // must preventDefault or the browser never fires a drop; copy is the right affordance.

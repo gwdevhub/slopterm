@@ -29,7 +29,7 @@ beforeEach(async () => {
     const sent = []
     const input = registerAndroidTerminalInput(container, textarea, { send: data => term.input(data, true) })
     term.onData(data => sent.push(data))
-    registerCompositionBridge(textarea, () => input.finish())
+    registerCompositionBridge(textarea, requestNative => input.finish(requestNative))
     window.h = {
       container, term, textarea, sent, input,
       start() { textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })) },
@@ -264,11 +264,13 @@ test('dispose resolves an outstanding drain and removes capture listeners', asyn
   assert.equal(result.value, '')
 })
 
-test('a composition restarting during a queued finish cannot strand a toolbar key', async () => {
+test('a composition restarting during an in-flight native finish cannot strand a toolbar key', async () => {
   const result = await page.evaluate(async () => {
     const h = window.h
-    h.edit('first', false)
+    h.start()
+    h.edit('first')
     const finished = h.input.finish()
+    h.end()
     h.start()
     h.edit('firstsecond')
     await finished
@@ -328,4 +330,31 @@ test('Android input respects xterm disableStdin and clears terminal selection as
   })
   assert.deepEqual(result.sent, ['x'])
   assert.equal(result.selected, false)
+})
+
+test('idle toolbar actions run in the next microtask without posting native finish', async () => {
+  const result = await page.evaluate(async () => {
+    const order = []
+    let requests = 0
+    window.SloptermAndroid = { finishComposing() { requests++ } }
+    finishAndroidComposing().then(() => order.push('toolbar'))
+    await Promise.resolve()
+    order.push('after-microtask')
+    return { order, requests }
+  })
+  assert.deepEqual(result.order, ['toolbar', 'after-microtask'])
+  assert.equal(result.requests, 0)
+})
+
+test('physical typing with interleaved output preserves the full command exactly once', async () => {
+  const command = 'printf "%s\\n" php-zts'
+  await page.evaluate(() => {
+    h.term.onData(data => setTimeout(() => h.term.write(data === '\r' ? '\r\n' : data), 1))
+  })
+  await page.keyboard.type(command, { delay: 10 })
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(30)
+  const result = await page.evaluate(() => h.snapshot())
+  assert.equal(result.sent.join(''), `${command}\r`)
+  assert.equal(result.lines[0], command)
 })

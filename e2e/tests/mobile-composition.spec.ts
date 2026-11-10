@@ -39,6 +39,7 @@ test('Android edits reach the shell once, before space, without stale compositio
   const rows = page.locator('.xterm-rows.xterm-focus')
   await expect(rows).toContainText('Welcome to OpenSSH Server', { timeout: 15_000 })
 
+  let failure: unknown
   try {
     await page.keyboard.type('printf "%s\\n" ')
     await expect(page.locator('.xterm-helper-textarea:focus')).toHaveValue('')
@@ -74,9 +75,17 @@ test('Android edits reach the shell once, before space, without stale compositio
     await expect(rows).toContainText('/home/')
     await expect(rows).not.toContainText('pwdILCALL')
     await expect(page.locator('.composition-view.active, .composition-echo')).toHaveCount(0)
-  } finally {
+  } catch (error) {
+    failure = error
+  }
+  try {
     await closeTab(page, `${ctx.sshUsername}@${ctx.sshHost}`)
     await gotoSection(page, 'Hosts')
     await deleteHost(page, name)
+  } catch (error) {
+    // Preserve the actual input failure if cleanup fails too.
+    if (failure) console.error('Android input test cleanup also failed:', error)
+    else failure = error
   }
+  if (failure) throw failure
 })

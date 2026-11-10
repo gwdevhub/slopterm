@@ -160,9 +160,13 @@ export function registerAndroidTerminalInput(
   for (const [type, listener] of listeners) container.addEventListener(type, listener, true)
 
   return {
-    finish(): Promise<void> {
+    finish(requestNative?: () => void): Promise<void> {
       if (disposed) return Promise.resolve()
       if (finishing) return finishing
+      if (!composing) {
+        boundary()
+        return Promise.resolve()
+      }
       finishing = new Promise<void>((resolve) => { resolveFinish = resolve })
       const result = finishing
       // Also bound a composition restarted while the settle task is queued.
@@ -172,7 +176,7 @@ export function registerAndroidTerminalInput(
         composing = false
         settle()
       }, 250)
-      if (!composing) settle()
+      requestNative?.()
       return result
     },
     dispose() {
