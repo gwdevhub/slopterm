@@ -13,3 +13,14 @@ npm run build    # production build, output goes to ../server/wwwroot
 There's no dev-server proxy to the backend yet, so `npm run dev` is only useful for
 iterating on layout/components in isolation. For an end-to-end test, run `npm run build`
 then `dotnet run` in `../server` — it serves the built bundle directly.
+
+Android terminal input has source-level browser regression tests:
+
+```sh
+npm run test:android-input
+```
+
+These load the production source through Node's type erasure and use the installed
+xterm bundle in Playwright Chromium, without building the application. Android DOM
+edits have a single owner: changed suffixes become terminal input, and only the
+shell echo is rendered. No local composition or frozen-echo overlays are used.

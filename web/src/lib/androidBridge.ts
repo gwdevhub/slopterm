@@ -71,61 +71,30 @@ export function openExternalViaAndroid(url: string): boolean {
   return true
 }
 
-// Whether the IME is holding a word in its composing region (from the real
-// compositionstart/compositionend events), so finishAndroidComposing() can skip the round trip.
-let composing = false
-// Every in-flight finishAndroidComposing() resolver, fulfilled together once compositionend
-// is observed - a list so overlapping taps don't displace each other's resolver.
-let pendingFinishResolvers: Array<() => void> = []
-// Whether a native finishComposing() request is already outstanding, so a second overlapping
-// call queues onto the same commit instead of asking the IME to finish twice.
-let finishRequestInFlight = false
+// Per-terminal registration: background tabs must not finish or clear the active tab's input.
+const inputOwners = new Map<HTMLTextAreaElement, () => Promise<void>>()
+const pendingFinishes = new Map<HTMLTextAreaElement, Promise<void>>()
 
-// Wires up xterm's input textarea so finishAndroidComposing() can tell a real commit apart
-// and know when one has landed. Call once per terminal instance; dispose the cleanup on teardown.
-export function registerCompositionBridge(textarea: HTMLTextAreaElement): () => void {
-  const onStart = () => {
-    composing = true
-  }
-  const onEnd = () => {
-    composing = false
-    finishRequestInFlight = false
-    // xterm's own compositionend schedules the real socket send via setTimeout(0); scheduling
-    // our resolution the same way lands it strictly after, so a button's bytes can't overtake it.
-    setTimeout(() => {
-      const resolvers = pendingFinishResolvers
-      pendingFinishResolvers = []
-      resolvers.forEach((resolve) => resolve())
-    }, 0)
-  }
-  textarea.addEventListener('compositionstart', onStart)
-  textarea.addEventListener('compositionend', onEnd)
-  return () => {
-    textarea.removeEventListener('compositionstart', onStart)
-    textarea.removeEventListener('compositionend', onEnd)
-  }
+export function registerCompositionBridge(textarea: HTMLTextAreaElement, finish: () => Promise<void>): () => void {
+  inputOwners.set(textarea, finish)
+  return () => { inputOwners.delete(textarea); pendingFinishes.delete(textarea) }
 }
 
-// Commits any composing word and resolves once it has actually reached the terminal, not when
-// the native request returned. Resolves immediately when nothing is composing.
 export function finishAndroidComposing(): Promise<void> {
-  const bridge = androidBridge()
-  if (!bridge || !composing) return Promise.resolve()
-  return new Promise((resolve) => {
-    pendingFinishResolvers.push(resolve)
-    if (!finishRequestInFlight) {
-      finishRequestInFlight = true
-      bridge.finishComposing()
-    }
-    // Backstop: some IME/WebView combos finish composing without firing compositionend - don't
-    // hang a button forever waiting.
-    setTimeout(() => {
-      const index = pendingFinishResolvers.indexOf(resolve)
-      if (index === -1) return
-      pendingFinishResolvers.splice(index, 1)
-      resolve()
-    }, 250)
+  const textarea = document.activeElement as HTMLTextAreaElement
+  const finish = inputOwners.get(textarea)
+  if (!finish) return Promise.resolve()
+  const pending = pendingFinishes.get(textarea)
+  if (pending) return pending
+  // Register the waiter BEFORE posting the native request. The controller, rather
+  // than a separate composition flag or xterm timer, decides when input is drained.
+  const drained = finish()
+  const result = drained.finally(() => {
+    if (pendingFinishes.get(textarea) === result) pendingFinishes.delete(textarea)
   })
+  pendingFinishes.set(textarea, result)
+  androidBridge()?.finishComposing()
+  return result
 }
 
 function blobToBase64(blob: Blob): Promise<string> {

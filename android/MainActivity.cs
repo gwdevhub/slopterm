@@ -506,7 +506,8 @@ public class MainActivity : Activity
     }
 
     // Tells the IME this is a terminal: TextFlagNoSuggestions turns off suggestion strips and
-    // autocorrect. Composing stays on so xterm renders the composing region locally (see FinishComposing).
+    // autocorrect. The frontend translates composing edits to terminal bytes; only
+    // the shell echo is rendered (including when the shell disables password echo).
     private sealed class TerminalWebView : WebView
     {
         private IInputConnection? _connection;
