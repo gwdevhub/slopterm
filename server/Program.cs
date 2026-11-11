@@ -53,7 +53,9 @@ if (args.Length >= 3 && args[0] == "--apply-update")
 CrashLogger.Install();
 CrashLogger.LogPhase("process starting");
 
-var host = SloptermHost.Start(args);
+// Keep this desktop-only switch out of ASP.NET's key/value command-line parser.
+var noWindow = args.Contains("--no-window", StringComparer.Ordinal);
+var host = SloptermHost.Start(args.Where(arg => arg != "--no-window").ToArray());
 var app = host.App;
 var launchUrl = host.LaunchUrl;
 var vault = host.Vault;
@@ -84,12 +86,12 @@ void Quit()
     app.Lifetime.StopApplication();
 }
 
-// Closing the window quits by default; Settings CloseToTray opts into minimize-to-tray.
+// Closing the window quits; Windows alone has a tray for the CloseToTray setting.
 // The flag is read live at each close, so toggling it takes effect without a restart.
-AppWindowManager.Configure(() => vault.GetSettings().CloseToTray, Quit);
+AppWindowManager.Configure(() => OperatingSystem.IsWindows() && vault.GetSettings().CloseToTray, Quit);
 
 WindowsTrayIcon? trayIcon = null;
-if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+if (OperatingSystem.IsWindows() && !noWindow)
 {
     // No console window on the published build - the tray icon is the only way to reach
     // the app (Open focuses/creates the window, Quit stops it).
@@ -104,12 +106,20 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 }
 else
 {
-    // No tray icon on Linux/macOS yet (see AGENTS.md's system tray section) - printing
-    // the URL to the console is still the only way to reach the app there.
+    // Keep a browser entry point for headless runs and missing native dependencies.
     Console.WriteLine();
     Console.WriteLine("slopterm is running. Open this URL in your browser:");
     Console.WriteLine($"  {launchUrl}");
     Console.WriteLine();
+
+    // GTK exits the process if it cannot connect to a display. Skip native startup on
+    // headless machines; AppWindowManager also checks stale/unreachable displays safely.
+    if (OperatingSystem.IsLinux() && !noWindow &&
+        (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DISPLAY")) ||
+         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY"))))
+    {
+        OpenWindow();
+    }
 }
 
 CrashLogger.LogPhase("running");

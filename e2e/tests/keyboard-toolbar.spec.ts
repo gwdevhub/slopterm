@@ -246,8 +246,12 @@ test.describe('with touch emulation', () => {
     // toolbar - the sidebar has its own "Snippets" nav button.
     const snippetsKey = page.locator('[aria-label="Terminal keys"]').getByRole('button', { name: 'Snippets' })
     await snippetsKey.click()
-    expect(await hideCount()).toBe(2)
+    // Toolbar presses wait for the composition bridge before opening a panel.
+    await expect(snippetsKey).toHaveAttribute('aria-expanded', 'true')
+    await expect.poll(hideCount).toBe(2)
     await snippetsKey.click()
+    await expect(snippetsKey).toHaveAttribute('aria-expanded', 'false')
+    expect(await hideCount()).toBe(2)
 
     await closeTab(page, tabLabel)
     await gotoSection(page, 'Hosts')

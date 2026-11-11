@@ -131,9 +131,23 @@ public static class AppWindowManager
 
         try
         {
-            // Chromeless so the React app can draw its own Termius-style title bar; the window
-            // stays resizable and draggable via CSS -webkit-app-region: drag.
-            var window = new PhotinoWindow().SetTitle("slopterm").SetChromeless(true);
+            if (OperatingSystem.IsLinux())
+            {
+                LinuxDesktopIdentity.Configure();
+                // Photino calls gtk_init, which exits rather than throwing on an invalid
+                // display. Initialize safely on the same UI thread before entering Photino.
+                XInitThreads();
+                if (gtk_init_check(nint.Zero, nint.Zero) == 0)
+                {
+                    Console.WriteLine("No usable Linux display. Use the browser URL printed above.");
+                    return;
+                }
+            }
+
+            // WebKitGTK doesn't implement WebView2's draggable CSS regions or Win32 drag
+            // messages. Let the Linux window manager provide move/resize/window controls.
+            var nativeFrame = OperatingSystem.IsLinux();
+            var window = new PhotinoWindow().SetTitle("slopterm").SetChromeless(!nativeFrame);
 
             var iconPath = EmbeddedIcon.ExtractToTempFile();
             if (iconPath is not null)
@@ -152,11 +166,19 @@ public static class AppWindowManager
             else
             {
                 const int defaultWidth = 1100, defaultHeight = 720;
-                var screenW = OperatingSystem.IsWindows() ? GetSystemMetrics(SmCxScreen) : 1280;
-                var screenH = OperatingSystem.IsWindows() ? GetSystemMetrics(SmCyScreen) : 800;
-                var x = Math.Max(0, (screenW - defaultWidth) / 2);
-                var y = Math.Max(0, (screenH - defaultHeight) / 2);
-                window.SetLocation(new Point(x, y)).SetSize(new Size(defaultWidth, defaultHeight));
+                window.SetSize(new Size(defaultWidth, defaultHeight));
+                if (nativeFrame)
+                {
+                    window.SetUseOsDefaultLocation(true);
+                }
+                else
+                {
+                    var screenW = OperatingSystem.IsWindows() ? GetSystemMetrics(SmCxScreen) : 1280;
+                    var screenH = OperatingSystem.IsWindows() ? GetSystemMetrics(SmCyScreen) : 800;
+                    var x = Math.Max(0, (screenW - defaultWidth) / 2);
+                    var y = Math.Max(0, (screenH - defaultHeight) / 2);
+                    window.SetLocation(new Point(x, y));
+                }
             }
 
             // Shared by Alt+F4 and the title-bar close button; save before minimizing since
@@ -233,7 +255,9 @@ public static class AppWindowManager
                 return true;
             });
 
-            window.Load(new Uri(url));
+            // A fragment survives the authentication redirect that strips the token query.
+            // The renderer keeps its sidebar controls when the OS supplies the title bar.
+            window.Load(new Uri(nativeFrame ? url + "#nativeFrame=1" : url));
 
             lock (Lock)
             {
@@ -261,13 +285,20 @@ public static class AppWindowManager
 
             WindowReady.Set();
             ReportMissingRuntime(ex);
-            var fallbackProcess = BrowserLauncher.Launch(url);
-            if (fallbackProcess is not null)
+            try
             {
-                lock (Lock)
+                var fallbackProcess = BrowserLauncher.Launch(url);
+                if (fallbackProcess is not null)
                 {
-                    FallbackBrowserProcesses.Add(fallbackProcess);
+                    lock (Lock)
+                    {
+                        FallbackBrowserProcesses.Add(fallbackProcess);
+                    }
                 }
+            }
+            catch (Exception browserException)
+            {
+                Console.WriteLine($"Couldn't open a browser: {browserException.Message}. Use the URL printed above.");
             }
         }
         finally
@@ -277,8 +308,17 @@ public static class AppWindowManager
                 _window = null;
                 _creating = false;
             }
+            WindowReady.Set();
         }
     }
+
+    [SupportedOSPlatform("linux")]
+    [DllImport("libX11.so.6")]
+    private static extern int XInitThreads();
+
+    [SupportedOSPlatform("linux")]
+    [DllImport("libgtk-3.so.0")]
+    private static extern int gtk_init_check(nint argc, nint argv);
 
     private static void OpenExternalLink(string payload)
     {
@@ -303,6 +343,8 @@ public static class AppWindowManager
     /// </summary>
     private static void EnableWebViewDraggableRegions()
     {
+        if (!OperatingSystem.IsWindows()) return;
+
         const string variable = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
         const string flag = "--enable-features=msWebView2EnableDraggableRegions";
 

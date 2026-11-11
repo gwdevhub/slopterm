@@ -16,6 +16,10 @@ function photino(): PhotinoExternal | undefined {
 // by the time any component reads it.
 export const isDesktopApp = typeof photino()?.sendMessage === 'function'
 
+// Linux uses the OS frame because WebKitGTK has no CSS app-region drag support.
+// This flag is supplied only to the native window's URL by AppWindowManager.
+export const hasCustomTitleBar = isDesktopApp && new URLSearchParams(window.location.hash.slice(1)).get('nativeFrame') !== '1'
+
 // Window-control verbs the title bar posts; the backend switches on the "wc:" prefix.
 // 'drag' hands off to the OS's native window-move loop (see AppWindowManager).
 export type WindowCommand = 'min' | 'max' | 'close' | 'ready' | 'drag'
