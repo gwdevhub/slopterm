@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -55,4 +56,24 @@ public sealed class OpenAiChatClientTests
         Assert.Equal("get_weather", call.Function.Name);
         Assert.Equal("{\"city\": \"Paris\"}", call.Function.Arguments);
     }
+
+public sealed class OpenAiChatClientConnectTests
+{
+    // The connect race is only as good as its fallback pick: it must be an address of the OTHER
+    // family (a regression picks another address of the leading family and the fix silently stops
+    // working), and there must be none when DNS answered with a single family.
+    [Fact]
+    public void FallbackIsTheFirstAddressOfTheOtherFamily()
+    {
+        var v6a = IPAddress.Parse("2606:4700::1");
+        var v6b = IPAddress.Parse("2606:4700::2");
+        var v4a = IPAddress.Parse("162.159.0.1");
+        var v4b = IPAddress.Parse("162.159.0.2");
+
+        Assert.Equal(v4a, OpenAiChatClient.AddressOfOtherFamily([v6a, v6b, v4a, v4b]));
+        Assert.Equal(v6a, OpenAiChatClient.AddressOfOtherFamily([v4a, v4b, v6a, v6b]));
+        Assert.Null(OpenAiChatClient.AddressOfOtherFamily([v6a, v6b]));
+        Assert.Null(OpenAiChatClient.AddressOfOtherFamily([v4a]));
+    }
+}
 }
