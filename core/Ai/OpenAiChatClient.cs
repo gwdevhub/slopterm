@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -12,7 +14,120 @@ public static class OpenAiChatClient
 {
     // Infinite client timeout: responses are open-ended streams, so every call's CancellationToken
     // actually governs its lifetime.
-    private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private static readonly HttpClient Http = new(new SocketsHttpHandler
+    {
+        // Hand-rolled Happy Eyeballs (RFC 8305). SocketsHttpHandler dials a host's addresses one at
+        // a time (still unimplemented upstream: dotnet/runtime#26177), so on a machine whose IPv6
+        // route is a black hole - DNS keeps answering AAAA, nothing routes, nothing errors - every
+        // outbound request spends its whole budget on the dead family and never tries IPv4: the
+        // agent reads as unreachable on an otherwise fine network. Racing the two families fixes
+        // that; RFC 8305 staggers the fallback only to spare healthy networks one stray SYN, which
+        // is nothing next to the single connection an AI turn opens anyway.
+        ConnectCallback = (context, ct) => new ValueTask<Stream>(ConnectFirstFamilyToAnswerAsync(context, ct)),
+    })
+    { Timeout = Timeout.InfiniteTimeSpan };
+
+    /// <summary>
+    /// Resolves the request's host and races the two address families, keeping whichever socket
+    /// connects first; the other connect is cancelled and its socket disposed. DNS order (RFC
+    /// 6724, via getaddrinfo) leads with the family this machine prefers, which is the favorite.
+    /// </summary>
+    private static async Task<Stream> ConnectFirstFamilyToAnswerAsync(SocketsHttpConnectionContext context, CancellationToken ct)
+    {
+        var endPoint = context.DnsEndPoint;
+
+        // The handler resolves the host itself but hands the callback only the name, so this is a
+        // second lookup - a few cached milliseconds next to a TCP connect.
+        var addresses = await Dns.GetHostAddressesAsync(endPoint.Host, ct).ConfigureAwait(false);
+        if (addresses.Length == 0)
+        {
+            throw new SocketException((int)SocketError.HostNotFound);
+        }
+
+        // One family only (a loopback Ollama, a v6-only host): nothing to race.
+        var fallback = AddressOfOtherFamily(addresses);
+        if (fallback is null)
+        {
+            var socket = await ConnectOneAsync(addresses[0], endPoint.Port, ct).ConfigureAwait(false);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+
+        using var race = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Task<Socket> preferred = ConnectOneAsync(addresses[0], endPoint.Port, race.Token);
+        Task<Socket> alternate = ConnectOneAsync(fallback, endPoint.Port, race.Token);
+
+        Socket winner;
+        try
+        {
+            // Whichever side settles first decides: its socket on success, else - and only once
+            // the other side has failed too - its exception.
+            Task<Socket> settled = await Task.WhenAny(preferred, alternate).ConfigureAwait(false);
+            Task<Socket> other = ReferenceEquals(settled, preferred) ? alternate : preferred;
+            try
+            {
+                winner = await settled.ConfigureAwait(false);
+            }
+            catch
+            {
+                winner = await other.ConfigureAwait(false);
+            }
+
+            race.Cancel();
+            await DiscardAsync(other).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Requests carry the caller's token; cancellation must surface with it, not the race's.
+            throw new OperationCanceledException("The AI request was cancelled.", ct);
+        }
+
+        return new NetworkStream(winner, ownsSocket: true);
+    }
+
+    /// <summary>The first address of the family that DNS did not lead with - the fallback.</summary>
+    internal static IPAddress? AddressOfOtherFamily(IReadOnlyList<IPAddress> addresses)
+    {
+        for (var i = 1; i < addresses.Count; i++)
+        {
+            if (addresses[i].AddressFamily != addresses[0].AddressFamily)
+            {
+                return addresses[i];
+            }
+        }
+
+        return null;
+    }
+
+    // NoDelay matches what SocketsHttpHandler's own connect path sets; the socket is disposed on
+    // failure or cancellation so a dead attempt never sits on its fd.
+    private static async Task<Socket> ConnectOneAsync(IPAddress address, int port, CancellationToken ct)
+    {
+        var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        try
+        {
+            await socket.ConnectAsync(address, port, ct).ConfigureAwait(false);
+            return socket;
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    // Awaits a losing attempt regardless of outcome; an abandoned task would otherwise turn its
+    // cancellation into UnobservedTaskException noise.
+    private static async Task DiscardAsync(Task<Socket> attempt)
+    {
+        try
+        {
+            (await attempt.ConfigureAwait(false)).Dispose();
+        }
+        catch
+        {
+            // Cancelled, or failed - the attempt already disposed its socket.
+        }
+    }
 
     // Per-request cap on GENERATED tokens (max_tokens overrides the server's num_predict),
     // deliberately generous because reasoning models spend part of it thinking.
